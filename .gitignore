@@ -1,0 +1,8 @@
+pc_host/.venv/
+pc_host/__pycache__/
+pc_host/*.pyc
+mcu/obj/
+mcu/listings/
+mcu/Objects/
+mcu/Listings/
+tmp/
