@@ -32,9 +32,12 @@
 #define BOOT_STEP_FLASH_MS         350UL
 #define BOOT_VERSION_MS            1200UL
 #define ALARM_MAX_RING_MS          10000UL
+#define NAMED_RING_DURATION_MS     3200UL
 #define REMOTE_BEEP_MIN_MS         10UL
 #define REMOTE_BEEP_MAX_MS         5000UL
 #define MANUAL_LED_SHOW_MS         1000UL
+#define WEATHER_SHOW_MS            5000UL
+#define USER1_LONG_PRESS_TICKS     45U
 
 #define TCA6424_I2CADDR            0x22
 #define PCA9557_I2CADDR            0x18
@@ -106,8 +109,17 @@ typedef enum {
 typedef enum {
     BUZZER_IDLE = 0,
     BUZZER_REMOTE,
-    BUZZER_ALARM
+    BUZZER_ALARM,
+    BUZZER_PATTERN
 } BuzzerMode;
+
+typedef enum {
+    RING_DEFAULT = 0,
+    RING_WORK_START,
+    RING_WORK_END,
+    RING_WAKE,
+    RING_SONG
+} RingType;
 
 typedef enum {
     KEY_FUNC = 0,
@@ -171,6 +183,7 @@ static void ServiceBuzzer(void);
 static void StopBuzzer(void);
 static void StartAlarmRing(void);
 static void StartRemoteBeep(uint32_t durationMs);
+static void StartNamedRing(RingType type);
 static void GPIO_SetBeeper(bool on);
 
 static void RefreshDisplayAndLeds(bool forceEvent);
@@ -196,6 +209,7 @@ static void Keys_Scan(void);
 static void HandleKeyPress(KeyCode key, bool emitEvent);
 static void HandleKeyRelease(KeyCode key);
 static void HandleFuncLongPress(void);
+static void HandleUser1LongPress(void);
 static void AdvanceEditField(void);
 static void IncrementEditField(void);
 static void DecrementEditField(void);
@@ -237,7 +251,10 @@ static void HandleSetMessage(const char *params);
 static void HandleSetBeep(const char *params);
 static void HandleSetLed(const char *params);
 static void HandleSetMode(const char *params);
+static void HandleSetWeather(const char *params);
+static void HandleSetRing(const char *params);
 static void HandleGet(const char *params);
+static bool ParseRingType(const char *token, RingType *type);
 
 static const char *kKeyNames[KEY_COUNT] = {
     "FUNC", "SHIFT", "ADD", "SAVE", "DISP",
@@ -290,9 +307,14 @@ static uint8_t g_currentDigit;
 static uint8_t g_ledByte;
 static uint8_t g_prevLedByte;
 static BuzzerMode g_buzzerMode;
+static RingType g_ringType;
 static uint8_t g_buzzerOn;
 static uint32_t g_buzzerDeadlineMs;
 static uint32_t g_buzzerToggleMs;
+static uint8_t g_buzzerPatternStep;
+static char g_weatherText[DISPLAY_WIDTH + 1U];
+static uint8_t g_weatherLedMask;
+static uint32_t g_weatherShowUntilMs;
 static char g_uartLine[UART_LINE_MAX];
 static uint8_t g_uartLen;
 static uint8_t g_uartOverflow;
@@ -574,6 +596,11 @@ static void Tick10ms(void)
         RefreshDisplayAndLeds(true);
     }
 
+    if ((g_weatherShowUntilMs != 0UL) && (g_millis >= g_weatherShowUntilMs)) {
+        g_weatherShowUntilMs = 0UL;
+        RefreshDisplayAndLeds(true);
+    }
+
     if ((g_millis >= g_nextScrollMs) && (g_bootPhase == BOOT_DONE)) {
         g_scrollOffset++;
         g_nextScrollMs = g_millis +
@@ -599,6 +626,7 @@ static void Tick500ms(void)
 
 static void Tick1000ms(void)
 {
+    uint8_t forceWeatherEvent = 0U;
     if (g_bootPhase == BOOT_DONE) {
         AdvanceClockOneSecond(&g_now);
         g_heartbeatBit = (uint8_t)!g_heartbeatBit;
@@ -609,20 +637,33 @@ static void Tick1000ms(void)
             (g_buzzerMode == BUZZER_IDLE)) {
             StartAlarmRing();
         }
+        if (g_weatherShowUntilMs > g_millis) {
+            forceWeatherEvent = 1U;
+        }
     }
-    RefreshDisplayAndLeds(false);
+    RefreshDisplayAndLeds(forceWeatherEvent != 0U);
 }
 
 static void ServiceBuzzer(void)
 {
+    static const uint16_t kDefaultPattern[] = {160U, 140U};
+    static const uint16_t kWorkStartPattern[] = {90U, 70U, 90U, 70U, 180U, 220U};
+    static const uint16_t kWorkEndPattern[] = {180U, 90U, 120U, 260U};
+    static const uint16_t kWakePattern[] = {420U, 120U, 420U, 220U};
+    static const uint16_t kSongPattern[] = {90U, 60U, 140U, 60U, 110U, 180U};
+    const uint16_t *pattern = NULL;
+    uint8_t patternLength = 0U;
+    uint16_t nextDelay = 0U;
+
     if (g_buzzerMode == BUZZER_IDLE) {
         GPIO_SetBeeper(false);
         return;
     }
 
     if (g_millis >= g_buzzerDeadlineMs) {
+        uint8_t alarmWasActive = (g_buzzerMode == BUZZER_ALARM) ? 1U : 0U;
         StopBuzzer();
-        if (g_buzzerMode == BUZZER_ALARM) {
+        if (alarmWasActive != 0U) {
             UART_WriteLine("*EVT:ALARM_OFF");
         }
         RefreshDisplayAndLeds(true);
@@ -637,14 +678,47 @@ static void ServiceBuzzer(void)
     if (g_millis >= g_buzzerToggleMs) {
         g_buzzerOn = (uint8_t)!g_buzzerOn;
         GPIO_SetBeeper(g_buzzerOn != 0U);
-        g_buzzerToggleMs = g_millis + (g_buzzerOn != 0U ? 180U : 120U);
+        if (g_buzzerMode == BUZZER_ALARM) {
+            g_buzzerToggleMs = g_millis + (g_buzzerOn != 0U ? 180U : 120U);
+            return;
+        }
+
+        switch (g_ringType) {
+        case RING_WORK_START:
+            pattern = kWorkStartPattern;
+            patternLength = 6U;
+            break;
+        case RING_WORK_END:
+            pattern = kWorkEndPattern;
+            patternLength = 4U;
+            break;
+        case RING_WAKE:
+            pattern = kWakePattern;
+            patternLength = 4U;
+            break;
+        case RING_SONG:
+            pattern = kSongPattern;
+            patternLength = 6U;
+            break;
+        case RING_DEFAULT:
+        default:
+            pattern = kDefaultPattern;
+            patternLength = 2U;
+            break;
+        }
+
+        nextDelay = pattern[g_buzzerPatternStep % patternLength];
+        g_buzzerPatternStep++;
+        g_buzzerToggleMs = g_millis + nextDelay;
     }
 }
 
 static void StopBuzzer(void)
 {
     g_buzzerMode = BUZZER_IDLE;
+    g_ringType = RING_DEFAULT;
     g_buzzerOn = 0U;
+    g_buzzerPatternStep = 0U;
     GPIO_SetBeeper(false);
 }
 
@@ -663,6 +737,17 @@ static void StartRemoteBeep(uint32_t durationMs)
     g_buzzerMode = BUZZER_REMOTE;
     g_buzzerOn = 1U;
     g_buzzerDeadlineMs = g_millis + durationMs;
+    GPIO_SetBeeper(true);
+}
+
+static void StartNamedRing(RingType type)
+{
+    g_buzzerMode = BUZZER_PATTERN;
+    g_ringType = type;
+    g_buzzerOn = 1U;
+    g_buzzerPatternStep = 0U;
+    g_buzzerDeadlineMs = g_millis + NAMED_RING_DURATION_MS;
+    g_buzzerToggleMs = g_millis + 120U;
     GPIO_SetBeeper(true);
 }
 
@@ -699,11 +784,16 @@ static void ResetRuntimeState(void)
     g_manualLedUntilMs = 0U;
     g_rxFlashUntilMs = 0U;
     g_txFlashUntilMs = 0U;
+    g_weatherText[0] = '\0';
+    g_weatherLedMask = 0U;
+    g_weatherShowUntilMs = 0UL;
     g_currentDigit = 0U;
     g_buzzerMode = BUZZER_IDLE;
+    g_ringType = RING_DEFAULT;
     g_buzzerOn = 0U;
     g_buzzerDeadlineMs = 0U;
     g_buzzerToggleMs = 0U;
+    g_buzzerPatternStep = 0U;
     g_uartLen = 0U;
     g_uartOverflow = 0U;
     memset(&g_currentFrame, 0, sizeof(g_currentFrame));
@@ -821,6 +911,11 @@ static void BuildVisibleText(char *out, uint8_t outSize)
     }
     if (g_editMode == EDIT_ALARM) {
         BuildDottedAlarm(&g_editAlarm, out, outSize);
+        return;
+    }
+
+    if ((g_weatherShowUntilMs > g_millis) && (g_weatherText[0] != '\0')) {
+        snprintf(out, outSize, "%s", g_weatherText);
         return;
     }
 
@@ -1109,15 +1204,15 @@ static uint8_t BuildSystemLedByte(void)
         }
         return result;
     }
-    if (g_dayNight == MODE_NIGHT) {
-        result |= LED_MODE_NIGHT;
-    }
     if (g_displayFormat == FORMAT_RIGHT) {
         result |= LED_FORMAT_RIGHT;
     }
     if ((g_manualLedUntilMs > g_millis) &&
         ((g_manualLedMask & LED_MANUAL_BIT) != 0U)) {
         result |= LED_MANUAL_BIT;
+    }
+    if ((g_weatherShowUntilMs > g_millis) && (g_weatherLedMask != 0U)) {
+        result = g_weatherLedMask;
     }
     return result;
 }
@@ -1206,6 +1301,7 @@ static void Keys_Scan(void)
     uint8_t rawUser = (uint8_t)GPIOPinRead(GPIO_PORTJ_BASE, USER_GPIO_MASK);
     uint8_t keypadPressedMask = (uint8_t)(~rawKeypad);
     uint8_t index;
+    uint8_t wasLongPress;
 
     /*
      * The student's EXP1/EXP1_SW1_SW2 projects only use PJ0/PJ1 as stable
@@ -1243,6 +1339,13 @@ static void Keys_Scan(void)
                     g_longPressDone[index] = 1U;
                     HandleFuncLongPress();
                 }
+                if ((index == KEY_USER1) &&
+                    (g_editMode == EDIT_NONE) &&
+                    (g_holdTicks[index] >= USER1_LONG_PRESS_TICKS) &&
+                    (g_longPressDone[index] == 0U)) {
+                    g_longPressDone[index] = 1U;
+                    HandleUser1LongPress();
+                }
                 if ((index == KEY_ADD) &&
                     (g_editMode != EDIT_NONE) &&
                     (g_holdTicks[index] >= ADD_REPEAT_START_TICKS) &&
@@ -1260,13 +1363,19 @@ static void Keys_Scan(void)
         }
 
         g_debounceCounts[index] = 0U;
+        wasLongPress = g_longPressDone[index];
         g_stableKeys[index] = g_lastRawKeys[index];
-        g_holdTicks[index] = 0U;
-        g_longPressDone[index] = 0U;
         if (g_stableKeys[index] != 0U) {
-            HandleKeyPress((KeyCode)index, true);
+            g_holdTicks[index] = 0U;
+            g_longPressDone[index] = 0U;
+            if (index != KEY_USER1) {
+                HandleKeyPress((KeyCode)index, true);
+            }
         } else {
+            g_holdTicks[index] = 0U;
+            g_longPressDone[index] = wasLongPress;
             HandleKeyRelease((KeyCode)index);
+            g_longPressDone[index] = 0U;
         }
     }
 }
@@ -1326,15 +1435,14 @@ static void HandleKeyPress(KeyCode key, bool emitEvent)
     case KEY_EXT:
         break;
     case KEY_USER1:
-        if (g_editMode == EDIT_NONE) {
-            g_dayNight = (g_dayNight == MODE_DAY) ? MODE_NIGHT : MODE_DAY;
-            EmitModeEvent();
-        }
         break;
     case KEY_USER2:
         if (g_editMode != EDIT_NONE) {
             DecrementEditField();
             return;
+        }
+        if (g_weatherText[0] != '\0') {
+            g_weatherShowUntilMs = g_millis + WEATHER_SHOW_MS;
         }
         break;
     default:
@@ -1346,7 +1454,11 @@ static void HandleKeyPress(KeyCode key, bool emitEvent)
 
 static void HandleKeyRelease(KeyCode key)
 {
-    (void)key;
+    if ((key == KEY_USER1) &&
+        (g_editMode == EDIT_NONE) &&
+        (g_longPressDone[key] == 0U)) {
+        HandleKeyPress(KEY_USER1, true);
+    }
 }
 
 static void HandleFuncLongPress(void)
@@ -1354,6 +1466,13 @@ static void HandleFuncLongPress(void)
     if (g_editMode != EDIT_NONE) {
         SaveEditState();
     }
+}
+
+static void HandleUser1LongPress(void)
+{
+    g_dayNight = (g_dayNight == MODE_DAY) ? MODE_NIGHT : MODE_DAY;
+    RefreshDisplayAndLeds(true);
+    EmitModeEvent();
 }
 
 static void AdvanceEditField(void)
@@ -1786,6 +1905,14 @@ static void UART_ProcessLine(char *line)
             HandleSetMode(params);
             return;
         }
+        if (MatchToken(token, "WEATHER", 4U) != false) {
+            HandleSetWeather(params);
+            return;
+        }
+        if (MatchToken(token, "RING", 4U) != false) {
+            HandleSetRing(params);
+            return;
+        }
         UART_ReplyError("PARAM");
         return;
     }
@@ -2093,6 +2220,94 @@ static void HandleSetMode(const char *params)
     }
     RefreshDisplayAndLeds(true);
     EmitModeEvent();
+    UART_ReplyOk(NULL);
+}
+
+static void HandleSetWeather(const char *params)
+{
+    char field[16];
+    char token[32];
+    char nextWeather[DISPLAY_WIDTH + 1U] = "";
+    uint8_t nextLedMask = 0U;
+    uint8_t sawDisplay = 0U;
+    uint8_t sawLed = 0U;
+
+    params = SkipSpaces(params);
+    while (*params != '\0') {
+        params = ReadToken(params, field, sizeof(field));
+        params = SkipSpaces(params);
+        if (*params == '\0') {
+            UART_ReplyError("SYNTAX");
+            return;
+        }
+        params = ReadToken(params, token, sizeof(token));
+        if (MatchToken(field, "DISP", 4U) != false) {
+            uint8_t index;
+            memset(nextWeather, ' ', DISPLAY_WIDTH);
+            nextWeather[DISPLAY_WIDTH] = '\0';
+            for (index = 0U; (index < DISPLAY_WIDTH) && (token[index] != '\0'); index++) {
+                nextWeather[index] = (token[index] == '_') ? ' ' : token[index];
+            }
+            sawDisplay = 1U;
+        } else if (MatchToken(field, "LED", 3U) != false) {
+            if (ParseHexByte(token, &nextLedMask) == false) {
+                UART_ReplyError("PARAM");
+                return;
+            }
+            sawLed = 1U;
+        } else {
+            UART_ReplyError("PARAM");
+            return;
+        }
+        params = SkipSpaces(params);
+    }
+
+    if ((sawDisplay == 0U) || (sawLed == 0U)) {
+        UART_ReplyError("PARAM");
+        return;
+    }
+
+    snprintf(g_weatherText, sizeof(g_weatherText), "%s", nextWeather);
+    g_weatherLedMask = nextLedMask;
+    UART_ReplyOk(NULL);
+}
+
+static bool ParseRingType(const char *token, RingType *type)
+{
+    if (MatchToken(token, "DEFAULT", 3U) != false) {
+        *type = RING_DEFAULT;
+        return true;
+    }
+    if (MatchToken(token, "WORK_START", 6U) != false) {
+        *type = RING_WORK_START;
+        return true;
+    }
+    if (MatchToken(token, "WORK_END", 6U) != false) {
+        *type = RING_WORK_END;
+        return true;
+    }
+    if (MatchToken(token, "WAKE", 4U) != false) {
+        *type = RING_WAKE;
+        return true;
+    }
+    if (MatchToken(token, "SONG", 4U) != false) {
+        *type = RING_SONG;
+        return true;
+    }
+    return false;
+}
+
+static void HandleSetRing(const char *params)
+{
+    char token[24];
+    RingType type;
+    params = ReadToken(params, token, sizeof(token));
+    if (ParseRingType(token, &type) == false) {
+        UART_ReplyError("PARAM");
+        return;
+    }
+    StartNamedRing(type);
+    RefreshDisplayAndLeds(true);
     UART_ReplyOk(NULL);
 }
 

@@ -1,0 +1,17 @@
+[
+  {
+    "item_id": "sample001",
+    "title": "Monday Class",
+    "board_label": "CLASS101",
+    "trigger_time": "08:00:00",
+    "schedule_type": "weekly",
+    "weekdays": [
+      0
+    ],
+    "target_date": "",
+    "ring_type": "WORK_START",
+    "enabled": false,
+    "voice_text": "Monday class is about to start.",
+    "last_triggered_slot": ""
+  }
+]

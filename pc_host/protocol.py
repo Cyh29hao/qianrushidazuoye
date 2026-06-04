@@ -26,6 +26,15 @@ def build_set_time_command(moment: datetime) -> str:
     )
 
 
+def build_set_weather_command(display_token: str, led_mask: int) -> str:
+    token = display_token[:8].ljust(8, "_")
+    return f"*SET:WEATHER DISP {token} LED {led_mask:02X}"
+
+
+def build_set_ring_command(ring_name: str) -> str:
+    return f"*SET:RING {ring_name.strip().upper()}"
+
+
 def reverse_visible_text(text: str) -> str:
     return text[::-1]
 

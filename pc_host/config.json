@@ -1,0 +1,12 @@
+{
+  "city_name": "Shanghai",
+  "latitude": 31.2304,
+  "longitude": 121.4737,
+  "timezone": "Asia/Shanghai",
+  "auto_day_night": true,
+  "theme_follow_mode": true,
+  "voice_enabled": true,
+  "quiet_night_rings": true,
+  "ntp_host": "pool.ntp.org",
+  "weather_refresh_minutes": 30
+}

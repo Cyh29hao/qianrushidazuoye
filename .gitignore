@@ -1,8 +1,10 @@
 pc_host/.venv/
 pc_host/__pycache__/
 pc_host/*.pyc
+pc_host/logs/
 mcu/obj/
 mcu/listings/
 mcu/Objects/
 mcu/Listings/
 tmp/
+docs/source-materials/
