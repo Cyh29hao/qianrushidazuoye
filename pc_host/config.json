@@ -1,8 +1,8 @@
 {
-  "city_name": "上海",
-  "latitude": 31.2304,
-  "longitude": 121.4737,
-  "timezone": "Asia/Shanghai",
+  "city_name": "波特蘭",
+  "latitude": 45.52345,
+  "longitude": -122.67621,
+  "timezone": "America/Los_Angeles",
   "auto_day_night": true,
   "theme_follow_mode": true,
   "voice_enabled": true,
@@ -11,11 +11,18 @@
   "weather_refresh_minutes": 30,
   "saved_places": [
     {
-      "name": "上海",
-      "latitude": 31.2304,
-      "longitude": 121.4737,
+      "name": "杭州",
+      "latitude": 30.29365,
+      "longitude": 120.16142,
       "timezone": "Asia/Shanghai",
       "utc_offset_seconds": 28800
+    },
+    {
+      "name": "东京",
+      "latitude": 35.6764,
+      "longitude": 139.65,
+      "timezone": "Asia/Tokyo",
+      "utc_offset_seconds": 32400
     },
     {
       "name": "上海",
@@ -25,28 +32,21 @@
       "utc_offset_seconds": 28800
     },
     {
-      "name": "上海",
-      "latitude": 31.2304,
-      "longitude": 121.4737,
-      "timezone": "Asia/Shanghai",
-      "utc_offset_seconds": 28800
+      "name": "纽约",
+      "latitude": 40.7128,
+      "longitude": -74.006,
+      "timezone": "America/New_York",
+      "utc_offset_seconds": -14400
     },
     {
-      "name": "上海",
-      "latitude": 31.2304,
-      "longitude": 121.4737,
-      "timezone": "Asia/Shanghai",
-      "utc_offset_seconds": 28800
-    },
-    {
-      "name": "上海",
-      "latitude": 31.2304,
-      "longitude": 121.4737,
-      "timezone": "Asia/Shanghai",
-      "utc_offset_seconds": 28800
+      "name": "波特蘭",
+      "latitude": 45.52345,
+      "longitude": -122.67621,
+      "timezone": "America/Los_Angeles",
+      "utc_offset_seconds": -25200
     }
   ],
-  "active_place_index": 0,
+  "active_place_index": 4,
   "auto_run_tests_on_start": true,
   "app_version": "2.0"
 }

@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 NTP_EPOCH_OFFSET = 2208988800
@@ -29,6 +29,20 @@ KNOWN_TIMEZONE_OFFSETS = {
     "America/New_York": -5 * 3600,
     "America/Los_Angeles": -8 * 3600,
     "Australia/Sydney": 10 * 3600,
+}
+CITY_PRESETS = {
+    "上海": (31.2304, 121.4737, "Asia/Shanghai", DEFAULT_UTC_OFFSET_SECONDS, "中国"),
+    "shanghai": (31.2304, 121.4737, "Asia/Shanghai", DEFAULT_UTC_OFFSET_SECONDS, "China"),
+    "北京": (39.9042, 116.4074, "Asia/Shanghai", DEFAULT_UTC_OFFSET_SECONDS, "中国"),
+    "beijing": (39.9042, 116.4074, "Asia/Shanghai", DEFAULT_UTC_OFFSET_SECONDS, "China"),
+    "成都": (30.5728, 104.0668, "Asia/Shanghai", DEFAULT_UTC_OFFSET_SECONDS, "中国"),
+    "chengdu": (30.5728, 104.0668, "Asia/Shanghai", DEFAULT_UTC_OFFSET_SECONDS, "China"),
+    "东京": (35.6764, 139.6500, "Asia/Tokyo", 9 * 3600, "日本"),
+    "tokyo": (35.6764, 139.6500, "Asia/Tokyo", 9 * 3600, "Japan"),
+    "伦敦": (51.5072, -0.1276, "Europe/London", 0, "英国"),
+    "london": (51.5072, -0.1276, "Europe/London", 0, "United Kingdom"),
+    "纽约": (40.7128, -74.0060, "America/New_York", -5 * 3600, "美国"),
+    "new york": (40.7128, -74.0060, "America/New_York", -5 * 3600, "USA"),
 }
 
 
@@ -110,30 +124,25 @@ def infer_timezone_offset_seconds(
 
 
 def geocode_city(city_name: str, timeout: float = 4.0) -> CityLookupResult:
-    params = urlencode(
-        {
-            "name": city_name,
-            "count": 1,
-            "language": "zh",
-            "format": "json",
-        }
-    )
-    url = f"https://geocoding-api.open-meteo.com/v1/search?{params}"
-    payload = _fetch_json(url, timeout)
-    results = payload.get("results") or []
-    if not results:
-        raise RuntimeError("City not found")
-    first = results[0]
-    return CityLookupResult(
-        name=first.get("name", city_name),
-        latitude=float(first["latitude"]),
-        longitude=float(first["longitude"]),
-        timezone=first.get("timezone", "Asia/Shanghai"),
-        utc_offset_seconds=infer_timezone_offset_seconds(
-            first.get("timezone", "Asia/Shanghai")
-        ),
-        country=first.get("country", ""),
-    )
+    normalized = city_name.strip()
+    preset = CITY_PRESETS.get(normalized.lower()) or CITY_PRESETS.get(normalized)
+    if preset is not None:
+        latitude, longitude, timezone_name, offset_seconds, country = preset
+        return CityLookupResult(
+            name=normalized,
+            latitude=latitude,
+            longitude=longitude,
+            timezone=timezone_name,
+            utc_offset_seconds=offset_seconds,
+            country=country,
+        )
+    result = _geocode_open_meteo(normalized, timeout)
+    if result is not None:
+        return result
+    result = _geocode_nominatim(normalized, timeout)
+    if result is not None:
+        return result
+    raise RuntimeError("City not found")
 
 
 def fetch_weather_snapshot(
@@ -280,9 +289,16 @@ def speak_text(text: str) -> subprocess.Popen[bytes]:
 
 def _fetch_json(url: str, timeout: float) -> dict[str, Any]:
     last_error: Exception | None = None
+    request = Request(
+        url,
+        headers={
+            "User-Agent": "SmartClockHost/2.0 (+https://github.com/Cyh29hao)",
+            "Accept": "application/json",
+        },
+    )
     for attempt in range(3):
         try:
-            with urlopen(url, timeout=timeout) as response:
+            with urlopen(request, timeout=timeout) as response:
                 return json.loads(response.read().decode("utf-8"))
         except HTTPError as exc:
             last_error = exc
@@ -305,3 +321,78 @@ def _safe_parse_iso(value: str | None) -> datetime | None:
         return datetime.fromisoformat(value)
     except ValueError:
         return None
+
+
+def _geocode_open_meteo(city_name: str, timeout: float) -> CityLookupResult | None:
+    params = urlencode(
+        {
+            "name": city_name,
+            "count": 1,
+            "language": "zh",
+            "format": "json",
+        }
+    )
+    url = f"https://geocoding-api.open-meteo.com/v1/search?{params}"
+    try:
+        payload = _fetch_json(url, timeout)
+    except Exception:
+        return None
+    results = payload.get("results") or []
+    if not results:
+        return None
+    first = results[0]
+    timezone_name = first.get("timezone", "Asia/Shanghai")
+    return CityLookupResult(
+        name=first.get("name", city_name),
+        latitude=float(first["latitude"]),
+        longitude=float(first["longitude"]),
+        timezone=timezone_name,
+        utc_offset_seconds=infer_timezone_offset_seconds(timezone_name),
+        country=first.get("country", ""),
+    )
+
+
+def _geocode_nominatim(city_name: str, timeout: float) -> CityLookupResult | None:
+    params = urlencode(
+        {
+            "q": city_name,
+            "format": "jsonv2",
+            "limit": 1,
+            "accept-language": "zh-CN,zh,en",
+        }
+    )
+    url = f"https://nominatim.openstreetmap.org/search?{params}"
+    try:
+        payload = _fetch_json(url, timeout)
+    except Exception:
+        return None
+    if not isinstance(payload, list) or not payload:
+        return None
+    first = payload[0]
+    lat = float(first["lat"])
+    lon = float(first["lon"])
+    display_name = str(first.get("display_name", city_name)).split(",")[0].strip() or city_name
+    timezone_name = _infer_timezone_from_coordinates(display_name, lat, lon)
+    return CityLookupResult(
+        name=display_name,
+        latitude=lat,
+        longitude=lon,
+        timezone=timezone_name,
+        utc_offset_seconds=infer_timezone_offset_seconds(timezone_name),
+        country="",
+    )
+
+
+def _infer_timezone_from_coordinates(city_name: str, latitude: float, longitude: float) -> str:
+    preset = CITY_PRESETS.get(city_name.lower()) or CITY_PRESETS.get(city_name)
+    if preset is not None:
+        return preset[2]
+    if 73 <= longitude <= 135 and 18 <= latitude <= 54:
+        return "Asia/Shanghai"
+    if 126 <= longitude <= 146 and 30 <= latitude <= 46:
+        return "Asia/Tokyo"
+    if -10 <= longitude <= 3 and 49 <= latitude <= 61:
+        return "Europe/London"
+    if -130 <= longitude <= -60 and 24 <= latitude <= 50:
+        return "America/New_York"
+    return "Asia/Shanghai"

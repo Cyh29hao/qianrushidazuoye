@@ -17,6 +17,7 @@ QT_RUNTIME = configure_qt_runtime(APP_DIR)
 APP_VERSION = "v2.0"
 GITHUB_URL = "https://github.com/Cyh29hao"
 LOGO_PATH = APP_DIR / "assets" / "clock_logo.svg"
+LOCAL_MODE_LABEL = "不使用串口"
 
 import serial
 from PyQt5 import QtCore, QtGui, QtWidgets
@@ -38,17 +39,20 @@ from extension_services import (
 )
 from extension_store import (
     AppConfig,
+    RuntimeState,
     SavedPlace,
     ScheduleItem,
     append_event_log,
     ensure_storage,
     load_config,
     load_recent_event_logs,
+    load_runtime_state,
     load_schedules,
     mark_schedule_triggered,
     normalize_board_token,
     parse_clock_hms,
     save_config,
+    save_runtime_state,
     save_schedules,
     schedule_trigger_matches,
     weekday_text,
@@ -61,7 +65,11 @@ from protocol import (
     build_set_weather_command,
     parse_line,
 )
-from run_extension_checks import execute_checks_on_open_port, execute_checks_on_port
+from run_extension_checks import (
+    execute_checks_on_open_port,
+    execute_checks_on_port,
+    execute_host_only_checks,
+)
 from twin_widgets import DigitalTwinWidget
 from ui_main import Ui_MainWindow
 
@@ -139,6 +147,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ui.setupUi(self)
         ensure_storage(APP_DIR)
         self.config: AppConfig = load_config(APP_DIR)
+        self.runtime_state: RuntimeState = load_runtime_state(APP_DIR)
         self.schedules: list[ScheduleItem] = load_schedules(APP_DIR)
         self.log_dir = APP_DIR / "logs"
         self.setWindowTitle(f"智能联网时钟系统 - PC 上位机 {APP_VERSION}")
@@ -146,6 +155,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.setWindowIcon(QtGui.QIcon(str(LOGO_PATH)))
 
         self.serial_port: serial.Serial | None = None
+        self.local_mode_active = False
         self.read_buffer = ""
         self.pending_queries: deque[str] = deque()
         self.last_ping_monotonic: float | None = None
@@ -159,6 +169,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.last_weather_snapshot = None
         self.last_ntp_sync_text = "未进行网络对时"
         self.last_selected_zone_time = "--:--:--"
+        self.last_dashboard_minute = ""
         self.last_display_event: tuple[str, int] | None = None
         self.last_led_event: int | None = None
         self.latest_display_text = "--"
@@ -232,28 +243,54 @@ class MainWindow(QtWidgets.QMainWindow):
         self.log("INFO", "PC 上位机已启动，等待连接 S800。")
 
     def _build_statusbar(self) -> None:
+        self.status_project = QtWidgets.QLabel("智能联网时钟系统")
+        self.status_project.setContentsMargins(4, 0, 8, 0)
+        self.status_project_icon = QtWidgets.QLabel()
+        if LOGO_PATH.exists():
+            pixmap = QtGui.QPixmap(str(LOGO_PATH)).scaled(
+                18,
+                18,
+                QtCore.Qt.KeepAspectRatio,
+                QtCore.Qt.SmoothTransformation,
+            )
+            self.status_project_icon.setPixmap(pixmap)
         self.status_connection = QtWidgets.QLabel("连接: 未连接")
-        self.status_format = QtWidgets.QLabel("FORMAT: LEFT")
         self.status_mode = QtWidgets.QLabel("MODE: DAY")
-        self.status_alarm = QtWidgets.QLabel("ALARM: OFF")
+        self.status_location = QtWidgets.QLabel("LOCATION: 上海")
+        self.status_local_time = QtWidgets.QLabel("本地时间: --:--:--")
         self.status_latency = QtWidgets.QLabel("延迟: -- ms")
         self.status_version = QtWidgets.QLabel(APP_VERSION)
         self.status_developer = QtWidgets.QLabel("开发者: Cyh29hao")
+        self.status_clear_button = QtWidgets.QToolButton(self)
+        self.status_clear_button.setText("清空日志")
+        self.status_export_button = QtWidgets.QToolButton(self)
+        self.status_export_button.setText("导出日志")
         self.status_github_button = QtWidgets.QToolButton(self)
         self.status_github_button.setText("GitHub")
         self.status_github_button.clicked.connect(
             lambda: QtGui.QDesktopServices.openUrl(QtCore.QUrl(GITHUB_URL))
         )
+        self.status_clear_button.clicked.connect(self.ui.logTextEdit.clear)
+        self.status_export_button.clicked.connect(self.export_log)
+        self.ui.statusbar.addWidget(self.status_project_icon)
+        self.ui.statusbar.addWidget(self.status_project, 1)
         self.ui.statusbar.addPermanentWidget(self.status_connection)
-        self.ui.statusbar.addPermanentWidget(self.status_format)
         self.ui.statusbar.addPermanentWidget(self.status_mode)
-        self.ui.statusbar.addPermanentWidget(self.status_alarm)
+        self.ui.statusbar.addPermanentWidget(self.status_location)
+        self.ui.statusbar.addPermanentWidget(self.status_local_time)
         self.ui.statusbar.addPermanentWidget(self.status_latency)
         self.ui.statusbar.addPermanentWidget(self.status_version)
         self.ui.statusbar.addPermanentWidget(self.status_developer)
+        self.ui.statusbar.addPermanentWidget(self.status_clear_button)
+        self.ui.statusbar.addPermanentWidget(self.status_export_button)
         self.ui.statusbar.addPermanentWidget(self.status_github_button)
 
     def eventFilter(self, watched: QtCore.QObject, event: QtCore.QEvent) -> bool:
+        if watched is getattr(self.ui, "portCombo", None) and event.type() in {
+            QtCore.QEvent.MouseButtonPress,
+            QtCore.QEvent.FocusIn,
+        }:
+            self.refresh_ports()
         locked_boxes = {
             getattr(self.ui, "displayToggleCombo", None),
             getattr(self.ui, "formatCombo", None),
@@ -271,6 +308,72 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _active_place(self) -> SavedPlace:
         return self.config.saved_places[self.config.active_place_index]
+
+    def _is_local_mode_selected(self) -> bool:
+        return self.ui.portCombo.currentText().strip() == LOCAL_MODE_LABEL
+
+    def _is_local_mode_active(self) -> bool:
+        return self.local_mode_active and not self.is_connected
+
+    def _save_runtime_state(self) -> None:
+        save_runtime_state(APP_DIR, self.runtime_state)
+
+    def _set_runtime_datetime(self, moment: datetime) -> None:
+        clean = moment.replace(microsecond=0)
+        self.runtime_state.board_datetime_iso = clean.isoformat(sep=" ")
+        self.runtime_state.shadow_saved_at_utc_iso = datetime.utcnow().replace(
+            microsecond=0
+        ).isoformat(sep=" ")
+        self._save_runtime_state()
+
+    def _get_runtime_datetime(self) -> datetime:
+        raw = self.runtime_state.board_datetime_iso.strip()
+        if raw:
+            try:
+                return datetime.fromisoformat(raw)
+            except ValueError:
+                pass
+        fallback = self._selected_zone_now().replace(tzinfo=None, microsecond=0)
+        self._set_runtime_datetime(fallback)
+        return fallback
+
+    def _local_apply_notice(self, action: str) -> None:
+        self.log("WARN", f"!!! 仅更新上位机本地配置/模拟状态，未下发板端：{action}")
+
+    def _local_query_notice(self, action: str) -> None:
+        self.log("WARN", f"!!! 当前为本地模式，显示的是上位机保存状态，并非板端实时返回：{action}")
+
+    def _apply_runtime_state_to_ui(self) -> None:
+        self.ui.displayToggleCombo.setCurrentText("ON" if self.runtime_state.display_on else "OFF")
+        self.ui.formatCombo.setCurrentText(self.runtime_state.format)
+        self.ui.modeCombo.setCurrentText(self.runtime_state.mode)
+        self.last_mode = self.runtime_state.mode
+        self.last_alarm = self.runtime_state.alarm_time if self.runtime_state.alarm_enabled else "OFF"
+        alarm_time = QtCore.QTime.fromString(self.runtime_state.alarm_time, "HH:mm:ss")
+        if alarm_time.isValid():
+            self.ui.alarmTimeEdit.setTime(alarm_time)
+            if hasattr(self, "scheduleAlarmTimeEdit"):
+                self.scheduleAlarmTimeEdit.setTime(alarm_time)
+        board_time = self._get_runtime_datetime()
+        self.ui.dateEdit.setDate(QtCore.QDate(board_time.year, board_time.month, board_time.day))
+        self.ui.timeEdit.setTime(QtCore.QTime(board_time.hour, board_time.minute, board_time.second))
+        self.ui.ledHexEdit.setText(f"{self.runtime_state.led_mask:02X}")
+        self.ui.messageEdit.setText(self.runtime_state.message_text)
+        if self.runtime_state.weather_token:
+            self.twin.set_display_frame(self.runtime_state.weather_token, 0)
+            self.latest_display_text = f"{self.runtime_state.weather_token} / 00"
+        else:
+            text = board_time.strftime("%H%M%S").ljust(8, "_")
+            self.twin.set_display_frame(text, 0)
+            self.latest_display_text = f"{text} / 00"
+        self.twin.set_led_byte(0 if not self.runtime_state.display_on else self.runtime_state.led_mask)
+        self.latest_led_text = f"{self.runtime_state.led_mask:02X}"
+        if hasattr(self, "latestDisplayLabel"):
+            self.latestDisplayLabel.setText(f"最新显示: {self.latest_display_text}")
+        if hasattr(self, "latestLedLabel"):
+            self.latestLedLabel.setText(f"最新 LED: {self.latest_led_text}")
+        self.status_mode.setText(f"MODE: {self.runtime_state.mode}")
+        self._refresh_theme_from_mode()
 
     def _selected_zone_now(self, utc_moment: datetime | None = None) -> datetime:
         place = self._active_place()
@@ -321,6 +424,38 @@ class MainWindow(QtWidgets.QMainWindow):
             return "<1 分钟"
         minutes = delta_seconds // 60
         return f"{minutes} 分钟"
+
+    def _format_dashboard_countdown(self, target: datetime | None, now: datetime) -> str:
+        if target is None:
+            return "无"
+        delta_seconds = int((target - now).total_seconds())
+        if delta_seconds <= 0 or delta_seconds < 60:
+            return "<1 分钟"
+
+        minutes_total = delta_seconds // 60
+        days, remainder_minutes = divmod(minutes_total, 24 * 60)
+        hours, minutes = divmod(remainder_minutes, 60)
+        parts: list[str] = []
+        if days:
+            parts.append(f"{days}天")
+        if hours:
+            parts.append(f"{hours}小时")
+        if minutes:
+            parts.append(f"{minutes}分钟")
+        return "".join(parts) if parts else "<1 分钟"
+
+    def _format_weather_age(self, now: datetime) -> str:
+        if self.last_weather_refresh_at is None:
+            return "未更新"
+        age_minutes = max(
+            0,
+            int((datetime.now() - self.last_weather_refresh_at).total_seconds() // 60),
+        )
+        if age_minutes == 0:
+            return "刚刚更新"
+        if age_minutes == 1:
+            return "1 分钟前更新"
+        return f"{age_minutes} 分钟前更新"
 
     def _next_single_alarm_time(self, now: datetime) -> datetime | None:
         if self.last_alarm in {"OFF", "RINGING", ""}:
@@ -431,12 +566,14 @@ class MainWindow(QtWidgets.QMainWindow):
                 background: {palette['group_bg']};
                 border: 1px solid {palette['group_border']};
                 border-radius: 10px;
-                margin-top: 12px;
+                margin-top: 16px;
                 font-weight: 700;
             }}
             QGroupBox::title {{
+                subcontrol-origin: margin;
+                subcontrol-position: top left;
                 left: 12px;
-                padding: 0 6px;
+                padding: 1px 6px 0 6px;
                 color: {palette['title']};
             }}
             QPushButton {{
@@ -455,11 +592,39 @@ class MainWindow(QtWidgets.QMainWindow):
             QPushButton:pressed {{
                 background: {palette['button_pressed']};
             }}
+            QPushButton:disabled {{
+                background: {palette['button']};
+                color: rgba(255, 255, 255, 0.55);
+            }}
             QLineEdit, QComboBox, QDateEdit, QTimeEdit, QSpinBox, QTextEdit {{
                 background: {palette['input_bg']};
                 border: 1px solid {palette['input_border']};
                 border-radius: 8px;
                 padding: 6px 8px;
+            }}
+            QComboBox, QDateEdit, QTimeEdit {{
+                padding-right: 28px;
+            }}
+            QComboBox::drop-down, QDateEdit::drop-down, QTimeEdit::drop-down {{
+                background: {palette['input_bg']};
+                border-left: 1px solid {palette['input_border']};
+                border-top-right-radius: 8px;
+                border-bottom-right-radius: 8px;
+                subcontrol-origin: border;
+                subcontrol-position: top right;
+                width: 24px;
+            }}
+            QSpinBox::up-button, QSpinBox::down-button {{
+                background: {palette['input_bg']};
+                border-left: 1px solid {palette['input_border']};
+                subcontrol-origin: border;
+                width: 24px;
+            }}
+            QSpinBox::up-button {{
+                border-top-right-radius: 8px;
+            }}
+            QSpinBox::down-button {{
+                border-bottom-right-radius: 8px;
             }}
             QComboBox[stateField="true"] {{
                 padding-right: 8px;
@@ -509,6 +674,23 @@ class MainWindow(QtWidgets.QMainWindow):
             QTableCornerButton::section {{
                 background: {palette['chip_bg']};
                 border: 1px solid {palette['input_border']};
+            }}
+            QCalendarWidget QWidget {{
+                background: {palette['input_bg']};
+                color: {palette['text']};
+            }}
+            QCalendarWidget QToolButton {{
+                background: {palette['button']};
+                color: white;
+                border: none;
+                border-radius: 6px;
+                padding: 3px 6px;
+            }}
+            QCalendarWidget QAbstractItemView {{
+                background: {palette['input_bg']};
+                color: {palette['text']};
+                selection-background-color: {palette['button']};
+                selection-color: white;
             }}
             QLabel#twinTitle {{
                 font-size: 10px;
@@ -580,6 +762,10 @@ class MainWindow(QtWidgets.QMainWindow):
                 font-size: 11px;
                 font-weight: 600;
             }}
+            QToolButton:disabled {{
+                background: {palette['button']};
+                color: rgba(255, 255, 255, 0.55);
+            }}
             """
         )
         self._apply_dynamic_theme_overrides(night, palette)
@@ -590,6 +776,13 @@ class MainWindow(QtWidgets.QMainWindow):
             f"color: {palette['text']};"
             f"border: 1px solid {palette['input_border']};"
             f"border-radius: 8px;"
+        )
+        field_style = (
+            f"background: {palette['input_bg']};"
+            f"color: {palette['text']};"
+            f"border: 1px solid {palette['input_border']};"
+            f"border-radius: 8px;"
+            "padding: 6px 10px;"
         )
         header_style = (
             f"background: {palette['chip_bg']};"
@@ -603,6 +796,27 @@ class MainWindow(QtWidgets.QMainWindow):
             widget.setStyleSheet(page_style)
         for area in self.findChildren(QtWidgets.QScrollArea):
             area.viewport().setStyleSheet(page_style)
+        for widget in self.findChildren(QtWidgets.QLineEdit):
+            widget.setStyleSheet(field_style)
+        for widget in self.findChildren(QtWidgets.QComboBox):
+            widget.setStyleSheet(field_style)
+            if widget.view() is not None:
+                widget.view().setStyleSheet(list_style)
+        for widget_type in (QtWidgets.QDateEdit, QtWidgets.QTimeEdit, QtWidgets.QSpinBox):
+            for widget in self.findChildren(widget_type):
+                widget.setStyleSheet(field_style)
+                widget.setAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
+                line_edit = widget.findChild(QtWidgets.QLineEdit)
+                if line_edit is not None:
+                    line_edit.setAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
+                    line_edit.setStyleSheet(field_style)
+        for calendar in self.findChildren(QtWidgets.QCalendarWidget):
+            calendar.setStyleSheet(
+                f"background: {palette['input_bg']};"
+                f"color: {palette['text']};"
+                f"border: 1px solid {palette['input_border']};"
+                "border-radius: 8px;"
+            )
         for widget in (
             getattr(self, "scheduleTable", None),
             getattr(self, "dashboardEventList", None),
@@ -846,11 +1060,11 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         right_layout = QtWidgets.QVBoxLayout(right_panel)
         right_layout.setContentsMargins(0, 0, 0, 0)
-        right_layout.setSpacing(18)
+        right_layout.setSpacing(14)
         right_layout.addWidget(self.ui.twinGroup, 0, QtCore.Qt.AlignTop)
         right_layout.addWidget(self.ui.logGroup, 1)
 
-        self.ui.connectionGroup.setMinimumHeight(152)
+        self.ui.connectionGroup.setMinimumHeight(132)
         self.ui.clockGroup.setMinimumHeight(214)
         self.ui.displayGroup.setMinimumHeight(368)
         self.ui.demoGroup.setMinimumHeight(238)
@@ -860,8 +1074,8 @@ class MainWindow(QtWidgets.QMainWindow):
             screen.availableGeometry().height() if screen is not None else 900
         )
         required_twin_height = max(
-            self.twin.sizeHint().height() + 60,
-            int(available_height * 0.29),
+            self.twin.sizeHint().height() + 46,
+            int(available_height * 0.27),
         )
         self.ui.twinGroup.setTitle("")
         self.ui.twinGroup.setFixedHeight(required_twin_height)
@@ -870,11 +1084,9 @@ class MainWindow(QtWidgets.QMainWindow):
             QtWidgets.QSizePolicy.Fixed,
         )
 
-        log_height = max(220, int(available_height * 0.23))
-        self.ui.logGroup.setMinimumHeight(log_height)
         self.ui.logGroup.setSizePolicy(
             QtWidgets.QSizePolicy.Expanding,
-            QtWidgets.QSizePolicy.Expanding,
+            QtWidgets.QSizePolicy.Fixed,
         )
 
         self.ui.horizontalLayout.addWidget(left_panel)
@@ -883,6 +1095,7 @@ class MainWindow(QtWidgets.QMainWindow):
         log_layout = self.ui.logGroup.layout()
         if log_layout is not None and not hasattr(self, "latestDisplayLabel"):
             summary_widget = QtWidgets.QWidget(self.ui.logGroup)
+            self.logSummaryWidget = summary_widget
             summary_layout = QtWidgets.QGridLayout(summary_widget)
             summary_layout.setContentsMargins(0, 0, 0, 0)
             summary_layout.setHorizontalSpacing(8)
@@ -926,13 +1139,32 @@ class MainWindow(QtWidgets.QMainWindow):
             summary_layout.addWidget(self.autoModeNoticeLabel, 2, 0, 1, 4)
             log_layout.insertWidget(0, summary_widget)
 
-        self.ui.logTextEdit.setMinimumHeight(220)
+        if self.ui.horizontalLayout_2.indexOf(self.ui.connectButton) == -1:
+            self.ui.horizontalLayout_2.removeWidget(self.ui.refreshPortsButton)
+            self.ui.refreshPortsButton.hide()
+            self.ui.portHintLabel.hide()
+            self.ui.horizontalLayout_2.addWidget(self.ui.connectButton)
+            self.ui.horizontalLayout_2.addWidget(self.ui.disconnectButton)
+            self.ui.verticalLayout_2.removeItem(self.ui.horizontalLayout_3)
+            self.ui.verticalLayout_2.removeWidget(self.ui.portHintLabel)
+        self.ui.horizontalLayout_2.setStretch(0, 6)
+        self.ui.horizontalLayout_2.setStretch(1, 3)
+        self.ui.horizontalLayout_2.setStretch(2, 3)
+        log_line_height = QtGui.QFontMetrics(self.ui.logTextEdit.font()).lineSpacing()
+        log_text_height = log_line_height * 9 + 32
+        self.ui.logTextEdit.setFixedHeight(log_text_height)
         self.ui.logTextEdit.document().setMaximumBlockCount(self.max_log_blocks)
         self.ui.clearLogButton.setMinimumHeight(28)
         self.ui.exportLogButton.setMinimumHeight(28)
         self.ui.horizontalLayout_6.setSpacing(10)
         self.ui.horizontalLayout_6.setStretch(0, 1)
         self.ui.horizontalLayout_6.setStretch(1, 1)
+        summary_height = (
+            self.logSummaryWidget.sizeHint().height()
+            if hasattr(self, "logSummaryWidget")
+            else 92
+        )
+        self.ui.logGroup.setFixedHeight(summary_height + log_text_height + 56)
 
         for button in self.findChildren(QtWidgets.QPushButton):
             button.setCursor(QtGui.QCursor(QtCore.Qt.PointingHandCursor))
@@ -958,21 +1190,21 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ui.gridLayout.setColumnStretch(3, 2)
         self.ui.gridLayout.setHorizontalSpacing(10)
         self.ui.gridLayout.setVerticalSpacing(10)
-        self.ui.gridLayout.setContentsMargins(12, 22, 12, 12)
+        self.ui.gridLayout.setContentsMargins(12, 28, 12, 12)
         self.ui.gridLayout_2.setColumnStretch(0, 1)
         self.ui.gridLayout_2.setColumnStretch(1, 3)
         self.ui.gridLayout_2.setColumnStretch(2, 2)
         self.ui.gridLayout_2.setHorizontalSpacing(10)
         self.ui.gridLayout_2.setVerticalSpacing(10)
-        self.ui.gridLayout_2.setContentsMargins(12, 22, 12, 12)
+        self.ui.gridLayout_2.setContentsMargins(12, 28, 12, 12)
         self.ui.verticalLayout_2.setSpacing(10)
-        self.ui.verticalLayout_2.setContentsMargins(12, 22, 12, 12)
+        self.ui.verticalLayout_2.setContentsMargins(12, 28, 12, 12)
         self.ui.verticalLayout_3.setSpacing(8)
-        self.ui.verticalLayout_3.setContentsMargins(12, 22, 12, 12)
+        self.ui.verticalLayout_3.setContentsMargins(12, 28, 12, 12)
         self.ui.verticalLayout_4.setSpacing(4)
         self.ui.verticalLayout_4.setContentsMargins(12, 2, 12, 6)
         self.ui.verticalLayout_5.setSpacing(8)
-        self.ui.verticalLayout_5.setContentsMargins(12, 14, 12, 8)
+        self.ui.verticalLayout_5.setContentsMargins(12, 20, 12, 8)
 
         self.ui.connectButton.setText("连接并应用")
         self.ui.syncNowButton.setText("一键对时并写入")
@@ -982,7 +1214,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ui.sendLedButton.setText("设置 LED")
         self.ui.sendPresetButton.setText("发送预设")
         self.ui.mixedCaseDemoButton.setText("混合大小写")
-        self.ui.portHintLabel.setText("115200 8N1，自动扫描 COM，显示延迟和事件。")
 
     def _create_scroll_page(
         self,
@@ -1142,39 +1373,45 @@ class MainWindow(QtWidgets.QMainWindow):
         return schedule_group
 
     def _build_dashboard_group(self, parent: QtWidgets.QWidget) -> QtWidgets.QGroupBox:
-        dashboard_group = QtWidgets.QGroupBox("主页数据看板", parent)
+        dashboard_group = QtWidgets.QGroupBox("数据看板", parent)
         dashboard_layout = QtWidgets.QVBoxLayout(dashboard_group)
         dashboard_layout.setContentsMargins(12, 22, 12, 12)
-        dashboard_layout.setSpacing(10)
+        dashboard_layout.setSpacing(8)
 
-        self.dashboardSummaryLabel = QtWidgets.QLabel("统计: --", dashboard_group)
+        self.dashboardSummaryLabel = QtWidgets.QLabel("连接 | 显示: --", dashboard_group)
         self.dashboardSummaryLabel.setProperty("class", "infoChip")
         self.dashboardSummaryLabel.setStyleSheet("")
-        self.dashboardConnectionLabel = QtWidgets.QLabel("连接概况: --", dashboard_group)
+        self.dashboardConnectionLabel = QtWidgets.QLabel("城市 | 时间: --", dashboard_group)
         self.dashboardConnectionLabel.setProperty("class", "infoChip")
         self.dashboardConnectionLabel.setStyleSheet("")
-        self.dashboardModeLabel = QtWidgets.QLabel("模式切换: --", dashboard_group)
-        self.dashboardModeLabel.setProperty("class", "infoChip")
-        self.dashboardModeLabel.setStyleSheet("")
-        self.dashboardWeatherLabel = QtWidgets.QLabel("天气刷新: --", dashboard_group)
+        self.dashboardWeatherLabel = QtWidgets.QLabel("天气: --", dashboard_group)
         self.dashboardWeatherLabel.setProperty("class", "infoChip")
         self.dashboardWeatherLabel.setStyleSheet("")
+        self.dashboardModeLabel = QtWidgets.QLabel("昼夜模式: --", dashboard_group)
+        self.dashboardModeLabel.setProperty("class", "infoChip")
+        self.dashboardModeLabel.setStyleSheet("")
+        self.dashboardTestLabel = QtWidgets.QLabel("日程统计: --", dashboard_group)
+        self.dashboardTestLabel.setProperty("class", "infoChip")
+        self.dashboardTestLabel.setStyleSheet("")
         self.dashboardScheduleLabel = QtWidgets.QLabel("下次提醒: --", dashboard_group)
         self.dashboardScheduleLabel.setProperty("class", "infoChip")
         self.dashboardScheduleLabel.setStyleSheet("")
-        self.dashboardTestLabel = QtWidgets.QLabel("自动测试: 未运行", dashboard_group)
-        self.dashboardTestLabel.setProperty("class", "infoChip")
-        self.dashboardTestLabel.setStyleSheet("")
-        self.dashboardEventList = QtWidgets.QListWidget(dashboard_group)
-        self.dashboardEventList.setMinimumHeight(140)
+        for label in (
+            self.dashboardSummaryLabel,
+            self.dashboardConnectionLabel,
+            self.dashboardWeatherLabel,
+            self.dashboardModeLabel,
+            self.dashboardTestLabel,
+            self.dashboardScheduleLabel,
+        ):
+            label.setWordWrap(True)
 
         dashboard_layout.addWidget(self.dashboardSummaryLabel)
         dashboard_layout.addWidget(self.dashboardConnectionLabel)
-        dashboard_layout.addWidget(self.dashboardModeLabel)
         dashboard_layout.addWidget(self.dashboardWeatherLabel)
-        dashboard_layout.addWidget(self.dashboardScheduleLabel)
+        dashboard_layout.addWidget(self.dashboardModeLabel)
         dashboard_layout.addWidget(self.dashboardTestLabel)
-        dashboard_layout.addWidget(self.dashboardEventList)
+        dashboard_layout.addWidget(self.dashboardScheduleLabel)
         return dashboard_group
 
     def _build_alarm_schedule_page(self) -> QtWidgets.QScrollArea:
@@ -1253,15 +1490,25 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ui.formatCombo.addItems(["LEFT", "RIGHT"])
         self.ui.modeCombo.addItems(["DAY", "NIGHT"])
         for combo in (
+            self.ui.portCombo,
             self.ui.displayToggleCombo,
             self.ui.formatCombo,
             self.ui.modeCombo,
         ):
-            combo.setProperty("stateField", True)
-            combo.setFocusPolicy(QtCore.Qt.NoFocus)
+            if combo is not self.ui.portCombo:
+                combo.setProperty("stateField", True)
+                combo.setFocusPolicy(QtCore.Qt.NoFocus)
             combo.installEventFilter(self)
         self.ui.ledHexEdit.setText("80")
         self.ui.beepSpinBox.setValue(500)
+        self.ui.clearLogButton.hide()
+        self.ui.exportLogButton.hide()
+        for widget in (
+            self.ui.dateEdit,
+            self.ui.timeEdit,
+            self.ui.alarmTimeEdit,
+        ):
+            widget.setAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
 
         preset_items = [
             "*SET:DATE YEAR 2026 MONTH 06 DATE 02",
@@ -1272,6 +1519,7 @@ class MainWindow(QtWidgets.QMainWindow):
             "*SET:DISPLAY ON",
         ]
         self.ui.presetCombo.addItems(preset_items)
+        self._apply_runtime_state_to_ui()
 
     def _build_extension_settings_page(self) -> QtWidgets.QScrollArea:
         page = QtWidgets.QScrollArea(self.ui.centralwidget)
@@ -1556,7 +1804,14 @@ class MainWindow(QtWidgets.QMainWindow):
         if not hasattr(self, "dashboardSummaryLabel"):
             return
         now = self._selected_zone_now().replace(tzinfo=None)
+        self.last_dashboard_minute = now.strftime("%Y-%m-%d %H:%M")
         place = self._active_place()
+        if self._is_local_mode_active():
+            connection_text = "本地模式"
+        elif self.is_connected:
+            connection_text = f"已连接 {self.ui.portCombo.currentText()}"
+        else:
+            connection_text = "未连接"
         enabled_count = len([item for item in self.schedules if item.enabled])
         next_schedule_text, next_schedule_time = self._next_reminder_summary(now)
         expected_mode = (
@@ -1564,34 +1819,43 @@ class MainWindow(QtWidgets.QMainWindow):
         ) if self.last_weather_snapshot is not None else self.last_mode
         weather_text = self.weather_summary_text
         if self.last_weather_snapshot is not None:
-            weather_text = format_weather_summary(
-                self.last_weather_snapshot.weather_code,
-                self.last_weather_snapshot.temperature_c,
+            weather_text = (
+                f"{weather_emoji(self.last_weather_snapshot.weather_code)} "
+                f"{weather_code_summary(self.last_weather_snapshot.weather_code)} "
+                f"{self.last_weather_snapshot.temperature_c:.1f}C"
             )
+        city_time_text = now.strftime("%H:%M")
+        alarm_state = "开" if self.last_alarm not in {"OFF", "RINGING", ""} else "关"
         self.dashboardSummaryLabel.setText(
-            f"统计: 共 {len(self.schedules)} 条提醒，启用 {enabled_count} 条 | 当前城市 {place.name}"
+            f"连接: {connection_text} | 显示: {'开' if self.runtime_state.display_on else '关'}"
         )
         self.dashboardConnectionLabel.setText(
-            f"连接概况: {'已连接 ' + self.ui.portCombo.currentText() if self.is_connected else '未连接'} | 最近 NTP {self.last_ntp_sync_text}"
-        )
-        self.dashboardModeLabel.setText(
-            f"模式切换: 当前 {self.last_mode} | 当前所处 {'日间' if expected_mode == 'DAY' else '夜间'} | 自动昼夜 {'开' if self.config.auto_day_night else '关'}"
+            f"城市: {place.name} | 时间: {city_time_text}"
         )
         self.dashboardWeatherLabel.setText(
-            f"天气刷新: {weather_text} | 日出 {self.sunrise_text} | 日落 {self.sunset_text} | {place.timezone}"
+            f"天气: {weather_text} | 日出 {self.sunrise_text} | 日落 {self.sunset_text} | {self._format_weather_age(now)}"
         )
-        self.dashboardScheduleLabel.setText(
-            f"下次提醒: {next_schedule_text} | 剩余 {self._format_countdown(next_schedule_time, now)}"
+        self.dashboardModeLabel.setText(
+            f"昼夜模式: {self.last_mode} | 当前所处 {'日间' if expected_mode == 'DAY' else '夜间'} | 自动昼夜 {'开' if self.config.auto_day_night else '关'}"
         )
         self.dashboardTestLabel.setText(
-            f"自动测试: {self.last_test_summary} | 当前城市时间 {self.last_selected_zone_time or now.strftime('%Y-%m-%d %H:%M:%S')}"
+            f"日程统计: 板载简易闹钟 {alarm_state} | 共有 {len(self.schedules)} 条提醒 | 启用 {enabled_count} 条"
         )
-        self.dashboardEventList.clear()
-        for entry in load_recent_event_logs(APP_DIR, limit=10):
-            when = entry.get("when", "--")
-            kind = entry.get("kind", "event")
-            detail = entry.get("detail", "")
-            self.dashboardEventList.addItem(f"{when} | {kind} | {detail}")
+        self.dashboardScheduleLabel.setText(
+            f"下次提醒: {next_schedule_text} | 剩余 {self._format_dashboard_countdown(next_schedule_time, now)}"
+        )
+        self.status_connection.setText(f"连接: {connection_text}")
+        self.status_mode.setText(f"MODE: {self.last_mode}")
+        self.status_location.setText(f"LOCATION: {place.name}")
+        self.status_local_time.setText(f"本地时间: {datetime.now().strftime('%H:%M:%S')}")
+        dashboard_event_list = getattr(self, "dashboardEventList", None)
+        if dashboard_event_list is not None:
+            dashboard_event_list.clear()
+            for entry in load_recent_event_logs(APP_DIR, limit=10):
+                when = entry.get("when", "--")
+                kind = entry.get("kind", "event")
+                detail = entry.get("detail", "")
+                dashboard_event_list.addItem(f"{when} | {kind} | {detail}")
 
     def _wire_signals(self) -> None:
         self.ui.refreshPortsButton.clicked.connect(self.refresh_ports)
@@ -1653,6 +1917,10 @@ class MainWindow(QtWidgets.QMainWindow):
     def extension_tick(self) -> None:
         now = datetime.now()
         zone_now = self._selected_zone_now().replace(tzinfo=None)
+        self.status_local_time.setText(f"本地时间: {now.strftime('%H:%M:%S')}")
+        current_dashboard_minute = zone_now.strftime("%Y-%m-%d %H:%M")
+        if current_dashboard_minute != self.last_dashboard_minute:
+            self.refresh_dashboard()
         self.refresh_place_combo_labels()
         if self.config.auto_day_night and self.last_weather_refresh_at is not None:
             if zone_now.second == 0:
@@ -1687,10 +1955,13 @@ class MainWindow(QtWidgets.QMainWindow):
         if not city:
             self.log("WARN", "城市名为空，未定位。")
             return
+        previous_place = SavedPlace(**self._active_place().__dict__)
         try:
             result = geocode_city(city)
         except Exception as exc:  # noqa: BLE001
-            self.log("ERROR", f"城市定位失败: {exc}")
+            self.config.saved_places[self.config.active_place_index] = previous_place
+            self.sync_extension_widgets_from_config()
+            self.log("ERROR", f"!!! 城市定位失败，已保留当前地点配置：{exc}")
             return
         place = self._active_place()
         place.name = result.name
@@ -1727,6 +1998,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if self.sync_in_progress:
             return
         self.sync_snapshot = moment.replace(microsecond=0)
+        self._set_runtime_datetime(self.sync_snapshot)
         self.sync_in_progress = True
         self.ui.syncNowButton.setEnabled(False)
         if hasattr(self, "syncWeatherApplyButton"):
@@ -1758,7 +2030,10 @@ class MainWindow(QtWidgets.QMainWindow):
         source_text = f"{snapshot.strftime('%Y-%m-%d %H:%M:%S')} @ {self._active_place().name}"
         self._send_datetime_snapshot(snapshot, source_text)
         append_event_log(APP_DIR, "ntp_sync", f"{trigger_source} -> {source_text}")
-        self.log("INFO", f"NTP 对时成功并写入 S800（来源: {trigger_source}）。")
+        if self.is_connected:
+            self.log("INFO", f"NTP 对时成功并写入 S800（来源: {trigger_source}）。")
+        else:
+            self.log("WARN", f"!!! 已完成上位机本地对时（来源: {trigger_source}），当前未下发板端。")
         self.refresh_dashboard()
 
     def sync_weather_and_apply(
@@ -1840,7 +2115,10 @@ class MainWindow(QtWidgets.QMainWindow):
                 build_set_weather_command(self.cached_weather_text, self.cached_weather_led_mask)
             )
         if log_trigger:
-            self.log("INFO", f"天气已刷新并下发: {self.weather_summary_text}")
+            if self.is_connected:
+                self.log("INFO", f"天气已刷新并下发: {self.weather_summary_text}")
+            else:
+                self.log("WARN", f"!!! 已刷新上位机本地天气配置，未下发板端：{self.weather_summary_text}")
         if self.config.auto_day_night:
             self.apply_auto_day_night(self._selected_zone_now().replace(tzinfo=None), force_apply=True)
         if self.pending_auto_test_after_apply:
@@ -1865,6 +2143,9 @@ class MainWindow(QtWidgets.QMainWindow):
         if self.is_connected:
             self.send_command(f"*SET:MODE {expected_mode}")
         self.last_mode = expected_mode
+        self.runtime_state.mode = expected_mode
+        self._save_runtime_state()
+        self.ui.modeCombo.setCurrentText(expected_mode)
         self._refresh_theme_from_mode()
         append_event_log(APP_DIR, "auto_mode", expected_mode)
         self.refresh_dashboard()
@@ -2003,12 +2284,15 @@ class MainWindow(QtWidgets.QMainWindow):
         current = self.ui.portCombo.currentText()
         self.ui.portCombo.blockSignals(True)
         self.ui.portCombo.clear()
-        self.ui.portCombo.addItems(ports)
-        if current in ports:
+        items = [LOCAL_MODE_LABEL, *ports]
+        self.ui.portCombo.addItems(items)
+        if current in items:
             self.ui.portCombo.setCurrentText(current)
+        elif current == "" and LOCAL_MODE_LABEL in items:
+            self.ui.portCombo.setCurrentText(LOCAL_MODE_LABEL)
         self.ui.portCombo.blockSignals(False)
         if not ports:
-            self.ui.portCombo.setPlaceholderText("未发现 COM 口")
+            self.ui.portCombo.setPlaceholderText("未发现 COM 口，仍可使用本地模式")
 
     def _open_port(self, port_name: str) -> bool:
         self.disconnect_port(log_message=False)
@@ -2028,6 +2312,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.refresh_dashboard()
             return False
 
+        self.local_mode_active = False
         self.status_connection.setText(f"连接: {port_name}")
         self.poll_timer.start()
         self.ping_timer.start()
@@ -2038,6 +2323,15 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def connect_port(self) -> bool:
         port_name = self.ui.portCombo.currentText().strip()
+        if port_name == LOCAL_MODE_LABEL:
+            self.disconnect_port(log_message=False)
+            self.local_mode_active = True
+            self.status_connection.setText("连接: 本地模式")
+            self.status_latency.setText("延迟: -- ms")
+            self._apply_runtime_state_to_ui()
+            self.refresh_dashboard()
+            self.log("INFO", "已进入本地模式，后续操作只更新上位机本地配置与模拟状态。")
+            return True
         if not port_name:
             self.log("WARN", "没有可连接的 COM 口。")
             return False
@@ -2078,6 +2372,7 @@ class MainWindow(QtWidgets.QMainWindow):
             except Exception:  # noqa: BLE001
                 pass
         self.serial_port = None
+        self.local_mode_active = False
         self.status_connection.setText("连接: 未连接")
         self.status_latency.setText("延迟: -- ms")
         self.latestDisplayLabel.setText(f"最新显示: {self.latest_display_text}")
@@ -2086,6 +2381,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self.refresh_dashboard()
 
     def query_runtime_state(self) -> None:
+        if self._is_local_mode_active():
+            self._apply_runtime_state_to_ui()
+            self._local_query_notice("运行时状态")
+            self.refresh_dashboard()
+            return
         self.send_command("*GET:DATE", "DATE")
         self.send_command("*GET:TIME", "TIME")
         self.send_command("*GET:FORMAT", "FORMAT")
@@ -2093,6 +2393,154 @@ class MainWindow(QtWidgets.QMainWindow):
         self.send_command("*GET:ALARM", "ALARM")
         self.send_command("*GET:DISPLAY", "DISPLAY")
         self.send_ping()
+
+    def _handle_local_query(self, query: str) -> None:
+        self._apply_runtime_state_to_ui()
+        if query == "DATE":
+            moment = self._get_runtime_datetime()
+            self.ui.dateEdit.setDate(QtCore.QDate(moment.year, moment.month, moment.day))
+        elif query == "TIME":
+            moment = self._get_runtime_datetime()
+            self.ui.timeEdit.setTime(QtCore.QTime(moment.hour, moment.minute, moment.second))
+        elif query == "FORMAT":
+            self.ui.formatCombo.setCurrentText(self.runtime_state.format)
+        elif query == "MODE":
+            self.ui.modeCombo.setCurrentText(self.runtime_state.mode)
+        elif query == "ALARM":
+            alarm_time = QtCore.QTime.fromString(self.runtime_state.alarm_time, "HH:mm:ss")
+            if alarm_time.isValid():
+                self.ui.alarmTimeEdit.setTime(alarm_time)
+                if hasattr(self, "scheduleAlarmTimeEdit"):
+                    self.scheduleAlarmTimeEdit.setTime(alarm_time)
+        elif query == "DISPLAY":
+            self.ui.displayToggleCombo.setCurrentText("ON" if self.runtime_state.display_on else "OFF")
+        self._local_query_notice(query)
+        self.refresh_dashboard()
+
+    def _apply_local_command(self, command: str) -> None:
+        upper = command.upper()
+        moment = self._get_runtime_datetime()
+        action = command
+        if upper.startswith("*SET:DATE "):
+            parts = upper.split()
+            try:
+                year = int(parts[parts.index("YEAR") + 1])
+                month = int(parts[parts.index("MONTH") + 1])
+                day = int(parts[parts.index("DATE") + 1])
+                moment = moment.replace(year=year, month=month, day=day)
+                self._set_runtime_datetime(moment)
+                self.ui.dateEdit.setDate(QtCore.QDate(year, month, day))
+                action = f"日期 -> {year:04d}-{month:02d}-{day:02d}"
+            except Exception:
+                action = command
+        elif upper.startswith("*SET:TIME "):
+            parts = upper.split()
+            try:
+                hour = int(parts[parts.index("HOUR") + 1])
+                minute = int(parts[parts.index("MINUTE") + 1])
+                second = int(parts[parts.index("SECOND") + 1])
+                moment = moment.replace(hour=hour, minute=minute, second=second)
+                self._set_runtime_datetime(moment)
+                self.ui.timeEdit.setTime(QtCore.QTime(hour, minute, second))
+                action = f"时间 -> {hour:02d}:{minute:02d}:{second:02d}"
+            except Exception:
+                action = command
+        elif upper == "*SET:ALARM OFF":
+            self.runtime_state.alarm_enabled = False
+            self.last_alarm = "OFF"
+            self._save_runtime_state()
+            action = "关闭单闹钟"
+        elif upper.startswith("*SET:ALARM "):
+            parts = upper.split()
+            try:
+                hour = int(parts[parts.index("HOUR") + 1])
+                minute = int(parts[parts.index("MINUTE") + 1])
+                second = int(parts[parts.index("SECOND") + 1])
+                self.runtime_state.alarm_enabled = True
+                self.runtime_state.alarm_time = f"{hour:02d}:{minute:02d}:{second:02d}"
+                self.last_alarm = self.runtime_state.alarm_time
+                self._save_runtime_state()
+                alarm_time = QtCore.QTime(hour, minute, second)
+                self.ui.alarmTimeEdit.setTime(alarm_time)
+                if hasattr(self, "scheduleAlarmTimeEdit"):
+                    self.scheduleAlarmTimeEdit.setTime(alarm_time)
+                action = f"单闹钟 -> {self.runtime_state.alarm_time}"
+            except Exception:
+                action = command
+        elif upper.startswith("*SET:DISPLAY "):
+            value = upper.removeprefix("*SET:DISPLAY ").strip()
+            self.runtime_state.display_on = value == "ON"
+            self.ui.displayToggleCombo.setCurrentText("ON" if self.runtime_state.display_on else "OFF")
+            self._save_runtime_state()
+            action = f"显示开关 -> {'ON' if self.runtime_state.display_on else 'OFF'}"
+        elif upper.startswith("*SET:FORMAT "):
+            value = upper.removeprefix("*SET:FORMAT ").strip() or "LEFT"
+            self.runtime_state.format = value
+            self.ui.formatCombo.setCurrentText(value)
+            self._save_runtime_state()
+            action = f"FORMAT -> {value}"
+        elif upper.startswith("*SET:MODE "):
+            value = upper.removeprefix("*SET:MODE ").strip() or "DAY"
+            self.runtime_state.mode = value
+            self.last_mode = value
+            self.ui.modeCombo.setCurrentText(value)
+            self._save_runtime_state()
+            action = f"MODE -> {value}"
+        elif upper.startswith("*SET:LED "):
+            try:
+                self.runtime_state.led_mask = int(command.split()[-1], 16) & 0xFF
+                self.ui.ledHexEdit.setText(f"{self.runtime_state.led_mask:02X}")
+                self._save_runtime_state()
+                action = f"LED 掩码 -> {self.runtime_state.led_mask:02X}"
+            except ValueError:
+                action = command
+        elif upper.startswith("*SET:MSG "):
+            text = command[9:].strip()
+            self.runtime_state.message_text = text
+            self.ui.messageEdit.setText(text)
+            self._save_runtime_state()
+            action = f"滚动消息 -> {text}"
+        elif upper.startswith("*SET:WEATHER DISP "):
+            parts = command.split()
+            if len(parts) >= 5:
+                token = parts[2]
+                led_hex = parts[4]
+                self.runtime_state.weather_token = token[:8].ljust(8, "_")
+                try:
+                    self.runtime_state.weather_led_mask = int(led_hex, 16) & 0xFF
+                except ValueError:
+                    self.runtime_state.weather_led_mask = 0
+                self._save_runtime_state()
+                action = f"天气短显 -> {self.runtime_state.weather_token}"
+        elif upper.startswith("*SET:KEY "):
+            key = upper.removeprefix("*SET:KEY ").strip()
+            if key == "USER1":
+                self.runtime_state.mode = "NIGHT" if self.runtime_state.mode == "DAY" else "DAY"
+                self.last_mode = self.runtime_state.mode
+                self.ui.modeCombo.setCurrentText(self.runtime_state.mode)
+                action = f"虚拟按键 USER1 -> {self.runtime_state.mode}"
+            elif key == "USER2" and self.runtime_state.weather_token:
+                action = f"虚拟按键 USER2 -> {self.runtime_state.weather_token}"
+            elif key == "FORMAT":
+                self.runtime_state.format = "RIGHT" if self.runtime_state.format == "LEFT" else "LEFT"
+                self.ui.formatCombo.setCurrentText(self.runtime_state.format)
+                action = f"虚拟按键 FORMAT -> {self.runtime_state.format}"
+            elif key == "DISP":
+                self.runtime_state.display_on = not self.runtime_state.display_on
+                self.ui.displayToggleCombo.setCurrentText("ON" if self.runtime_state.display_on else "OFF")
+                action = f"虚拟按键 DISP -> {'ON' if self.runtime_state.display_on else 'OFF'}"
+            self._save_runtime_state()
+        elif upper.startswith("*SET:RING "):
+            action = f"铃声预览 -> {upper.removeprefix('*SET:RING ').strip()}"
+        elif upper.startswith("*SET:BEEP "):
+            action = f"蜂鸣预览 -> {upper.removeprefix('*SET:BEEP ').strip()} ms"
+        elif upper == "*PING":
+            return
+        self._apply_runtime_state_to_ui()
+        self._set_latest_event(action)
+        append_event_log(APP_DIR, "local_apply", action)
+        self._local_apply_notice(action)
+        self.refresh_dashboard()
 
     def send_ping(self) -> None:
         if not self.is_connected:
@@ -2105,11 +2553,14 @@ class MainWindow(QtWidgets.QMainWindow):
         return self.serial_port is not None and self.serial_port.is_open
 
     def send_command(self, command: str, expect: str | None = None) -> None:
-        if not self.is_connected:
-            self.log("WARN", f"未连接串口，未发送: {command}")
-            return
         cleaned = command.strip()
         if not cleaned:
+            return
+        if not self.is_connected:
+            if expect:
+                self._handle_local_query(expect)
+            else:
+                self._apply_local_command(cleaned)
             return
         if expect:
             self.pending_queries.append(expect)
@@ -2201,6 +2652,8 @@ class MainWindow(QtWidgets.QMainWindow):
             self.twin.set_led_byte(value)
             self.last_led_event = value
             self.latest_led_text = parsed.data.upper()
+            self.runtime_state.led_mask = value & 0xFF
+            self._save_runtime_state()
             self.latestLedLabel.setText(f"最新 LED: {self.latest_led_text}")
             return
 
@@ -2208,6 +2661,8 @@ class MainWindow(QtWidgets.QMainWindow):
             next_mode = parsed.data.strip() or "DAY"
             mode_origin = self._consume_mode_request(next_mode)
             self.last_mode = next_mode
+            self.runtime_state.mode = next_mode
+            self._save_runtime_state()
             self.status_mode.setText(f"MODE: {self.last_mode}")
             self._refresh_theme_from_mode()
             append_event_log(APP_DIR, "mode", self.last_mode)
@@ -2241,7 +2696,6 @@ class MainWindow(QtWidgets.QMainWindow):
 
         if parsed.name == "ALARM":
             self.last_alarm = "RINGING"
-            self.status_alarm.setText("ALARM: RINGING")
             append_event_log(APP_DIR, "alarm", "RINGING")
             if self.config.voice_enabled:
                 speak_text("基础闹钟已触发")
@@ -2251,7 +2705,6 @@ class MainWindow(QtWidgets.QMainWindow):
 
         if parsed.name == "ALARM_OFF":
             self.last_alarm = "OFF"
-            self.status_alarm.setText("ALARM: OFF")
             append_event_log(APP_DIR, "alarm", "OFF")
             self.refresh_dashboard()
             self._set_latest_event("闹钟停止")
@@ -2277,24 +2730,34 @@ class MainWindow(QtWidgets.QMainWindow):
                 qdate = QtCore.QDate(year, month, day)
                 if qdate.isValid():
                     self.ui.dateEdit.setDate(qdate)
+                    moment = self._get_runtime_datetime().replace(year=year, month=month, day=day)
+                    self._set_runtime_datetime(moment)
         elif query == "TIME" and data:
             normalized = data.replace(".", ":")
             qtime = QtCore.QTime.fromString(normalized, "HH:mm:ss")
             if qtime.isValid():
                 self.ui.timeEdit.setTime(qtime)
+                moment = self._get_runtime_datetime().replace(
+                    hour=qtime.hour(),
+                    minute=qtime.minute(),
+                    second=qtime.second(),
+                )
+                self._set_runtime_datetime(moment)
         elif query == "FORMAT" and data:
-            self.status_format.setText(f"FORMAT: {data}")
             if data in {"LEFT", "RIGHT"}:
                 self.ui.formatCombo.setCurrentText(data)
+                self.runtime_state.format = data
+                self._save_runtime_state()
         elif query == "MODE" and data:
             self.status_mode.setText(f"MODE: {data}")
             self.last_mode = data
             if data in {"DAY", "NIGHT"}:
                 self.ui.modeCombo.setCurrentText(data)
+                self.runtime_state.mode = data
+                self._save_runtime_state()
                 self._refresh_theme_from_mode()
                 self.refresh_dashboard()
         elif query == "ALARM":
-            self.status_alarm.setText(f"ALARM: {data or 'OFF'}")
             self.last_alarm = data or "OFF"
             if data and data != "OFF":
                 alarm_time = QtCore.QTime.fromString(data.replace(".", ":"), "HH:mm:ss")
@@ -2302,8 +2765,16 @@ class MainWindow(QtWidgets.QMainWindow):
                     self.ui.alarmTimeEdit.setTime(alarm_time)
                     if hasattr(self, "scheduleAlarmTimeEdit"):
                         self.scheduleAlarmTimeEdit.setTime(alarm_time)
+                        self.runtime_state.alarm_enabled = True
+                        self.runtime_state.alarm_time = alarm_time.toString("HH:mm:ss")
+                        self._save_runtime_state()
+            else:
+                self.runtime_state.alarm_enabled = False
+                self._save_runtime_state()
         elif query == "DISPLAY" and data in {"ON", "OFF"}:
             self.ui.displayToggleCombo.setCurrentText(data)
+            self.runtime_state.display_on = data == "ON"
+            self._save_runtime_state()
         self.refresh_dashboard()
 
     def apply_date(self) -> None:
@@ -2337,7 +2808,10 @@ class MainWindow(QtWidgets.QMainWindow):
         snapshot = self.sync_snapshot
         if snapshot is not None:
             self.send_command(build_set_time_command(snapshot))
-            self.log("INFO", "已完成对时并写入 S800。")
+            if self.is_connected:
+                self.log("INFO", "已完成对时并写入 S800。")
+            else:
+                self.log("WARN", "!!! 已完成上位机本地时间更新，当前未下发板端。")
         QtCore.QTimer.singleShot(220, self._finish_sync_host_time)
 
     def _finish_sync_host_time(self) -> None:
@@ -2415,18 +2889,19 @@ class MainWindow(QtWidgets.QMainWindow):
         if self.test_run_in_progress:
             return
         port_name = self.ui.portCombo.currentText().strip()
-        if not port_name and not self.is_connected:
+        host_only = self._is_local_mode_selected() or self._is_local_mode_active()
+        if not port_name and not self.is_connected and not host_only:
             self.log("WARN", "没有可测试的 COM 口。")
             return
         self.test_run_in_progress = True
         self.runChecksButton.setEnabled(False)
         self.testStatusLabel.setText("状态: 运行中")
-        active_port = (
+        active_target = (
             self.serial_port.port
             if self.is_connected and self.serial_port is not None
-            else port_name
+            else ("本地模式" if host_only else port_name)
         )
-        self.testOutputText.setPlainText(f"正在对 {active_port} 执行联合测试...\n")
+        self.testOutputText.setPlainText(f"正在对 {active_target} 执行联合测试...\n")
         if self.is_connected:
             self.poll_timer.stop()
             self.ping_timer.stop()
@@ -2436,8 +2911,10 @@ class MainWindow(QtWidgets.QMainWindow):
             try:
                 if self.is_connected and self.serial_port is not None:
                     ok, output = execute_checks_on_open_port(self.serial_port)
+                elif host_only:
+                    ok, output = execute_host_only_checks()
                 else:
-                    ok, output = execute_checks_on_port(active_port)
+                    ok, output = execute_checks_on_port(port_name)
             except Exception as exc:  # noqa: BLE001
                 output = f"FAIL\n{exc}"
                 ok = False

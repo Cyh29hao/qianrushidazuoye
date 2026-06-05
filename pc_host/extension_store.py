@@ -1,14 +1,15 @@
 from __future__ import annotations
 
 import json
+import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any
-import uuid
 
 CONFIG_FILENAME = "config.json"
 SCHEDULES_FILENAME = "schedules.json"
+RUNTIME_STATE_FILENAME = "runtime_state.json"
 LOGS_DIRNAME = "logs"
 EVENT_LOG_FILENAME = "events.jsonl"
 RING_TYPES = ("DEFAULT", "WORK_START", "WORK_END", "WAKE", "SONG")
@@ -43,6 +44,21 @@ class AppConfig:
     active_place_index: int = 0
     auto_run_tests_on_start: bool = True
     app_version: str = "2.0"
+
+
+@dataclass
+class RuntimeState:
+    display_on: bool = True
+    format: str = "LEFT"
+    mode: str = "DAY"
+    alarm_enabled: bool = False
+    alarm_time: str = "07:30:00"
+    led_mask: int = 0x00
+    message_text: str = ""
+    weather_token: str = ""
+    weather_led_mask: int = 0x00
+    board_datetime_iso: str = ""
+    shadow_saved_at_utc_iso: str = ""
 
 
 @dataclass
@@ -102,6 +118,57 @@ def save_config(base_dir: Path, config: AppConfig) -> None:
     )
 
 
+def load_runtime_state(base_dir: Path) -> RuntimeState:
+    ensure_storage(base_dir)
+    path = base_dir / RUNTIME_STATE_FILENAME
+    if not path.exists():
+        state = RuntimeState()
+        save_runtime_state(base_dir, state)
+        return state
+
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        state = RuntimeState()
+        save_runtime_state(base_dir, state)
+        return state
+
+    if not isinstance(payload, dict):
+        state = RuntimeState()
+        save_runtime_state(base_dir, state)
+        return state
+
+    defaults = RuntimeState()
+    return RuntimeState(
+        display_on=bool(payload.get("display_on", defaults.display_on)),
+        format=str(payload.get("format", defaults.format) or defaults.format).upper(),
+        mode=str(payload.get("mode", defaults.mode) or defaults.mode).upper(),
+        alarm_enabled=bool(payload.get("alarm_enabled", defaults.alarm_enabled)),
+        alarm_time=str(payload.get("alarm_time", defaults.alarm_time) or defaults.alarm_time),
+        led_mask=int(payload.get("led_mask", defaults.led_mask)) & 0xFF,
+        message_text=str(payload.get("message_text", defaults.message_text) or defaults.message_text),
+        weather_token=str(payload.get("weather_token", defaults.weather_token) or defaults.weather_token),
+        weather_led_mask=int(payload.get("weather_led_mask", defaults.weather_led_mask)) & 0xFF,
+        board_datetime_iso=str(
+            payload.get("board_datetime_iso", defaults.board_datetime_iso)
+            or defaults.board_datetime_iso
+        ),
+        shadow_saved_at_utc_iso=str(
+            payload.get("shadow_saved_at_utc_iso", defaults.shadow_saved_at_utc_iso)
+            or defaults.shadow_saved_at_utc_iso
+        ),
+    )
+
+
+def save_runtime_state(base_dir: Path, state: RuntimeState) -> None:
+    ensure_storage(base_dir)
+    path = base_dir / RUNTIME_STATE_FILENAME
+    path.write_text(
+        json.dumps(asdict(state), ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
 def load_schedules(base_dir: Path) -> list[ScheduleItem]:
     ensure_storage(base_dir)
     path = base_dir / SCHEDULES_FILENAME
@@ -118,6 +185,7 @@ def load_schedules(base_dir: Path) -> list[ScheduleItem]:
     result: list[ScheduleItem] = []
     if not isinstance(payload, list):
         return result
+
     for item in payload:
         if not isinstance(item, dict):
             continue
@@ -246,13 +314,9 @@ def _normalize_config(payload: dict[str, Any]) -> AppConfig:
         longitude=float(payload.get("longitude", defaults.longitude)),
         timezone=str(payload.get("timezone", defaults.timezone) or defaults.timezone),
         auto_day_night=bool(payload.get("auto_day_night", defaults.auto_day_night)),
-        theme_follow_mode=bool(
-            payload.get("theme_follow_mode", defaults.theme_follow_mode)
-        ),
+        theme_follow_mode=bool(payload.get("theme_follow_mode", defaults.theme_follow_mode)),
         voice_enabled=bool(payload.get("voice_enabled", defaults.voice_enabled)),
-        quiet_night_rings=bool(
-            payload.get("quiet_night_rings", defaults.quiet_night_rings)
-        ),
+        quiet_night_rings=bool(payload.get("quiet_night_rings", defaults.quiet_night_rings)),
         ntp_host=str(payload.get("ntp_host", defaults.ntp_host) or defaults.ntp_host),
         weather_refresh_minutes=int(
             payload.get("weather_refresh_minutes", defaults.weather_refresh_minutes)

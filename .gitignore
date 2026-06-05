@@ -2,6 +2,7 @@ pc_host/.venv/
 pc_host/__pycache__/
 pc_host/*.pyc
 pc_host/logs/
+pc_host/runtime_state.json
 mcu/obj/
 mcu/listings/
 mcu/Objects/
