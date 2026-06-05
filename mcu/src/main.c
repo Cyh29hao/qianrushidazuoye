@@ -25,12 +25,13 @@
 #define ADD_REPEAT_INTERVAL_TICKS  15U
 #define EDIT_TIMEOUT_MS            5000UL
 #define RXTX_FLASH_MS              300UL
-#define MESSAGE_SHOW_MS            10000UL
+#define MESSAGE_SHORT_HOLD_MS      1800UL
+#define MESSAGE_END_HOLD_MS        1200UL
 #define SCROLL_SLOW_MS             1000UL
 #define SCROLL_FAST_MS             500UL
-#define BOOT_STEP_SHORT_MS         250UL
-#define BOOT_STEP_FLASH_MS         350UL
-#define BOOT_VERSION_MS            1200UL
+#define BOOT_STEP_SHORT_MS         1000UL
+#define BOOT_STEP_FLASH_MS         1000UL
+#define BOOT_VERSION_MS            1000UL
 #define ALARM_MAX_RING_MS          10000UL
 #define NAMED_RING_DURATION_MS     3200UL
 #define REMOTE_BEEP_MIN_MS         10UL
@@ -38,6 +39,7 @@
 #define MANUAL_LED_SHOW_MS         1000UL
 #define WEATHER_SHOW_MS            5000UL
 #define USER1_LONG_PRESS_TICKS     45U
+#define DISP_LONG_PRESS_TICKS      45U
 
 #define TCA6424_I2CADDR            0x22
 #define PCA9557_I2CADDR            0x18
@@ -191,6 +193,7 @@ static void BuildVisibleText(char *out, uint8_t outSize);
 static void ReverseVisibleText(const char *in, char *out, uint8_t outSize);
 static uint8_t VisibleTextToCells(const char *text, SegmentCell *cells,
                                   uint8_t maxCells);
+static uint32_t CurrentScrollIntervalMs(void);
 static void ComposeFrameFromCells(const SegmentCell *cells, uint8_t count,
                                   uint8_t startIndex, DisplayFrame *frame);
 static void ApplyEditBlink(DisplayFrame *frame);
@@ -209,7 +212,7 @@ static void Keys_Scan(void);
 static void HandleKeyPress(KeyCode key, bool emitEvent);
 static void HandleKeyRelease(KeyCode key);
 static void HandleFuncLongPress(void);
-static void HandleUser1LongPress(void);
+static void HandleDisplayLongPress(void);
 static void AdvanceEditField(void);
 static void IncrementEditField(void);
 static void DecrementEditField(void);
@@ -291,6 +294,8 @@ static uint8_t g_alarmBlinkBit;
 static char g_messageText[33];
 static uint32_t g_messageDeadlineMs;
 static uint8_t g_messageActive;
+static uint8_t g_messageScrollLimit;
+static uint8_t g_messageEndArmed;
 static uint8_t g_manualLedMask;
 static uint32_t g_manualLedUntilMs;
 static uint32_t g_rxFlashUntilMs;
@@ -591,8 +596,11 @@ static void Tick10ms(void)
         ExitEditMode(false);
     }
 
-    if ((g_messageActive != 0U) && (g_millis >= g_messageDeadlineMs)) {
+    if ((g_messageActive != 0U) && (g_messageDeadlineMs != 0UL) &&
+        (g_millis >= g_messageDeadlineMs)) {
         g_messageActive = 0U;
+        g_messageDeadlineMs = 0UL;
+        g_messageEndArmed = 0U;
         RefreshDisplayAndLeds(true);
     }
 
@@ -602,9 +610,18 @@ static void Tick10ms(void)
     }
 
     if ((g_millis >= g_nextScrollMs) && (g_bootPhase == BOOT_DONE)) {
-        g_scrollOffset++;
-        g_nextScrollMs = g_millis +
-            (g_scrollFast != 0U ? SCROLL_FAST_MS : SCROLL_SLOW_MS);
+        if ((g_messageActive != 0U) && (g_messageText[0] != '\0') &&
+            (g_messageScrollLimit != 0U)) {
+            if (g_scrollOffset < g_messageScrollLimit) {
+                g_scrollOffset++;
+            } else if ((g_messageEndArmed == 0U) && (g_messageDeadlineMs == 0UL)) {
+                g_messageEndArmed = 1U;
+                g_messageDeadlineMs = g_millis + MESSAGE_END_HOLD_MS;
+            }
+        } else {
+            g_scrollOffset++;
+        }
+        g_nextScrollMs = g_millis + CurrentScrollIntervalMs();
         RefreshDisplayAndLeds(false);
     }
 }
@@ -780,6 +797,8 @@ static void ResetRuntimeState(void)
     g_messageText[0] = '\0';
     g_messageActive = 0U;
     g_messageDeadlineMs = 0U;
+    g_messageScrollLimit = 0U;
+    g_messageEndArmed = 0U;
     g_manualLedMask = 0U;
     g_manualLedUntilMs = 0U;
     g_rxFlashUntilMs = 0U;
@@ -818,7 +837,7 @@ static void SetDefaultDateTime(DateTime *value)
     value->year = 2026U;
     value->month = 6U;
     value->day = 2U;
-    value->hour = 12U;
+    value->hour = 0U;
     value->minute = 0U;
     value->second = 0U;
 }
@@ -897,7 +916,7 @@ static void BuildVisibleText(char *out, uint8_t outSize)
         return;
     }
     if (g_bootPhase == BOOT_VERSION) {
-        snprintf(out, outSize, "V1.0");
+        snprintf(out, outSize, "V2.0");
         return;
     }
 
@@ -974,6 +993,20 @@ static uint8_t VisibleTextToCells(const char *text, SegmentCell *cells,
         text++;
     }
     return count;
+}
+
+static uint32_t CurrentScrollIntervalMs(void)
+{
+    if (g_scrollFast != 0U) {
+        return SCROLL_FAST_MS;
+    }
+    if ((g_messageActive != 0U) && (g_messageScrollLimit >= 12U)) {
+        return 650UL;
+    }
+    if ((g_messageActive != 0U) && (g_messageScrollLimit >= 6U)) {
+        return 800UL;
+    }
+    return SCROLL_SLOW_MS;
 }
 
 static void ComposeFrameFromCells(const SegmentCell *cells, uint8_t count,
@@ -1087,7 +1120,8 @@ static void RefreshDisplayAndLeds(bool forceEvent)
     if (count > DISPLAY_WIDTH) {
         maxStart = (uint8_t)(count - DISPLAY_WIDTH);
         if (g_scrollOffset > maxStart) {
-            g_scrollOffset = 0U;
+            g_scrollOffset = ((g_messageActive != 0U) && (g_messageText[0] != '\0')) ?
+                             maxStart : 0U;
         }
         if (g_displayFormat == FORMAT_RIGHT) {
             startIndex = (uint8_t)(maxStart - g_scrollOffset);
@@ -1177,6 +1211,11 @@ static uint8_t BuildSystemLedByte(void)
 {
     uint8_t result = 0U;
 
+    if ((g_displayEnabled == 0U) && (g_bootPhase == BOOT_DONE) &&
+        (g_editMode == EDIT_NONE)) {
+        return 0U;
+    }
+
     if (g_heartbeatBit != 0U) {
         result |= LED_HEARTBEAT;
     }
@@ -1220,8 +1259,11 @@ static uint8_t BuildSystemLedByte(void)
 static void UpdateLedHardware(bool forceEvent)
 {
     uint8_t actualByte = BuildSystemLedByte();
+    uint8_t displayOffBlank = ((g_displayEnabled == 0U) &&
+                               (g_bootPhase == BOOT_DONE) &&
+                               (g_editMode == EDIT_NONE)) ? 1U : 0U;
 
-    if (g_manualLedUntilMs > g_millis) {
+    if ((displayOffBlank == 0U) && (g_manualLedUntilMs > g_millis)) {
         actualByte = g_manualLedMask;
     }
 
@@ -1339,12 +1381,12 @@ static void Keys_Scan(void)
                     g_longPressDone[index] = 1U;
                     HandleFuncLongPress();
                 }
-                if ((index == KEY_USER1) &&
+                if ((index == KEY_DISP) &&
                     (g_editMode == EDIT_NONE) &&
-                    (g_holdTicks[index] >= USER1_LONG_PRESS_TICKS) &&
+                    (g_holdTicks[index] >= DISP_LONG_PRESS_TICKS) &&
                     (g_longPressDone[index] == 0U)) {
                     g_longPressDone[index] = 1U;
-                    HandleUser1LongPress();
+                    HandleDisplayLongPress();
                 }
                 if ((index == KEY_ADD) &&
                     (g_editMode != EDIT_NONE) &&
@@ -1368,7 +1410,7 @@ static void Keys_Scan(void)
         if (g_stableKeys[index] != 0U) {
             g_holdTicks[index] = 0U;
             g_longPressDone[index] = 0U;
-            if (index != KEY_USER1) {
+            if ((index != KEY_USER1) && (index != KEY_DISP)) {
                 HandleKeyPress((KeyCode)index, true);
             }
         } else {
@@ -1433,8 +1475,24 @@ static void HandleKeyPress(KeyCode key, bool emitEvent)
                           FORMAT_RIGHT : FORMAT_LEFT;
         break;
     case KEY_EXT:
+        if (g_editMode != EDIT_NONE) {
+            ExitEditMode(false);
+            return;
+        }
+        if (g_weatherShowUntilMs != 0UL) {
+            g_weatherShowUntilMs = 0UL;
+        }
+        if (g_messageActive != 0U) {
+            g_messageActive = 0U;
+            g_messageDeadlineMs = 0UL;
+            g_messageScrollLimit = 0U;
+            g_messageEndArmed = 0U;
+            g_scrollOffset = 0U;
+        }
         break;
     case KEY_USER1:
+        g_dayNight = (g_dayNight == MODE_DAY) ? MODE_NIGHT : MODE_DAY;
+        EmitModeEvent();
         break;
     case KEY_USER2:
         if (g_editMode != EDIT_NONE) {
@@ -1454,10 +1512,14 @@ static void HandleKeyPress(KeyCode key, bool emitEvent)
 
 static void HandleKeyRelease(KeyCode key)
 {
-    if ((key == KEY_USER1) &&
-        (g_editMode == EDIT_NONE) &&
-        (g_longPressDone[key] == 0U)) {
-        HandleKeyPress(KEY_USER1, true);
+    if ((g_editMode == EDIT_NONE) && (g_longPressDone[key] == 0U)) {
+        if (key == KEY_USER1) {
+            HandleKeyPress(KEY_USER1, true);
+            return;
+        }
+        if (key == KEY_DISP) {
+            HandleKeyPress(KEY_DISP, true);
+        }
     }
 }
 
@@ -1468,11 +1530,10 @@ static void HandleFuncLongPress(void)
     }
 }
 
-static void HandleUser1LongPress(void)
+static void HandleDisplayLongPress(void)
 {
-    g_dayNight = (g_dayNight == MODE_DAY) ? MODE_NIGHT : MODE_DAY;
+    g_displayEnabled = (uint8_t)!g_displayEnabled;
     RefreshDisplayAndLeds(true);
-    EmitModeEvent();
 }
 
 static void AdvanceEditField(void)
@@ -2153,6 +2214,8 @@ static void HandleSetFormat(const char *params)
 static void HandleSetMessage(const char *params)
 {
     uint8_t length;
+    SegmentCell tempCells[32];
+    uint8_t cellCount;
     params = SkipSpaces(params);
     if (*params == '\0') {
         UART_ReplyError("PARAM");
@@ -2165,10 +2228,17 @@ static void HandleSetMessage(const char *params)
     }
     snprintf(g_messageText, sizeof(g_messageText), "%s", params);
     g_messageActive = 1U;
-    g_messageDeadlineMs = g_millis + MESSAGE_SHOW_MS;
     g_scrollOffset = 0U;
-    g_nextScrollMs = g_millis + (g_scrollFast != 0U ?
-                                 SCROLL_FAST_MS : SCROLL_SLOW_MS);
+    g_messageEndArmed = 0U;
+    cellCount = VisibleTextToCells(g_messageText, tempCells, 32U);
+    if (cellCount <= DISPLAY_WIDTH) {
+        g_messageDeadlineMs = g_millis + MESSAGE_SHORT_HOLD_MS;
+        g_messageScrollLimit = 0U;
+    } else {
+        g_messageDeadlineMs = 0UL;
+        g_messageScrollLimit = (uint8_t)(cellCount - DISPLAY_WIDTH);
+    }
+    g_nextScrollMs = g_millis + CurrentScrollIntervalMs();
     RefreshDisplayAndLeds(true);
     UART_ReplyOk(NULL);
 }

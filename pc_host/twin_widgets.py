@@ -269,12 +269,12 @@ class DigitalTwinWidget(QtWidgets.QWidget):
 
         self.key_buttons: list[QtWidgets.QPushButton] = []
         keys = [
-            ("USER2", "SW2\nUSER2/WTH", 0, 0),
+            ("USER2", "SW2\nUSER2/SUB", 0, 0),
             ("EXT", "SW8\nEXT", 0, 1),
             ("FORMAT", "SW7\nFORMAT", 0, 2),
             ("SPEED", "SW6\nSPEED", 0, 3),
             ("DISP", "SW5\nDISP", 0, 4),
-            ("USER1", "SW1\nUSER1/NTP", 1, 0),
+            ("USER1", "SW1\nUSER1/DN", 1, 0),
             ("FUNC", "SW1\nFUNC", 1, 1),
             ("SHIFT", "SW2\nSHIFT", 1, 2),
             ("ADD", "SW3\nADD", 1, 3),

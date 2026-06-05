@@ -15,8 +15,20 @@ RING_TYPES = ("DEFAULT", "WORK_START", "WORK_END", "WAKE", "SONG")
 
 
 @dataclass
+class SavedPlace:
+    name: str = "上海"
+    latitude: float = 31.2304
+    longitude: float = 121.4737
+    timezone: str = "Asia/Shanghai"
+
+
+def _default_saved_places() -> list[SavedPlace]:
+    return [SavedPlace() for _ in range(5)]
+
+
+@dataclass
 class AppConfig:
-    city_name: str = "Shanghai"
+    city_name: str = "上海"
     latitude: float = 31.2304
     longitude: float = 121.4737
     timezone: str = "Asia/Shanghai"
@@ -26,6 +38,10 @@ class AppConfig:
     quiet_night_rings: bool = True
     ntp_host: str = "pool.ntp.org"
     weather_refresh_minutes: int = 30
+    saved_places: list[SavedPlace] = field(default_factory=_default_saved_places)
+    active_place_index: int = 0
+    auto_run_tests_on_start: bool = True
+    app_version: str = "2.0"
 
 
 @dataclass
@@ -72,12 +88,13 @@ def load_config(base_dir: Path) -> AppConfig:
         save_config(base_dir, config)
         return config
 
-    return AppConfig(**{**asdict(AppConfig()), **payload})
+    return _normalize_config(payload)
 
 
 def save_config(base_dir: Path, config: AppConfig) -> None:
     ensure_storage(base_dir)
     path = base_dir / CONFIG_FILENAME
+    _sync_legacy_city_fields(config)
     path.write_text(
         json.dumps(asdict(config), ensure_ascii=False, indent=2),
         encoding="utf-8",
@@ -218,3 +235,72 @@ def parse_clock_hms(text: str) -> tuple[int, int, int]:
         except ValueError:
             values[index] = 0
     return values[0] % 24, values[1] % 60, values[2] % 60
+
+
+def _normalize_config(payload: dict[str, Any]) -> AppConfig:
+    defaults = AppConfig()
+    config = AppConfig(
+        city_name=str(payload.get("city_name", defaults.city_name) or defaults.city_name),
+        latitude=float(payload.get("latitude", defaults.latitude)),
+        longitude=float(payload.get("longitude", defaults.longitude)),
+        timezone=str(payload.get("timezone", defaults.timezone) or defaults.timezone),
+        auto_day_night=bool(payload.get("auto_day_night", defaults.auto_day_night)),
+        theme_follow_mode=bool(
+            payload.get("theme_follow_mode", defaults.theme_follow_mode)
+        ),
+        voice_enabled=bool(payload.get("voice_enabled", defaults.voice_enabled)),
+        quiet_night_rings=bool(
+            payload.get("quiet_night_rings", defaults.quiet_night_rings)
+        ),
+        ntp_host=str(payload.get("ntp_host", defaults.ntp_host) or defaults.ntp_host),
+        weather_refresh_minutes=int(
+            payload.get("weather_refresh_minutes", defaults.weather_refresh_minutes)
+        ),
+        active_place_index=int(
+            payload.get("active_place_index", defaults.active_place_index)
+        ),
+        auto_run_tests_on_start=bool(
+            payload.get("auto_run_tests_on_start", defaults.auto_run_tests_on_start)
+        ),
+        app_version=str(payload.get("app_version", defaults.app_version) or defaults.app_version),
+    )
+    raw_places = payload.get("saved_places")
+    if isinstance(raw_places, list) and raw_places:
+        config.saved_places = [_normalize_place_entry(item) for item in raw_places[:5]]
+    else:
+        config.saved_places = _default_saved_places()
+        config.saved_places[0] = SavedPlace(
+            name=config.city_name,
+            latitude=config.latitude,
+            longitude=config.longitude,
+            timezone=config.timezone,
+        )
+    while len(config.saved_places) < 5:
+        config.saved_places.append(SavedPlace())
+    if not (0 <= config.active_place_index < len(config.saved_places)):
+        config.active_place_index = 0
+    _sync_legacy_city_fields(config)
+    return config
+
+
+def _normalize_place_entry(raw: Any) -> SavedPlace:
+    if not isinstance(raw, dict):
+        return SavedPlace()
+    return SavedPlace(
+        name=str(raw.get("name", "上海") or "上海"),
+        latitude=float(raw.get("latitude", 31.2304)),
+        longitude=float(raw.get("longitude", 121.4737)),
+        timezone=str(raw.get("timezone", "Asia/Shanghai") or "Asia/Shanghai"),
+    )
+
+
+def _sync_legacy_city_fields(config: AppConfig) -> None:
+    if not config.saved_places:
+        config.saved_places = _default_saved_places()
+    if not (0 <= config.active_place_index < len(config.saved_places)):
+        config.active_place_index = 0
+    current = config.saved_places[config.active_place_index]
+    config.city_name = current.name
+    config.latitude = current.latitude
+    config.longitude = current.longitude
+    config.timezone = current.timezone

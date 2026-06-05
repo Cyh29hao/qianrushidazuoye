@@ -5,11 +5,12 @@ import socket
 import subprocess
 import time
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import urlopen
+from zoneinfo import ZoneInfo
 
 NTP_EPOCH_OFFSET = 2208988800
 
@@ -46,7 +47,14 @@ def fetch_ntp_time(host: str = "pool.ntp.org", timeout: float = 2.0) -> datetime
     if len(data) < 48:
         raise RuntimeError("NTP response too short")
     seconds = int.from_bytes(data[40:44], "big") - NTP_EPOCH_OFFSET
-    return datetime.fromtimestamp(seconds)
+    return datetime.fromtimestamp(seconds, tz=timezone.utc)
+
+
+def timezone_now(timezone_name: str, utc_moment: datetime | None = None) -> datetime:
+    moment = utc_moment or datetime.now(timezone.utc)
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    return moment.astimezone(ZoneInfo(timezone_name))
 
 
 def geocode_city(city_name: str, timeout: float = 4.0) -> CityLookupResult:
@@ -168,6 +176,22 @@ def weather_code_summary(weather_code: int) -> str:
     if weather_code in {95, 96, 99}:
         return "STORM"
     return "CLOUD"
+
+
+def weather_emoji(weather_code: int) -> str:
+    summary = weather_code_summary(weather_code)
+    return {
+        "SUN": "☀",
+        "CLOUD": "☁",
+        "FOG": "🌫",
+        "RAIN": "🌧",
+        "SNOW": "❄",
+        "STORM": "⛈",
+    }.get(summary, "☁")
+
+
+def format_weather_summary(weather_code: int, temp_c: float) -> str:
+    return f"{weather_emoji(weather_code)} {weather_code_summary(weather_code)} {temp_c:.1f}C"
 
 
 def speak_text(text: str) -> subprocess.Popen[bytes]:

@@ -14,6 +14,9 @@ from bootstrap_qt import configure_qt_runtime
 
 APP_DIR = Path(__file__).resolve().parent
 QT_RUNTIME = configure_qt_runtime(APP_DIR)
+APP_VERSION = "v2.0"
+GITHUB_URL = "https://github.com/Cyh29hao"
+LOGO_PATH = APP_DIR / "assets" / "clock_logo.svg"
 
 import serial
 from PyQt5 import QtCore, QtGui, QtWidgets
@@ -22,15 +25,19 @@ from serial.tools import list_ports
 from extension_services import (
     build_weather_led_mask,
     build_weather_token,
+    format_weather_summary,
     fetch_ntp_time,
     fetch_weather_snapshot,
     geocode_city,
     should_use_day_mode,
     speak_text,
+    timezone_now,
+    weather_emoji,
     weather_code_summary,
 )
 from extension_store import (
     AppConfig,
+    SavedPlace,
     ScheduleItem,
     append_event_log,
     ensure_storage,
@@ -39,9 +46,11 @@ from extension_store import (
     load_schedules,
     mark_schedule_triggered,
     normalize_board_token,
+    parse_clock_hms,
     save_config,
     save_schedules,
     schedule_trigger_matches,
+    weekday_text,
 )
 from protocol import (
     ParsedLine,
@@ -51,6 +60,7 @@ from protocol import (
     build_set_weather_command,
     parse_line,
 )
+from run_extension_checks import execute_checks_on_open_port, execute_checks_on_port
 from twin_widgets import DigitalTwinWidget
 from ui_main import Ui_MainWindow
 
@@ -130,6 +140,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.config: AppConfig = load_config(APP_DIR)
         self.schedules: list[ScheduleItem] = load_schedules(APP_DIR)
         self.log_dir = APP_DIR / "logs"
+        self.setWindowTitle(f"智能联网时钟系统 - PC 上位机 {APP_VERSION}")
+        if LOGO_PATH.exists():
+            self.setWindowIcon(QtGui.QIcon(str(LOGO_PATH)))
 
         self.serial_port: serial.Serial | None = None
         self.read_buffer = ""
@@ -144,6 +157,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.sunset_text = "--:--"
         self.last_weather_snapshot = None
         self.last_ntp_sync_text = "未进行网络对时"
+        self.last_selected_zone_time = "--:--:--"
         self.last_display_event: tuple[str, int] | None = None
         self.last_led_event: int | None = None
         self.latest_display_text = "--"
@@ -152,7 +166,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self.max_log_blocks = 400
         self.sync_in_progress = False
         self.sync_snapshot: datetime | None = None
-        self.pending_user1_ntp = False
         self.weather_refresh_in_progress = False
         self.last_weather_refresh_at: datetime | None = None
         self.last_mode_auto_applied = ""
@@ -162,9 +175,14 @@ class MainWindow(QtWidgets.QMainWindow):
         self.last_test_summary = "未运行"
         self.last_test_ok = False
         self.test_run_in_progress = False
+        self.pending_auto_test_after_apply = False
+        self.last_apply_monotonic = 0.0
+        self.last_ready_sync_monotonic = 0.0
+        self.last_mode_expected = ""
         self.pending_mode_origin = ""
         self.pending_mode_value = ""
         self.pending_mode_deadline = 0.0
+        self.board_ready_seen = False
         self.ring_names = [
             ("DEFAULT", "默认铃声"),
             ("WORK_START", "上课/上班开工铃"),
@@ -196,11 +214,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self.extension_timer.timeout.connect(self.extension_tick)
         self.extension_timer.start()
 
-        self.user1_sync_timer = QtCore.QTimer(self)
-        self.user1_sync_timer.setSingleShot(True)
-        self.user1_sync_timer.setInterval(480)
-        self.user1_sync_timer.timeout.connect(self._handle_deferred_user1_ntp)
-
         self.poll_timer = QtCore.QTimer(self)
         self.poll_timer.setInterval(20)
         self.poll_timer.timeout.connect(self.poll_serial)
@@ -213,6 +226,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.sync_extension_widgets_from_config()
         self.refresh_schedule_table()
         self.refresh_dashboard()
+        self.refresh_place_combo_labels()
         self._refresh_theme_from_mode()
         self.log("INFO", "PC 上位机已启动，等待连接 S800。")
 
@@ -222,11 +236,140 @@ class MainWindow(QtWidgets.QMainWindow):
         self.status_mode = QtWidgets.QLabel("MODE: DAY")
         self.status_alarm = QtWidgets.QLabel("ALARM: OFF")
         self.status_latency = QtWidgets.QLabel("延迟: -- ms")
+        self.status_version = QtWidgets.QLabel(APP_VERSION)
+        self.status_developer = QtWidgets.QLabel("开发者: Cyh29hao")
+        self.status_github_button = QtWidgets.QToolButton(self)
+        self.status_github_button.setText("GitHub")
+        self.status_github_button.clicked.connect(
+            lambda: QtGui.QDesktopServices.openUrl(QtCore.QUrl(GITHUB_URL))
+        )
         self.ui.statusbar.addPermanentWidget(self.status_connection)
         self.ui.statusbar.addPermanentWidget(self.status_format)
         self.ui.statusbar.addPermanentWidget(self.status_mode)
         self.ui.statusbar.addPermanentWidget(self.status_alarm)
         self.ui.statusbar.addPermanentWidget(self.status_latency)
+        self.ui.statusbar.addPermanentWidget(self.status_version)
+        self.ui.statusbar.addPermanentWidget(self.status_developer)
+        self.ui.statusbar.addPermanentWidget(self.status_github_button)
+
+    def eventFilter(self, watched: QtCore.QObject, event: QtCore.QEvent) -> bool:
+        locked_boxes = {
+            getattr(self.ui, "displayToggleCombo", None),
+            getattr(self.ui, "formatCombo", None),
+            getattr(self.ui, "modeCombo", None),
+        }
+        if watched in locked_boxes and event.type() in {
+            QtCore.QEvent.MouseButtonPress,
+            QtCore.QEvent.MouseButtonDblClick,
+            QtCore.QEvent.Wheel,
+            QtCore.QEvent.KeyPress,
+            QtCore.QEvent.KeyRelease,
+        }:
+            return True
+        return super().eventFilter(watched, event)
+
+    def _active_place(self) -> SavedPlace:
+        return self.config.saved_places[self.config.active_place_index]
+
+    def _selected_zone_now(self, utc_moment: datetime | None = None) -> datetime:
+        return timezone_now(self._active_place().timezone, utc_moment)
+
+    def _current_place_label(self, place: SavedPlace) -> str:
+        current_text = timezone_now(place.timezone).strftime("%H:%M")
+        return f"{place.name} {current_text}"
+
+    def refresh_place_combo_labels(self) -> None:
+        if not hasattr(self, "placeSlotCombo"):
+            return
+        self.placeSlotCombo.blockSignals(True)
+        self.placeSlotCombo.clear()
+        for place in self.config.saved_places:
+            self.placeSlotCombo.addItem(self._current_place_label(place))
+        self.placeSlotCombo.setCurrentIndex(self.config.active_place_index)
+        self.placeSlotCombo.blockSignals(False)
+        self.last_selected_zone_time = self._selected_zone_now().strftime("%Y-%m-%d %H:%M:%S")
+
+    def _save_current_place_to_config(self) -> None:
+        place = self._active_place()
+        place.name = self.cityEdit.text().strip() or place.name
+        self.config.saved_places[self.config.active_place_index] = place
+        save_config(APP_DIR, self.config)
+        self.refresh_place_combo_labels()
+
+    def _note_auto_action(self, message: str) -> None:
+        if hasattr(self, "autoModeNoticeLabel"):
+            self.autoModeNoticeLabel.setText(message)
+            self.autoModeNoticeLabel.setVisible(True)
+        self.log("INFO", message)
+
+    def _format_countdown(self, target: datetime | None, now: datetime) -> str:
+        if target is None:
+            return "无"
+        delta_seconds = int((target - now).total_seconds())
+        if delta_seconds <= 0:
+            return "<1 分钟"
+        if delta_seconds < 60:
+            return "<1 分钟"
+        minutes = delta_seconds // 60
+        return f"{minutes} 分钟"
+
+    def _next_single_alarm_time(self, now: datetime) -> datetime | None:
+        if self.last_alarm in {"OFF", "RINGING", ""}:
+            return None
+        hour, minute, second = parse_clock_hms(self.last_alarm.replace(".", ":"))
+        candidate = now.replace(hour=hour, minute=minute, second=second, microsecond=0)
+        if candidate <= now:
+            candidate += timedelta(days=1)
+        return candidate
+
+    def _next_schedule_time(self, item: ScheduleItem, now: datetime) -> datetime | None:
+        hour, minute, second = parse_clock_hms(item.trigger_time)
+        if item.schedule_type == "once":
+            if not item.target_date:
+                return None
+            try:
+                base = datetime.strptime(item.target_date, "%Y-%m-%d")
+            except ValueError:
+                return None
+            candidate = now.replace(
+                year=base.year,
+                month=base.month,
+                day=base.day,
+                hour=hour,
+                minute=minute,
+                second=second,
+                microsecond=0,
+            )
+            return candidate if candidate >= now else None
+        for offset in range(8):
+            candidate = (now + timedelta(days=offset)).replace(
+                hour=hour,
+                minute=minute,
+                second=second,
+                microsecond=0,
+            )
+            if candidate.weekday() not in item.weekdays:
+                continue
+            if candidate < now:
+                continue
+            return candidate
+        return None
+
+    def _next_reminder_summary(self, now: datetime) -> tuple[str, datetime | None]:
+        candidates: list[tuple[datetime, str]] = []
+        single_alarm_at = self._next_single_alarm_time(now)
+        if single_alarm_at is not None:
+            candidates.append((single_alarm_at, f"单次闹钟 {single_alarm_at.strftime('%H:%M:%S')}"))
+        for item in self.schedules:
+            if not item.enabled:
+                continue
+            when = self._next_schedule_time(item, now)
+            if when is not None:
+                candidates.append((when, f"日程提醒 {item.title}"))
+        if not candidates:
+            return "无", None
+        when, label = min(candidates, key=lambda pair: pair[0])
+        return label, when
 
     def _apply_theme(self) -> None:
         night = self.config.theme_follow_mode and self.last_mode == "NIGHT"
@@ -309,6 +452,18 @@ class MainWindow(QtWidgets.QMainWindow):
                 border-radius: 8px;
                 padding: 6px 8px;
             }}
+            QComboBox[stateField="true"] {{
+                padding-right: 8px;
+            }}
+            QComboBox[stateField="true"]::drop-down {{
+                width: 0px;
+                border: none;
+            }}
+            QComboBox[stateField="true"]::down-arrow {{
+                image: none;
+                width: 0px;
+                height: 0px;
+            }}
             QLineEdit, QComboBox, QDateEdit, QTimeEdit, QSpinBox {{
                 min-height: 32px;
             }}
@@ -316,13 +471,24 @@ class MainWindow(QtWidgets.QMainWindow):
                 font-family: "Consolas";
                 font-size: 11px;
             }}
-            QListWidget, QTableWidget, QTreeWidget {{
+            QListWidget, QTableWidget, QTreeWidget, QListView, QTableView, QAbstractItemView {{
                 background: {palette['input_bg']};
                 border: 1px solid {palette['input_border']};
                 border-radius: 8px;
                 gridline-color: {palette['input_border']};
                 selection-background-color: {palette['button']};
                 selection-color: white;
+            }}
+            QAbstractScrollArea {{
+                background: {palette['input_bg']};
+            }}
+            QTableWidget QWidget, QTableView QWidget {{
+                background: {palette['input_bg']};
+                color: {palette['text']};
+            }}
+            QTableWidget::item, QListWidget::item {{
+                background: {palette['input_bg']};
+                color: {palette['text']};
             }}
             QHeaderView::section {{
                 background: {palette['chip_bg']};
@@ -392,8 +558,57 @@ class MainWindow(QtWidgets.QMainWindow):
             QWidget#sectionScrollViewport {{
                 background: {palette['background']};
             }}
+            QStatusBar {{
+                color: {palette['text']};
+            }}
+            QToolButton {{
+                background: {palette['button']};
+                color: white;
+                border: none;
+                border-radius: 8px;
+                padding: 4px 10px;
+                min-height: 24px;
+                font-size: 11px;
+                font-weight: 600;
+            }}
             """
         )
+        self._apply_dynamic_theme_overrides(night, palette)
+
+    def _apply_dynamic_theme_overrides(self, night: bool, palette: dict[str, str]) -> None:
+        list_style = (
+            f"background: {palette['input_bg']};"
+            f"color: {palette['text']};"
+            f"border: 1px solid {palette['input_border']};"
+            f"border-radius: 8px;"
+        )
+        header_style = (
+            f"background: {palette['chip_bg']};"
+            f"color: {palette['chip_text']};"
+            f"border: 1px solid {palette['input_border']};"
+        )
+        page_style = f"background: {palette['background']}; color: {palette['text']};"
+        viewport_style = f"background: {palette['input_bg']}; color: {palette['text']};"
+
+        for widget in self.findChildren(QtWidgets.QWidget, "sectionPageHost"):
+            widget.setStyleSheet(page_style)
+        for area in self.findChildren(QtWidgets.QScrollArea):
+            area.viewport().setStyleSheet(page_style)
+        for widget in (
+            getattr(self, "scheduleTable", None),
+            getattr(self, "dashboardEventList", None),
+            getattr(self, "testOutputText", None),
+            getattr(self.ui, "logTextEdit", None),
+        ):
+            if widget is None:
+                continue
+            widget.setStyleSheet(list_style)
+            if hasattr(widget, "viewport") and widget.viewport() is not None:
+                widget.viewport().setStyleSheet(viewport_style)
+        if hasattr(self, "scheduleTable"):
+            header = self.scheduleTable.horizontalHeader()
+            if header is not None:
+                header.setStyleSheet(f"QHeaderView::section {{{header_style}}}")
 
     def _refresh_theme_from_mode(self) -> None:
         if hasattr(self, "themeModeLabel"):
@@ -545,7 +760,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ui.verticalLayout_4.setContentsMargins(14, 6, 14, 10)
         self.ui.verticalLayout_5.setContentsMargins(14, 10, 14, 12)
 
+        self.ui.connectButton.setText("连接并应用")
         self.ui.syncNowButton.setText("一键对时并写入")
+        self.ui.applyDisplayButton.setText("切换并应用")
+        self.ui.applyFormatButton.setText("切换并应用")
+        self.ui.applyModeButton.setText("切换并应用")
         self.ui.sendLedButton.setText("设置 LED")
         self.ui.sendPresetButton.setText("发送预设")
         self.ui.mixedCaseDemoButton.setText("混合大小写")
@@ -746,7 +965,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ui.verticalLayout_5.setSpacing(8)
         self.ui.verticalLayout_5.setContentsMargins(12, 14, 12, 8)
 
+        self.ui.connectButton.setText("连接并应用")
         self.ui.syncNowButton.setText("一键对时并写入")
+        self.ui.applyDisplayButton.setText("切换并应用")
+        self.ui.applyFormatButton.setText("切换并应用")
+        self.ui.applyModeButton.setText("切换并应用")
         self.ui.sendLedButton.setText("设置 LED")
         self.ui.sendPresetButton.setText("发送预设")
         self.ui.mixedCaseDemoButton.setText("混合大小写")
@@ -769,7 +992,7 @@ class MainWindow(QtWidgets.QMainWindow):
         page.setWidget(host)
         return page, host, outer
 
-    def _configure_home_clock_group(self) -> None:
+    def _configure_sync_clock_group(self) -> None:
         self.ui.clockGroup.setTitle("时间与同步")
         for widget in (
             self.ui.alarmLabel,
@@ -782,9 +1005,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _build_home_page(self) -> QtWidgets.QScrollArea:
         page, host, outer = self._create_scroll_page()
-        self._configure_home_clock_group()
         outer.addWidget(self.ui.connectionGroup)
-        outer.addWidget(self.ui.clockGroup)
         outer.addWidget(self._build_dashboard_group(host))
         outer.addStretch(1)
         return page
@@ -956,7 +1177,9 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _build_debug_test_page(self) -> QtWidgets.QScrollArea:
         page, host, outer = self._create_scroll_page()
-        self.ui.demoGroup.setTitle("协议调试")
+        self._configure_sync_clock_group()
+        outer.addWidget(self.ui.clockGroup)
+        self.ui.demoGroup.setTitle("调试与协议")
         outer.addWidget(self.ui.demoGroup)
 
         test_group = QtWidgets.QGroupBox("自动化测试", host)
@@ -964,15 +1187,33 @@ class MainWindow(QtWidgets.QMainWindow):
         test_layout.setContentsMargins(12, 22, 12, 12)
         test_layout.setSpacing(10)
         self.runChecksButton = QtWidgets.QPushButton("一键运行联合测试", test_group)
+        self.autoRunTestsCheck = QtWidgets.QCheckBox("启动后自动执行一次自动化测试", test_group)
         self.testStatusLabel = QtWidgets.QLabel("状态: 未运行", test_group)
         self.testStatusLabel.setProperty("class", "infoChip")
         self.testStatusLabel.setStyleSheet("")
+        self.testExplainLabel = QtWidgets.QLabel(
+            "覆盖 PING、SET/GET、日期时间写入、模式切换、天气协议、铃声协议与关键快捷键。",
+            test_group,
+        )
+        self.testExplainLabel.setWordWrap(True)
+        self.testExplainLabel.setProperty("class", "infoChip")
+        self.testExplainLabel.setStyleSheet("")
+        self.boardShortcutLabel = QtWidgets.QLabel(
+            "板载快捷：USER1 短按切日夜；DISP 长按关显示并关 LED；EXT 用于退出/取消当前编辑或临时显示。",
+            test_group,
+        )
+        self.boardShortcutLabel.setWordWrap(True)
+        self.boardShortcutLabel.setProperty("class", "infoChip")
+        self.boardShortcutLabel.setStyleSheet("")
         self.testOutputText = QtWidgets.QTextEdit(test_group)
         self.testOutputText.setReadOnly(True)
         self.testOutputText.setMinimumHeight(160)
         self.testOutputText.setPlaceholderText("测试输出会显示在这里。")
         test_layout.addWidget(self.runChecksButton)
+        test_layout.addWidget(self.autoRunTestsCheck)
         test_layout.addWidget(self.testStatusLabel)
+        test_layout.addWidget(self.testExplainLabel)
+        test_layout.addWidget(self.boardShortcutLabel)
         test_layout.addWidget(self.testOutputText)
 
         ota_group = QtWidgets.QGroupBox("版本更新（预留）", host)
@@ -1002,6 +1243,14 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ui.displayToggleCombo.addItems(["ON", "OFF"])
         self.ui.formatCombo.addItems(["LEFT", "RIGHT"])
         self.ui.modeCombo.addItems(["DAY", "NIGHT"])
+        for combo in (
+            self.ui.displayToggleCombo,
+            self.ui.formatCombo,
+            self.ui.modeCombo,
+        ):
+            combo.setProperty("stateField", True)
+            combo.setFocusPolicy(QtCore.Qt.NoFocus)
+            combo.installEventFilter(self)
         self.ui.ledHexEdit.setText("80")
         self.ui.beepSpinBox.setValue(500)
 
@@ -1027,6 +1276,8 @@ class MainWindow(QtWidgets.QMainWindow):
         outer.setSpacing(14)
 
         self.ui.displayGroup.setTitle("系统设置")
+        self.voiceEnabledCheck = QtWidgets.QCheckBox("启用语音播报", self.ui.displayGroup)
+        self.ui.verticalLayout_3.addWidget(self.voiceEnabledCheck)
         outer.addWidget(self.ui.displayGroup)
 
         network_group = QtWidgets.QGroupBox("网络对时与天气", host)
@@ -1036,16 +1287,17 @@ class MainWindow(QtWidgets.QMainWindow):
         network_layout.setVerticalSpacing(10)
         network_layout.setColumnStretch(1, 1)
 
+        self.placeSlotCombo = QtWidgets.QComboBox(network_group)
         self.cityEdit = QtWidgets.QLineEdit(network_group)
-        self.cityEdit.setPlaceholderText("城市名，例如 Shanghai")
+        self.cityEdit.setPlaceholderText("城市名，例如 上海 / 成都 / Tokyo")
         self.lookupCityButton = QtWidgets.QPushButton("定位城市", network_group)
-        self.saveExtensionConfigButton = QtWidgets.QPushButton("保存配置", network_group)
-        self.ntpSyncButton = QtWidgets.QPushButton("NTP 对时并写入", network_group)
-        self.weatherRefreshButton = QtWidgets.QPushButton("刷新天气并下发", network_group)
+        self.saveExtensionConfigButton = QtWidgets.QPushButton("保存地点", network_group)
+        self.syncWeatherApplyButton = QtWidgets.QPushButton(
+            "一键对时、刷新天气并应用",
+            network_group,
+        )
         self.autoDayNightCheck = QtWidgets.QCheckBox("自动昼夜模式", network_group)
         self.themeFollowCheck = QtWidgets.QCheckBox("PC 主题跟随板端模式", network_group)
-        self.voiceEnabledCheck = QtWidgets.QCheckBox("启用语音播报", network_group)
-        self.quietNightCheck = QtWidgets.QCheckBox("夜间抑制扩展铃声", network_group)
         self.cityInfoLabel = QtWidgets.QLabel("经纬度: -- | 时区: --", network_group)
         self.cityInfoLabel.setProperty("class", "infoChip")
         self.weatherInfoLabel = QtWidgets.QLabel("天气: 未刷新", network_group)
@@ -1064,8 +1316,7 @@ class MainWindow(QtWidgets.QMainWindow):
         sync_button_layout = QtWidgets.QHBoxLayout(sync_button_row)
         sync_button_layout.setContentsMargins(0, 0, 0, 0)
         sync_button_layout.setSpacing(8)
-        sync_button_layout.addWidget(self.ntpSyncButton)
-        sync_button_layout.addWidget(self.weatherRefreshButton)
+        sync_button_layout.addWidget(self.syncWeatherApplyButton)
 
         checkbox_row_1 = QtWidgets.QWidget(network_group)
         checkbox_row_1_layout = QtWidgets.QVBoxLayout(checkbox_row_1)
@@ -1074,19 +1325,13 @@ class MainWindow(QtWidgets.QMainWindow):
         checkbox_row_1_layout.addWidget(self.autoDayNightCheck)
         checkbox_row_1_layout.addWidget(self.themeFollowCheck)
 
-        checkbox_row_2 = QtWidgets.QWidget(network_group)
-        checkbox_row_2_layout = QtWidgets.QVBoxLayout(checkbox_row_2)
-        checkbox_row_2_layout.setContentsMargins(0, 0, 0, 0)
-        checkbox_row_2_layout.setSpacing(6)
-        checkbox_row_2_layout.addWidget(self.voiceEnabledCheck)
-        checkbox_row_2_layout.addWidget(self.quietNightCheck)
-
-        network_layout.addWidget(QtWidgets.QLabel("城市"), 0, 0)
-        network_layout.addWidget(self.cityEdit, 0, 1)
-        network_layout.addWidget(city_button_row, 1, 1)
-        network_layout.addWidget(sync_button_row, 2, 1)
-        network_layout.addWidget(checkbox_row_1, 3, 1)
-        network_layout.addWidget(checkbox_row_2, 4, 1)
+        network_layout.addWidget(QtWidgets.QLabel("地点"), 0, 0)
+        network_layout.addWidget(self.placeSlotCombo, 0, 1)
+        network_layout.addWidget(QtWidgets.QLabel("城市"), 1, 0)
+        network_layout.addWidget(self.cityEdit, 1, 1)
+        network_layout.addWidget(city_button_row, 2, 1)
+        network_layout.addWidget(sync_button_row, 3, 1)
+        network_layout.addWidget(checkbox_row_1, 4, 1)
         network_layout.addWidget(self.cityInfoLabel, 5, 1)
         network_layout.addWidget(self.weatherInfoLabel, 6, 1)
         network_layout.addWidget(self.sunriseSunsetLabel, 7, 1)
@@ -1101,6 +1346,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ringPreviewCombo = QtWidgets.QComboBox(ring_group)
         self.ringPreviewCombo.addItems([label for _, label in self.ring_names])
         self.ringPreviewButton = QtWidgets.QPushButton("预览铃声", ring_group)
+        self.quietNightCheck = QtWidgets.QCheckBox("夜间抑制扩展铃声", ring_group)
         self.themeModeLabel = QtWidgets.QLabel("主题状态: DAY", ring_group)
         self.themeModeLabel.setProperty("class", "infoChip")
         self.themeModeLabel.setStyleSheet("")
@@ -1111,8 +1357,9 @@ class MainWindow(QtWidgets.QMainWindow):
         ring_layout.addWidget(QtWidgets.QLabel("铃声类型"), 0, 0)
         ring_layout.addWidget(self.ringPreviewCombo, 0, 1)
         ring_layout.addWidget(self.ringPreviewButton, 1, 1)
-        ring_layout.addWidget(self.themeModeLabel, 2, 1)
-        ring_layout.addWidget(self.ntpStatusLabel, 3, 1)
+        ring_layout.addWidget(self.quietNightCheck, 2, 1)
+        ring_layout.addWidget(self.themeModeLabel, 3, 1)
+        ring_layout.addWidget(self.ntpStatusLabel, 4, 1)
 
         outer.addWidget(network_group)
         outer.addWidget(ring_group)
@@ -1250,18 +1497,27 @@ class MainWindow(QtWidgets.QMainWindow):
         return page
 
     def sync_extension_widgets_from_config(self) -> None:
+        self.refresh_place_combo_labels()
         if not hasattr(self, "cityEdit"):
             return
-        self.cityEdit.setText(self.config.city_name)
+        place = self._active_place()
+        self.cityEdit.setText(place.name)
+        self.placeSlotCombo.blockSignals(True)
+        self.placeSlotCombo.setCurrentIndex(self.config.active_place_index)
+        self.placeSlotCombo.blockSignals(False)
         self.autoDayNightCheck.setChecked(self.config.auto_day_night)
         self.themeFollowCheck.setChecked(self.config.theme_follow_mode)
         self.voiceEnabledCheck.setChecked(self.config.voice_enabled)
         self.quietNightCheck.setChecked(self.config.quiet_night_rings)
+        if hasattr(self, "autoRunTestsCheck"):
+            self.autoRunTestsCheck.setChecked(self.config.auto_run_tests_on_start)
         self.cityInfoLabel.setText(
-            f"经纬度: {self.config.latitude:.4f}, {self.config.longitude:.4f} | 时区: {self.config.timezone}"
+            f"经纬度: {place.latitude:.4f}, {place.longitude:.4f} | 时区: {place.timezone}"
         )
         self.weatherInfoLabel.setText(f"天气: {self.weather_summary_text}")
-        self.sunriseSunsetLabel.setText(f"日出/日落: {self.sunrise_text} / {self.sunset_text}")
+        self.sunriseSunsetLabel.setText(
+            f"日出/日落: {self.sunrise_text} / {self.sunset_text} | 当前时间: {self.last_selected_zone_time}"
+        )
         self.ntpStatusLabel.setText(f"最近 NTP: {self.last_ntp_sync_text}")
         if hasattr(self, "autoModeNoticeLabel") and self.config.auto_day_night:
             self.autoModeNoticeLabel.clear()
@@ -1290,31 +1546,37 @@ class MainWindow(QtWidgets.QMainWindow):
     def refresh_dashboard(self) -> None:
         if not hasattr(self, "dashboardSummaryLabel"):
             return
+        now = self._selected_zone_now().replace(tzinfo=None)
+        place = self._active_place()
         enabled_count = len([item for item in self.schedules if item.enabled])
-        next_schedule_text = "无"
-        for item in self.schedules:
-            if not item.enabled:
-                continue
-            if item.schedule_type == "weekly":
-                rule = f"每周 {','.join(['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'][index] for index in item.weekdays if 0 <= index < 7)}"
-            else:
-                rule = item.target_date or "--"
-            next_schedule_text = f"{item.title} @ {item.trigger_time} ({rule})"
-            break
+        next_schedule_text, next_schedule_time = self._next_reminder_summary(now)
+        expected_mode = (
+            "DAY" if should_use_day_mode(now, self.last_weather_snapshot) else "NIGHT"
+        ) if self.last_weather_snapshot is not None else self.last_mode
+        weather_text = self.weather_summary_text
+        if self.last_weather_snapshot is not None:
+            weather_text = format_weather_summary(
+                self.last_weather_snapshot.weather_code,
+                self.last_weather_snapshot.temperature_c,
+            )
         self.dashboardSummaryLabel.setText(
-            f"统计: 共 {len(self.schedules)} 条提醒，启用 {enabled_count} 条，最近 NTP {self.last_ntp_sync_text}"
+            f"统计: 共 {len(self.schedules)} 条提醒，启用 {enabled_count} 条 | 当前城市 {place.name}"
         )
         self.dashboardConnectionLabel.setText(
-            f"连接概况: {'已连接 ' + self.ui.portCombo.currentText() if self.is_connected else '未连接'} | {self.status_format.text()} | {self.status_alarm.text()}"
+            f"连接概况: {'已连接 ' + self.ui.portCombo.currentText() if self.is_connected else '未连接'} | 最近 NTP {self.last_ntp_sync_text}"
         )
         self.dashboardModeLabel.setText(
-            f"模式切换: 当前 {self.last_mode} | 自动昼夜 {'开' if self.config.auto_day_night else '关'}"
+            f"模式切换: 当前 {self.last_mode} | 当前所处 {'日间' if expected_mode == 'DAY' else '夜间'} | 自动昼夜 {'开' if self.config.auto_day_night else '关'}"
         )
         self.dashboardWeatherLabel.setText(
-            f"天气刷新: {self.weather_summary_text} | 日出 {self.sunrise_text} | 日落 {self.sunset_text}"
+            f"天气刷新: {weather_text} | 日出 {self.sunrise_text} | 日落 {self.sunset_text} | {place.timezone}"
         )
-        self.dashboardScheduleLabel.setText(f"下次提醒: {next_schedule_text}")
-        self.dashboardTestLabel.setText(f"自动测试: {self.last_test_summary}")
+        self.dashboardScheduleLabel.setText(
+            f"下次提醒: {next_schedule_text} | 剩余 {self._format_countdown(next_schedule_time, now)}"
+        )
+        self.dashboardTestLabel.setText(
+            f"自动测试: {self.last_test_summary} | 当前城市时间 {self.last_selected_zone_time or now.strftime('%Y-%m-%d %H:%M:%S')}"
+        )
         self.dashboardEventList.clear()
         for entry in load_recent_event_logs(APP_DIR, limit=10):
             when = entry.get("when", "--")
@@ -1324,7 +1586,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _wire_signals(self) -> None:
         self.ui.refreshPortsButton.clicked.connect(self.refresh_ports)
-        self.ui.connectButton.clicked.connect(self.connect_port)
+        self.ui.connectButton.clicked.connect(self.connect_and_apply_port)
         self.ui.disconnectButton.clicked.connect(self.disconnect_port)
         self.ui.applyDateButton.clicked.connect(self.apply_date)
         self.ui.queryDateButton.clicked.connect(lambda: self.send_command("*GET:DATE", "DATE"))
@@ -1357,10 +1619,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ui.clearLogButton.clicked.connect(self.ui.logTextEdit.clear)
         self.ui.exportLogButton.clicked.connect(self.export_log)
         self.twin.virtual_key_requested.connect(self.send_virtual_key)
+        self.placeSlotCombo.currentIndexChanged.connect(self.select_saved_place)
         self.lookupCityButton.clicked.connect(self.lookup_city)
         self.saveExtensionConfigButton.clicked.connect(self.save_extension_config)
-        self.ntpSyncButton.clicked.connect(self.sync_ntp_time)
-        self.weatherRefreshButton.clicked.connect(self.refresh_weather_and_push)
+        self.syncWeatherApplyButton.clicked.connect(
+            lambda: self.sync_weather_and_apply(trigger_source="按钮", run_tests=False)
+        )
         self.ringPreviewButton.clicked.connect(self.preview_ring)
         self.scheduleApplyAlarmButton.clicked.connect(self.apply_schedule_alarm)
         self.scheduleDisableAlarmButton.clicked.connect(
@@ -1375,15 +1639,15 @@ class MainWindow(QtWidgets.QMainWindow):
         self.scheduleTable.itemSelectionChanged.connect(self.load_selected_schedule)
         self.scheduleTypeCombo.currentIndexChanged.connect(self._sync_schedule_type_ui)
         self.runChecksButton.clicked.connect(self.run_automated_checks)
+        self.autoRunTestsCheck.toggled.connect(lambda _checked: self.save_extension_config(log_message=False))
 
     def extension_tick(self) -> None:
         now = datetime.now()
-        if self.pending_user1_ntp and not self.user1_sync_timer.isActive():
-            self.user1_sync_timer.start()
-
+        zone_now = self._selected_zone_now().replace(tzinfo=None)
+        self.refresh_place_combo_labels()
         if self.config.auto_day_night and self.last_weather_refresh_at is not None:
-            if now.second == 0:
-                self.apply_auto_day_night(now)
+            if zone_now.second == 0:
+                self.apply_auto_day_night(zone_now)
 
         if self.last_weather_refresh_at is None or (
             now - self.last_weather_refresh_at
@@ -1392,20 +1656,22 @@ class MainWindow(QtWidgets.QMainWindow):
 
         schedule_changed = False
         for item in self.schedules:
-            if schedule_trigger_matches(item, now):
+            if schedule_trigger_matches(item, zone_now):
                 self.trigger_schedule(item)
-                mark_schedule_triggered(item, now)
+                mark_schedule_triggered(item, zone_now)
                 schedule_changed = True
         if schedule_changed:
             save_schedules(APP_DIR, self.schedules)
             self.refresh_schedule_table()
             self.refresh_dashboard()
 
-    def _handle_deferred_user1_ntp(self) -> None:
-        if not self.pending_user1_ntp:
+    def select_saved_place(self, index: int) -> None:
+        if not (0 <= index < len(self.config.saved_places)):
             return
-        self.pending_user1_ntp = False
-        self.sync_ntp_time(trigger_source="USER1")
+        self.config.active_place_index = index
+        save_config(APP_DIR, self.config)
+        self.sync_extension_widgets_from_config()
+        self.refresh_dashboard()
 
     def lookup_city(self) -> None:
         city = self.cityEdit.text().strip()
@@ -1417,26 +1683,35 @@ class MainWindow(QtWidgets.QMainWindow):
         except Exception as exc:  # noqa: BLE001
             self.log("ERROR", f"城市定位失败: {exc}")
             return
-        self.config.city_name = result.name
-        self.config.latitude = result.latitude
-        self.config.longitude = result.longitude
-        self.config.timezone = result.timezone
+        place = self._active_place()
+        place.name = result.name
+        place.latitude = result.latitude
+        place.longitude = result.longitude
+        place.timezone = result.timezone
+        self.config.saved_places[self.config.active_place_index] = place
         save_config(APP_DIR, self.config)
         self.sync_extension_widgets_from_config()
         self.log("INFO", f"已定位城市: {result.name} ({result.latitude:.4f}, {result.longitude:.4f})")
         self.refresh_weather_and_push()
 
-    def save_extension_config(self) -> None:
-        self.config.city_name = self.cityEdit.text().strip() or self.config.city_name
+    def save_extension_config(self, log_message: bool = True) -> None:
+        place = self._active_place()
+        place.name = self.cityEdit.text().strip() or place.name
+        self.config.saved_places[self.config.active_place_index] = place
         self.config.auto_day_night = self.autoDayNightCheck.isChecked()
         self.config.theme_follow_mode = self.themeFollowCheck.isChecked()
         self.config.voice_enabled = self.voiceEnabledCheck.isChecked()
         self.config.quiet_night_rings = self.quietNightCheck.isChecked()
+        if hasattr(self, "autoRunTestsCheck"):
+            self.config.auto_run_tests_on_start = self.autoRunTestsCheck.isChecked()
         save_config(APP_DIR, self.config)
         self.sync_extension_widgets_from_config()
         self._refresh_theme_from_mode()
+        if self.config.auto_day_night:
+            self.apply_auto_day_night(self._selected_zone_now().replace(tzinfo=None), force_apply=True)
         self.refresh_dashboard()
-        self.log("INFO", "扩展配置已保存。")
+        if log_message:
+            self.log("INFO", "扩展配置已保存。")
 
     def _send_datetime_snapshot(self, moment: datetime, source_text: str) -> None:
         if self.sync_in_progress:
@@ -1444,7 +1719,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.sync_snapshot = moment.replace(microsecond=0)
         self.sync_in_progress = True
         self.ui.syncNowButton.setEnabled(False)
-        self.ntpSyncButton.setEnabled(False)
+        if hasattr(self, "syncWeatherApplyButton"):
+            self.syncWeatherApplyButton.setEnabled(False)
         self.ui.dateEdit.setDate(
             QtCore.QDate(self.sync_snapshot.year, self.sync_snapshot.month, self.sync_snapshot.day)
         )
@@ -1454,29 +1730,48 @@ class MainWindow(QtWidgets.QMainWindow):
         self.send_command(build_set_date_command(self.sync_snapshot))
         QtCore.QTimer.singleShot(220, self._sync_host_time_step2)
         self.last_ntp_sync_text = source_text
-        self.ntpStatusLabel.setText(f"最近 NTP: {source_text}")
+        self.last_selected_zone_time = self.sync_snapshot.strftime("%Y-%m-%d %H:%M:%S")
+        if hasattr(self, "ntpStatusLabel"):
+            self.ntpStatusLabel.setText(f"最近 NTP: {source_text}")
 
     def sync_ntp_time(self, trigger_source: str = "按钮") -> None:
         try:
-            snapshot = fetch_ntp_time(self.config.ntp_host)
+            snapshot_utc = fetch_ntp_time(self.config.ntp_host)
         except Exception as exc:  # noqa: BLE001
             self.log("ERROR", f"NTP 对时失败: {exc}")
+            if "启动" in trigger_source or trigger_source == "USER1":
+                self.log("WARN", "板端启动后若仍停在默认时间，可视为本次 NTP 对时失败。")
             append_event_log(APP_DIR, "ntp_error", str(exc))
             self.refresh_dashboard()
             return
-        self._send_datetime_snapshot(snapshot, snapshot.strftime("%Y-%m-%d %H:%M:%S"))
-        append_event_log(APP_DIR, "ntp_sync", f"{trigger_source} -> {snapshot.isoformat(sep=' ')}")
+        snapshot = self._selected_zone_now(snapshot_utc).replace(tzinfo=None)
+        source_text = f"{snapshot.strftime('%Y-%m-%d %H:%M:%S')} @ {self._active_place().name}"
+        self._send_datetime_snapshot(snapshot, source_text)
+        append_event_log(APP_DIR, "ntp_sync", f"{trigger_source} -> {source_text}")
         self.log("INFO", f"NTP 对时成功并写入 S800（来源: {trigger_source}）。")
         self.refresh_dashboard()
+
+    def sync_weather_and_apply(
+        self,
+        trigger_source: str = "按钮",
+        run_tests: bool | None = None,
+    ) -> None:
+        self.save_extension_config(log_message=False)
+        self.pending_auto_test_after_apply = (
+            self.config.auto_run_tests_on_start if run_tests is None else run_tests
+        )
+        self.sync_ntp_time(trigger_source=trigger_source)
+        self.refresh_weather_and_push(log_trigger=True)
 
     def refresh_weather_and_push(self, log_trigger: bool = True) -> None:
         if self.weather_refresh_in_progress:
             return
         self.weather_refresh_in_progress = True
-        city_name = self.config.city_name
-        latitude = self.config.latitude
-        longitude = self.config.longitude
-        timezone_name = self.config.timezone
+        place = self._active_place()
+        city_name = place.name
+        latitude = place.latitude
+        longitude = place.longitude
+        timezone_name = place.timezone
 
         def worker() -> None:
             snapshot = None
@@ -1514,8 +1809,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.cached_weather_led_mask = snapshot.led_mask or build_weather_led_mask(
             snapshot.weather_code, snapshot.temperature_c
         )
-        self.weather_summary_text = (
-            f"{weather_code_summary(snapshot.weather_code)} {snapshot.temperature_c:.1f}C"
+        self.weather_summary_text = format_weather_summary(
+            snapshot.weather_code, snapshot.temperature_c
         )
         self.sunrise_text = snapshot.sunrise_at.strftime("%H:%M")
         self.sunset_text = snapshot.sunset_at.strftime("%H:%M")
@@ -1533,15 +1828,23 @@ class MainWindow(QtWidgets.QMainWindow):
         if log_trigger:
             self.log("INFO", f"天气已刷新并下发: {self.weather_summary_text}")
         if self.config.auto_day_night:
-            self.apply_auto_day_night(datetime.now())
+            self.apply_auto_day_night(self._selected_zone_now().replace(tzinfo=None), force_apply=True)
+        if self.pending_auto_test_after_apply:
+            self.pending_auto_test_after_apply = False
+            QtCore.QTimer.singleShot(500, self.run_automated_checks)
 
-    def apply_auto_day_night(self, now: datetime) -> None:
+    def apply_auto_day_night(self, now: datetime, force_apply: bool = False) -> None:
         if self.last_weather_snapshot is None:
             return
         expected_mode = (
             "DAY" if should_use_day_mode(now, self.last_weather_snapshot) else "NIGHT"
         )
-        if expected_mode == self.last_mode_auto_applied and expected_mode == self.last_mode:
+        self.last_mode_expected = expected_mode
+        if (
+            not force_apply
+            and expected_mode == self.last_mode_auto_applied
+            and expected_mode == self.last_mode
+        ):
             return
         self.last_mode_auto_applied = expected_mode
         self._remember_mode_request(expected_mode, "auto")
@@ -1605,10 +1908,10 @@ class MainWindow(QtWidgets.QMainWindow):
             trigger_time=trigger_time,
             schedule_type=schedule_type,
             weekdays=weekdays,
-            target_date=target_date if schedule_type == "once" else None,
+            target_date=target_date if schedule_type == "once" else "",
             ring_type=ring_type,
             enabled=self.scheduleEnabledCheck.isChecked(),
-            voice_text=voice_text or None,
+            voice_text=voice_text or "",
         )
 
     def save_schedule_item(self) -> None:
@@ -1693,12 +1996,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if not ports:
             self.ui.portCombo.setPlaceholderText("未发现 COM 口")
 
-    def connect_port(self) -> None:
-        port_name = self.ui.portCombo.currentText().strip()
-        if not port_name:
-            self.log("WARN", "没有可连接的 COM 口。")
-            return
-
+    def _open_port(self, port_name: str) -> bool:
         self.disconnect_port(log_message=False)
         try:
             self.serial_port = serial.Serial(
@@ -1713,17 +2011,46 @@ class MainWindow(QtWidgets.QMainWindow):
         except Exception as exc:  # noqa: BLE001
             self.log("ERROR", f"打开串口失败: {exc}")
             self.serial_port = None
-            return
+            self.refresh_dashboard()
+            return False
 
         self.status_connection.setText(f"连接: {port_name}")
         self.poll_timer.start()
         self.ping_timer.start()
+        self.board_ready_seen = False
         self.log("INFO", f"已连接 {port_name}")
+        self.refresh_dashboard()
+        return True
+
+    def connect_port(self) -> bool:
+        port_name = self.ui.portCombo.currentText().strip()
+        if not port_name:
+            self.log("WARN", "没有可连接的 COM 口。")
+            return False
+        if not self._open_port(port_name):
+            return False
         self.query_runtime_state()
         if self.cached_weather_text:
             self.send_command(
                 build_set_weather_command(self.cached_weather_text, self.cached_weather_led_mask)
             )
+        return True
+
+    def connect_and_apply_port(self) -> None:
+        if not self.connect_port():
+            return
+        self.save_extension_config(log_message=False)
+        self._remember_mode_request(self.ui.modeCombo.currentText(), "manual_ui")
+        self.send_command(f"*SET:DISPLAY {self.ui.displayToggleCombo.currentText()}")
+        self.send_command(f"*SET:FORMAT {self.ui.formatCombo.currentText()}")
+        if self.config.auto_day_night:
+            self.apply_auto_day_night(self._selected_zone_now().replace(tzinfo=None), force_apply=True)
+        else:
+            self.send_command(f"*SET:MODE {self.ui.modeCombo.currentText()}")
+        self.sync_weather_and_apply(
+            trigger_source="连接并应用",
+            run_tests=self.config.auto_run_tests_on_start,
+        )
 
     def disconnect_port(self, log_message: bool = True) -> None:
         self.poll_timer.stop()
@@ -1739,10 +2066,14 @@ class MainWindow(QtWidgets.QMainWindow):
         self.serial_port = None
         self.status_connection.setText("连接: 未连接")
         self.status_latency.setText("延迟: -- ms")
+        self.latestDisplayLabel.setText(f"最新显示: {self.latest_display_text}")
         if log_message:
             self.log("INFO", "串口已断开。")
+        self.refresh_dashboard()
 
     def query_runtime_state(self) -> None:
+        self.send_command("*GET:DATE", "DATE")
+        self.send_command("*GET:TIME", "TIME")
         self.send_command("*GET:FORMAT", "FORMAT")
         self.send_command("*GET:MODE", "MODE")
         self.send_command("*GET:ALARM", "ALARM")
@@ -1804,6 +2135,18 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.handle_line(line)
 
     def handle_line(self, line: str) -> None:
+        raw = line.strip()
+        if raw.upper() == "S800 CLOCK READY":
+            self.log("RX", raw)
+            self.board_ready_seen = True
+            if (time.monotonic() - self.last_ready_sync_monotonic) > 2.5:
+                self.last_ready_sync_monotonic = time.monotonic()
+                self.log("INFO", "检测到板端启动完成，自动执行一次对时、天气刷新和模式同步。")
+                self.sync_weather_and_apply(
+                    trigger_source="板端启动",
+                    run_tests=self.config.auto_run_tests_on_start,
+                )
+            return
         parsed = parse_line(line)
         if not self._should_suppress_rx_log(parsed, line):
             self.log("RX", line)
@@ -1852,22 +2195,31 @@ class MainWindow(QtWidgets.QMainWindow):
             mode_origin = self._consume_mode_request(next_mode)
             self.last_mode = next_mode
             self.status_mode.setText(f"MODE: {self.last_mode}")
-            self.pending_user1_ntp = False
-            self.user1_sync_timer.stop()
             self._refresh_theme_from_mode()
             append_event_log(APP_DIR, "mode", self.last_mode)
             if self.config.auto_day_night and mode_origin != "auto":
-                source_text = "上位机" if mode_origin == "manual_ui" else "板端"
-                self._disable_auto_day_night_due_to_manual(source_text, self.last_mode)
+                expected_mode = self.last_mode_expected
+                if (
+                    not expected_mode
+                    and self.last_weather_snapshot is not None
+                ):
+                    expected_mode = (
+                        "DAY"
+                        if should_use_day_mode(
+                            self._selected_zone_now().replace(tzinfo=None),
+                            self.last_weather_snapshot,
+                        )
+                        else "NIGHT"
+                    )
+                if expected_mode and self.last_mode != expected_mode:
+                    source_text = "上位机" if mode_origin == "manual_ui" else "板端"
+                    self._disable_auto_day_night_due_to_manual(source_text, self.last_mode)
             self.refresh_dashboard()
             self._set_latest_event(f"模式切换 -> {self.last_mode}")
             return
 
         if parsed.name == "KEY":
             key = parsed.data.strip().upper()
-            if key == "USER1":
-                self.pending_user1_ntp = True
-                self.user1_sync_timer.start()
             append_event_log(APP_DIR, "key", key)
             self.refresh_dashboard()
             self._set_latest_event(f"按键事件 -> {key}")
@@ -1902,7 +2254,21 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         query = self.pending_queries.popleft()
         data = parsed.data.strip()
-        if query == "FORMAT" and data:
+        if query == "DATE" and data:
+            normalized = data.replace(".", "")
+            if len(normalized) == 6 and normalized.isdigit():
+                year = 2000 + int(normalized[0:2])
+                month = int(normalized[2:4])
+                day = int(normalized[4:6])
+                qdate = QtCore.QDate(year, month, day)
+                if qdate.isValid():
+                    self.ui.dateEdit.setDate(qdate)
+        elif query == "TIME" and data:
+            normalized = data.replace(".", ":")
+            qtime = QtCore.QTime.fromString(normalized, "HH:mm:ss")
+            if qtime.isValid():
+                self.ui.timeEdit.setTime(qtime)
+        elif query == "FORMAT" and data:
             self.status_format.setText(f"FORMAT: {data}")
             if data in {"LEFT", "RIGHT"}:
                 self.ui.formatCombo.setCurrentText(data)
@@ -1924,6 +2290,7 @@ class MainWindow(QtWidgets.QMainWindow):
                         self.scheduleAlarmTimeEdit.setTime(alarm_time)
         elif query == "DISPLAY" and data in {"ON", "OFF"}:
             self.ui.displayToggleCombo.setCurrentText(data)
+        self.refresh_dashboard()
 
     def apply_date(self) -> None:
         date = self.ui.dateEdit.date()
@@ -1963,20 +2330,42 @@ class MainWindow(QtWidgets.QMainWindow):
         self.sync_in_progress = False
         self.sync_snapshot = None
         self.ui.syncNowButton.setEnabled(True)
-        self.ntpSyncButton.setEnabled(True)
+        if hasattr(self, "syncWeatherApplyButton"):
+            self.syncWeatherApplyButton.setEnabled(True)
+        self.refresh_dashboard()
 
     def apply_display_state(self) -> None:
-        self.send_command(f"*SET:DISPLAY {self.ui.displayToggleCombo.currentText()}")
+        next_value = "OFF" if self.ui.displayToggleCombo.currentText() == "ON" else "ON"
+        self.ui.displayToggleCombo.setCurrentText(next_value)
+        self.send_command(f"*SET:DISPLAY {next_value}")
 
     def apply_format(self) -> None:
-        value = self.ui.formatCombo.currentText()
+        value = "RIGHT" if self.ui.formatCombo.currentText() == "LEFT" else "LEFT"
+        self.ui.formatCombo.setCurrentText(value)
         self.send_command(f"*SET:FORMAT {value}")
         QtCore.QTimer.singleShot(
             180, lambda: self.send_command("*GET:FORMAT", "FORMAT")
         )
 
     def apply_mode(self) -> None:
-        value = self.ui.modeCombo.currentText()
+        value = "NIGHT" if self.ui.modeCombo.currentText() == "DAY" else "DAY"
+        self.ui.modeCombo.setCurrentText(value)
+        if self.config.auto_day_night:
+            expected_mode = self.last_mode_expected
+            if (
+                not expected_mode
+                and self.last_weather_snapshot is not None
+            ):
+                expected_mode = (
+                    "DAY"
+                    if should_use_day_mode(
+                        self._selected_zone_now().replace(tzinfo=None),
+                        self.last_weather_snapshot,
+                    )
+                    else "NIGHT"
+                )
+            if expected_mode and value != expected_mode:
+                self._disable_auto_day_night_due_to_manual("上位机", value)
         self._remember_mode_request(value, "manual_ui")
         self.send_command(f"*SET:MODE {value}")
         QtCore.QTimer.singleShot(
@@ -1998,9 +2387,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self.send_command(f"*SET:MSG {text}")
 
     def send_virtual_key(self, key_name: str) -> None:
-        if key_name == "USER1":
-            self.sync_ntp_time(trigger_source="虚拟 USER1")
-            return
         self.send_command(f"*SET:KEY {key_name}")
 
     def send_raw_command(self) -> None:
@@ -2015,34 +2401,29 @@ class MainWindow(QtWidgets.QMainWindow):
         if self.test_run_in_progress:
             return
         port_name = self.ui.portCombo.currentText().strip()
-        if not port_name:
+        if not port_name and not self.is_connected:
             self.log("WARN", "没有可测试的 COM 口。")
             return
         self.test_run_in_progress = True
         self.runChecksButton.setEnabled(False)
         self.testStatusLabel.setText("状态: 运行中")
-        self.testOutputText.setPlainText(f"正在对 {port_name} 执行联合测试...\n")
+        active_port = (
+            self.serial_port.port
+            if self.is_connected and self.serial_port is not None
+            else port_name
+        )
+        self.testOutputText.setPlainText(f"正在对 {active_port} 执行联合测试...\n")
+        if self.is_connected:
+            self.poll_timer.stop()
+            self.ping_timer.stop()
+            self.read_buffer = ""
 
         def worker() -> None:
-            command = [
-                sys.executable,
-                str(APP_DIR / "run_extension_checks.py"),
-                "--port",
-                port_name,
-            ]
             try:
-                result = subprocess.run(
-                    command,
-                    capture_output=True,
-                    text=True,
-                    encoding="utf-8",
-                    errors="replace",
-                    cwd=str(APP_DIR),
-                    timeout=60,
-                    check=False,
-                )
-                output = (result.stdout or "") + (result.stderr or "")
-                ok = result.returncode == 0
+                if self.is_connected and self.serial_port is not None:
+                    ok, output = execute_checks_on_open_port(self.serial_port)
+                else:
+                    ok, output = execute_checks_on_port(active_port)
             except Exception as exc:  # noqa: BLE001
                 output = f"FAIL\n{exc}"
                 ok = False
@@ -2057,6 +2438,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.last_test_summary = "PASS" if ok else "FAIL"
         self.testStatusLabel.setText(f"状态: {'通过' if ok else '失败'}")
         self.testOutputText.setPlainText(output or ("PASS" if ok else "FAIL"))
+        if self.is_connected:
+            self.poll_timer.start()
+            self.ping_timer.start()
+            self.query_runtime_state()
         append_event_log(APP_DIR, "test_run", self.last_test_summary)
         self.refresh_dashboard()
         self.log("INFO" if ok else "WARN", f"联合测试完成: {self.last_test_summary}")

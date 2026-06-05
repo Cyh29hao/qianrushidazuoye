@@ -1,5 +1,5 @@
 {
-  "city_name": "Shanghai",
+  "city_name": "上海",
   "latitude": 31.2304,
   "longitude": 121.4737,
   "timezone": "Asia/Shanghai",
@@ -8,5 +8,40 @@
   "voice_enabled": true,
   "quiet_night_rings": true,
   "ntp_host": "pool.ntp.org",
-  "weather_refresh_minutes": 30
+  "weather_refresh_minutes": 30,
+  "saved_places": [
+    {
+      "name": "上海",
+      "latitude": 31.2304,
+      "longitude": 121.4737,
+      "timezone": "Asia/Shanghai"
+    },
+    {
+      "name": "上海",
+      "latitude": 31.2304,
+      "longitude": 121.4737,
+      "timezone": "Asia/Shanghai"
+    },
+    {
+      "name": "上海",
+      "latitude": 31.2304,
+      "longitude": 121.4737,
+      "timezone": "Asia/Shanghai"
+    },
+    {
+      "name": "上海",
+      "latitude": 31.2304,
+      "longitude": 121.4737,
+      "timezone": "Asia/Shanghai"
+    },
+    {
+      "name": "上海",
+      "latitude": 31.2304,
+      "longitude": 121.4737,
+      "timezone": "Asia/Shanghai"
+    }
+  ],
+  "active_place_index": 0,
+  "auto_run_tests_on_start": true,
+  "app_version": "2.0"
 }
