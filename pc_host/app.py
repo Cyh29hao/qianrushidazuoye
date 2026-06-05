@@ -3,6 +3,7 @@ from __future__ import annotations
 import html
 import os
 import sys
+import threading
 import time
 from collections import deque
 from datetime import datetime, timedelta
@@ -54,6 +55,8 @@ from ui_main import Ui_MainWindow
 
 
 class MainWindow(QtWidgets.QMainWindow):
+    weather_refresh_finished = QtCore.pyqtSignal(object, object, bool)
+
     def __init__(self) -> None:
         super().__init__()
         self.ui = Ui_MainWindow()
@@ -74,6 +77,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.weather_summary_text = "未刷新天气"
         self.sunrise_text = "--:--"
         self.sunset_text = "--:--"
+        self.last_weather_snapshot = None
         self.last_ntp_sync_text = "未进行网络对时"
         self.last_display_event: tuple[str, int] | None = None
         self.last_led_event: int | None = None
@@ -84,6 +88,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.sync_in_progress = False
         self.sync_snapshot: datetime | None = None
         self.pending_user1_ntp = False
+        self.weather_refresh_in_progress = False
         self.last_weather_refresh_at: datetime | None = None
         self.last_mode_auto_applied = ""
         self.ring_names = [
@@ -104,6 +109,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._prepare_widgets()
         self._refine_layout()
         self._wire_signals()
+        self.weather_refresh_finished.connect(self._finish_weather_refresh)
 
         self.port_timer = QtCore.QTimer(self)
         self.port_timer.setInterval(1500)
@@ -257,24 +263,20 @@ class MainWindow(QtWidgets.QMainWindow):
                 spacing: 6px;
                 font-size: 11px;
             }}
-            QTabWidget::pane {{
-                border: 1px solid {palette['group_border']};
-                border-radius: 10px;
-                background: {palette['group_bg']};
-                top: -1px;
+            QToolBox {{
+                background: transparent;
+                border: none;
             }}
-            QTabBar::tab {{
+            QToolBox::tab {{
                 background: {palette['tab_bg']};
                 border: 1px solid {palette['input_border']};
-                border-bottom: none;
-                border-top-left-radius: 8px;
-                border-top-right-radius: 8px;
-                padding: 6px 12px;
-                min-width: 90px;
+                border-radius: 8px;
+                padding: 7px 12px;
+                margin-bottom: 6px;
                 color: {palette['title']};
                 font-weight: 600;
             }}
-            QTabBar::tab:selected {{
+            QToolBox::tab:selected {{
                 background: {palette['group_bg']};
             }}
             QScrollArea {{
@@ -492,16 +494,15 @@ class MainWindow(QtWidgets.QMainWindow):
         left_layout.setContentsMargins(0, 0, 0, 0)
         left_layout.setSpacing(0)
 
-        self.leftTabs = QtWidgets.QTabWidget(left_panel)
-        self.leftTabs.setDocumentMode(True)
-        self.leftTabs.addTab(
+        self.leftSections = QtWidgets.QToolBox(left_panel)
+        self.leftSections.addItem(
             make_tab_page(self.ui.connectionGroup, self.ui.clockGroup), "基础控制"
         )
-        self.leftTabs.addTab(make_tab_page(self.ui.displayGroup), "显示与外设")
-        self.leftTabs.addTab(make_tab_page(self.ui.demoGroup), "协议调试")
-        self.leftTabs.addTab(self._build_extension_settings_page(), "扩展设置")
-        self.leftTabs.addTab(self._build_schedule_dashboard_page(), "日程与看板")
-        left_layout.addWidget(self.leftTabs)
+        self.leftSections.addItem(make_tab_page(self.ui.displayGroup), "显示与外设")
+        self.leftSections.addItem(make_tab_page(self.ui.demoGroup), "协议调试")
+        self.leftSections.addItem(self._build_extension_settings_page(), "扩展设置")
+        self.leftSections.addItem(self._build_schedule_dashboard_page(), "日程与看板")
+        left_layout.addWidget(self.leftSections)
 
         right_panel = QtWidgets.QWidget(self.ui.centralwidget)
         right_panel.setMinimumWidth(0)
@@ -1049,24 +1050,50 @@ class MainWindow(QtWidgets.QMainWindow):
         self.refresh_dashboard()
 
     def refresh_weather_and_push(self, log_trigger: bool = True) -> None:
-        try:
-            snapshot = fetch_weather_snapshot(
-                self.config.city_name,
-                self.config.latitude,
-                self.config.longitude,
-                self.config.timezone,
-            )
-        except Exception as exc:  # noqa: BLE001
+        if self.weather_refresh_in_progress:
+            return
+        self.weather_refresh_in_progress = True
+        city_name = self.config.city_name
+        latitude = self.config.latitude
+        longitude = self.config.longitude
+        timezone_name = self.config.timezone
+
+        def worker() -> None:
+            snapshot = None
+            error = None
+            try:
+                snapshot = fetch_weather_snapshot(
+                    city_name,
+                    latitude,
+                    longitude,
+                    timezone_name,
+                )
+            except Exception as exc:  # noqa: BLE001
+                error = exc
+            self.weather_refresh_finished.emit(snapshot, error, log_trigger)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _finish_weather_refresh(self, snapshot, error, log_trigger: bool) -> None:
+        self.weather_refresh_in_progress = False
+        if error is not None:
             self.last_weather_refresh_at = datetime.now()
             if log_trigger:
-                self.log("ERROR", f"天气刷新失败: {exc}")
-            append_event_log(APP_DIR, "weather_error", str(exc))
+                self.log("ERROR", f"天气刷新失败: {error}")
+            append_event_log(APP_DIR, "weather_error", str(error))
             self.refresh_dashboard()
+            return
+        if snapshot is None:
             return
 
         self.last_weather_refresh_at = datetime.now()
-        self.cached_weather_text = build_weather_token(snapshot)
-        self.cached_weather_led_mask = build_weather_led_mask(snapshot)
+        self.last_weather_snapshot = snapshot
+        self.cached_weather_text = snapshot.display_token or build_weather_token(
+            snapshot.summary, snapshot.temperature_c
+        )
+        self.cached_weather_led_mask = snapshot.led_mask or build_weather_led_mask(
+            snapshot.weather_code, snapshot.temperature_c
+        )
         self.weather_summary_text = (
             f"{weather_code_summary(snapshot.weather_code)} {snapshot.temperature_c:.1f}C"
         )
@@ -1089,14 +1116,11 @@ class MainWindow(QtWidgets.QMainWindow):
             self.apply_auto_day_night(datetime.now())
 
     def apply_auto_day_night(self, now: datetime) -> None:
-        if self.sunrise_text == "--:--" or self.sunset_text == "--:--":
+        if self.last_weather_snapshot is None:
             return
-        try:
-            sunrise = datetime.strptime(self.sunrise_text, "%H:%M").time()
-            sunset = datetime.strptime(self.sunset_text, "%H:%M").time()
-        except ValueError:
-            return
-        expected_mode = "DAY" if should_use_day_mode(now, sunrise, sunset) else "NIGHT"
+        expected_mode = (
+            "DAY" if should_use_day_mode(now, self.last_weather_snapshot) else "NIGHT"
+        )
         if expected_mode == self.last_mode_auto_applied and expected_mode == self.last_mode:
             return
         self.last_mode_auto_applied = expected_mode
