@@ -526,8 +526,8 @@ class MainWindow(QtWidgets.QMainWindow):
             "button": "#1f5b8c",
             "button_hover": "#2b76b3",
             "button_pressed": "#174969",
-            "input_bg": "#ffffff",
-            "input_border": "#c5d0da",
+            "input_bg": "#fcfaf7",
+            "input_border": "#d7d0c6",
             "chip_bg": "#eef5fb",
             "chip_border": "#c5d7e8",
             "chip_text": "#234a70",
@@ -544,10 +544,10 @@ class MainWindow(QtWidgets.QMainWindow):
                     "button": "#255f8c",
                     "button_hover": "#3477aa",
                     "button_pressed": "#194766",
-                    "input_bg": "#16202b",
-                    "input_border": "#4a5a6d",
+                    "input_bg": "#1d2a38",
+                    "input_border": "#445365",
                     "chip_bg": "#233345",
-                    "chip_border": "#4a5a6d",
+                    "chip_border": "#445365",
                     "chip_text": "#dbe7f2",
                     "tab_bg": "#2b3c4d",
                 }
@@ -576,7 +576,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 padding: 1px 6px 0 6px;
                 color: {palette['title']};
             }}
-            QPushButton {{
+            QPushButton, QToolButton {{
                 background: {palette['button']};
                 color: white;
                 border: none;
@@ -586,13 +586,13 @@ class MainWindow(QtWidgets.QMainWindow):
                 min-height: 30px;
                 font-size: 12px;
             }}
-            QPushButton:hover {{
+            QPushButton:hover, QToolButton:hover {{
                 background: {palette['button_hover']};
             }}
-            QPushButton:pressed {{
+            QPushButton:pressed, QToolButton:pressed {{
                 background: {palette['button_pressed']};
             }}
-            QPushButton:disabled {{
+            QPushButton:disabled, QToolButton:disabled {{
                 background: {palette['button']};
                 color: rgba(255, 255, 255, 0.55);
             }}
@@ -715,29 +715,38 @@ class MainWindow(QtWidgets.QMainWindow):
                 font-size: 11px;
             }}
             QPushButton#accordionHeader {{
-                background: {palette['tab_bg']};
-                border: 1px solid {palette['input_border']};
+                background: {palette['button']};
+                color: white;
+                border: none;
                 border-radius: 8px;
                 padding: 7px 14px;
                 min-height: 38px;
-                color: {palette['title']};
                 font-weight: 600;
                 font-size: 12px;
                 text-align: left;
             }}
+            QPushButton#accordionHeader:hover {{
+                background: {palette['button_hover']};
+            }}
             QPushButton#accordionHeader:checked {{
-                background: {palette['group_bg']};
+                background: {palette['button_pressed']};
             }}
             QPushButton#accordionOptionButton {{
-                background: {palette['tab_bg']};
-                border: 1px solid {palette['input_border']};
+                background: {palette['button']};
+                color: white;
+                border: none;
                 border-radius: 8px;
                 padding: 7px 14px;
                 min-height: 36px;
-                color: {palette['title']};
                 font-weight: 600;
                 font-size: 12px;
                 text-align: left;
+            }}
+            QPushButton#accordionOptionButton:hover {{
+                background: {palette['button_hover']};
+            }}
+            QPushButton#accordionOptionButton:pressed {{
+                background: {palette['button_pressed']};
             }}
             QScrollArea {{
                 border: none;
@@ -1145,6 +1154,29 @@ class MainWindow(QtWidgets.QMainWindow):
             self.ui.portHintLabel.hide()
             self.ui.horizontalLayout_2.addWidget(self.ui.connectButton)
             self.ui.horizontalLayout_2.addWidget(self.ui.disconnectButton)
+            
+            # Apply explicit blue styling for connection buttons
+            for btn in (self.ui.connectButton, self.ui.disconnectButton, 
+                        self.ui.applyDateButton, self.ui.queryDateButton,
+                        self.ui.applyTimeButton, self.ui.queryTimeButton,
+                        self.ui.applyAlarmButton, self.ui.disableAlarmButton,
+                        self.ui.queryAlarmButton, self.ui.syncNowButton,
+                        self.ui.applyDisplayButton, self.ui.applyFormatButton,
+                        self.ui.applyModeButton, self.ui.sendBeepButton,
+                        self.ui.sendLedButton, self.sendMessageButton,
+                        self.ui.sendPresetButton, self.ui.abbrevDemoButton,
+                        self.ui.mixedCaseDemoButton, self.ui.sendRawCommandButton,
+                        self.scheduleApplyAlarmButton, self.scheduleDisableAlarmButton,
+                        self.scheduleQueryAlarmButton, self.scheduleSaveButton,
+                        self.scheduleResetButton, self.scheduleDeleteButton,
+                        self.runChecksButton, self.lookupCityButton,
+                        self.saveExtensionConfigButton, self.syncWeatherApplyButton,
+                        self.ringPreviewButton):
+                if btn is not None:
+                    btn.setStyleSheet(
+                        f"background-color: #1f5b8c; color: white; border-radius: 8px; padding: 5px 10px; font-weight: 600; min-height: 30px;"
+                    )
+            
             self.ui.verticalLayout_2.removeItem(self.ui.horizontalLayout_3)
             self.ui.verticalLayout_2.removeWidget(self.ui.portHintLabel)
         self.ui.horizontalLayout_2.setStretch(0, 6)
