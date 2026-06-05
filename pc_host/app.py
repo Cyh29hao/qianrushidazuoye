@@ -54,73 +54,67 @@ from twin_widgets import DigitalTwinWidget
 from ui_main import Ui_MainWindow
 
 
-class AccordionSection(QtWidgets.QWidget):
-    toggled = QtCore.pyqtSignal(object, bool)
-
-    def __init__(self, title: str, content: QtWidgets.QWidget, parent=None) -> None:
-        super().__init__(parent)
-        self.title = title
-        self.setSizePolicy(
-            QtWidgets.QSizePolicy.Expanding,
-            QtWidgets.QSizePolicy.Maximum,
-        )
-        self.header = QtWidgets.QPushButton(self)
-        self.header.setObjectName("accordionHeader")
-        self.header.setText(f"▶ {title}")
-        self.header.setCheckable(True)
-        self.header.setChecked(False)
-        self.header.setCursor(QtCore.Qt.PointingHandCursor)
-        self.header.setSizePolicy(
-            QtWidgets.QSizePolicy.Expanding,
-            QtWidgets.QSizePolicy.Fixed,
-        )
-        self.header.clicked.connect(self._emit_toggled)
-
-        self.content = content
-        self.content.setParent(self)
-        self.content.setVisible(False)
-        self.content.setSizePolicy(
-            QtWidgets.QSizePolicy.Expanding,
-            QtWidgets.QSizePolicy.Preferred,
-        )
-
-        layout = QtWidgets.QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(8)
-        layout.addWidget(self.header)
-        layout.addWidget(self.content)
-
-    def _emit_toggled(self, checked: bool) -> None:
-        self.toggled.emit(self, checked)
-
-    def set_open(self, is_open: bool) -> None:
-        self.header.blockSignals(True)
-        self.header.setChecked(is_open)
-        self.header.setText(f"{'▼' if is_open else '▶'} {self.title}")
-        self.header.blockSignals(False)
-        self.content.setVisible(is_open)
-
-
-class AccordionWidget(QtWidgets.QWidget):
+class CollapsibleNavWidget(QtWidgets.QWidget):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
-        self.sections: list[AccordionSection] = []
-        self.layout = QtWidgets.QVBoxLayout(self)
-        self.layout.setContentsMargins(0, 0, 0, 0)
-        self.layout.setSpacing(10)
-        self.layout.addStretch(1)
+        self.items: list[tuple[str, QtWidgets.QWidget]] = []
+        self.current_index = 0
+        self.menu_open = False
+
+        self.selector_button = QtWidgets.QPushButton(self)
+        self.selector_button.setObjectName("accordionHeader")
+        self.selector_button.setCursor(QtCore.Qt.PointingHandCursor)
+        self.selector_button.clicked.connect(self.toggle_menu)
+
+        self.menu_widget = QtWidgets.QWidget(self)
+        self.menu_layout = QtWidgets.QVBoxLayout(self.menu_widget)
+        self.menu_layout.setContentsMargins(0, 0, 0, 0)
+        self.menu_layout.setSpacing(8)
+        self.menu_widget.setVisible(False)
+
+        self.stack = QtWidgets.QStackedWidget(self)
+
+        self.main_layout = QtWidgets.QVBoxLayout(self)
+        self.main_layout.setContentsMargins(0, 0, 0, 0)
+        self.main_layout.setSpacing(10)
+        self.main_layout.addWidget(self.selector_button)
+        self.main_layout.addWidget(self.menu_widget)
+        self.main_layout.addWidget(self.stack, 1)
 
     def add_section(self, title: str, content: QtWidgets.QWidget) -> None:
-        section = AccordionSection(title, content, self)
-        section.toggled.connect(self._handle_toggle)
-        self.sections.append(section)
-        self.layout.insertWidget(self.layout.count() - 1, section)
-        if len(self.sections) == 1:
-            section.set_open(True)
+        index = len(self.items)
+        self.items.append((title, content))
+        self.stack.addWidget(content)
 
-    def _handle_toggle(self, target: AccordionSection, checked: bool) -> None:
-        for section in self.sections:
-            section.set_open(section is target and checked)
+        option_button = QtWidgets.QPushButton(f"• {title}", self.menu_widget)
+        option_button.setObjectName("accordionOptionButton")
+        option_button.setCursor(QtCore.Qt.PointingHandCursor)
+        option_button.clicked.connect(lambda _checked=False, idx=index: self.select_index(idx))
+        self.menu_layout.addWidget(option_button)
+
+        if index == 0:
+            self.select_index(0)
+
+    def toggle_menu(self) -> None:
+        self.menu_open = not self.menu_open
+        self.menu_widget.setVisible(self.menu_open)
+        self._refresh_selector_text()
+
+    def select_index(self, index: int) -> None:
+        if not (0 <= index < len(self.items)):
+            return
+        self.current_index = index
+        self.stack.setCurrentIndex(index)
+        self.menu_open = False
+        self.menu_widget.setVisible(False)
+        self._refresh_selector_text()
+
+    def _refresh_selector_text(self) -> None:
+        if not self.items:
+            self.selector_button.setText("▶ 菜单")
+            return
+        title = self.items[self.current_index][0]
+        self.selector_button.setText(f"{'▼' if self.menu_open else '▶'} {title}")
 
 
 class MainWindow(QtWidgets.QMainWindow):
@@ -336,15 +330,26 @@ class MainWindow(QtWidgets.QMainWindow):
                 background: {palette['tab_bg']};
                 border: 1px solid {palette['input_border']};
                 border-radius: 8px;
-                padding: 9px 14px;
-                min-height: 48px;
+                padding: 7px 14px;
+                min-height: 38px;
                 color: {palette['title']};
                 font-weight: 600;
-                font-size: 14px;
+                font-size: 12px;
                 text-align: left;
             }}
             QPushButton#accordionHeader:checked {{
                 background: {palette['group_bg']};
+            }}
+            QPushButton#accordionOptionButton {{
+                background: {palette['tab_bg']};
+                border: 1px solid {palette['input_border']};
+                border-radius: 8px;
+                padding: 7px 14px;
+                min-height: 36px;
+                color: {palette['title']};
+                font-weight: 600;
+                font-size: 12px;
+                text-align: left;
             }}
             QScrollArea {{
                 border: none;
@@ -561,7 +566,7 @@ class MainWindow(QtWidgets.QMainWindow):
         left_layout.setContentsMargins(0, 0, 0, 0)
         left_layout.setSpacing(0)
 
-        self.leftSections = AccordionWidget(left_panel)
+        self.leftSections = CollapsibleNavWidget(left_panel)
         self.leftSections.add_section(
             "基础控制", make_tab_page(self.ui.connectionGroup, self.ui.clockGroup)
         )
