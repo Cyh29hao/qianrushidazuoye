@@ -54,6 +54,75 @@ from twin_widgets import DigitalTwinWidget
 from ui_main import Ui_MainWindow
 
 
+class AccordionSection(QtWidgets.QWidget):
+    toggled = QtCore.pyqtSignal(object, bool)
+
+    def __init__(self, title: str, content: QtWidgets.QWidget, parent=None) -> None:
+        super().__init__(parent)
+        self.title = title
+        self.setSizePolicy(
+            QtWidgets.QSizePolicy.Expanding,
+            QtWidgets.QSizePolicy.Maximum,
+        )
+        self.header = QtWidgets.QPushButton(self)
+        self.header.setObjectName("accordionHeader")
+        self.header.setText(f"▶ {title}")
+        self.header.setCheckable(True)
+        self.header.setChecked(False)
+        self.header.setCursor(QtCore.Qt.PointingHandCursor)
+        self.header.setSizePolicy(
+            QtWidgets.QSizePolicy.Expanding,
+            QtWidgets.QSizePolicy.Fixed,
+        )
+        self.header.clicked.connect(self._emit_toggled)
+
+        self.content = content
+        self.content.setParent(self)
+        self.content.setVisible(False)
+        self.content.setSizePolicy(
+            QtWidgets.QSizePolicy.Expanding,
+            QtWidgets.QSizePolicy.Preferred,
+        )
+
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+        layout.addWidget(self.header)
+        layout.addWidget(self.content)
+
+    def _emit_toggled(self, checked: bool) -> None:
+        self.toggled.emit(self, checked)
+
+    def set_open(self, is_open: bool) -> None:
+        self.header.blockSignals(True)
+        self.header.setChecked(is_open)
+        self.header.setText(f"{'▼' if is_open else '▶'} {self.title}")
+        self.header.blockSignals(False)
+        self.content.setVisible(is_open)
+
+
+class AccordionWidget(QtWidgets.QWidget):
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.sections: list[AccordionSection] = []
+        self.layout = QtWidgets.QVBoxLayout(self)
+        self.layout.setContentsMargins(0, 0, 0, 0)
+        self.layout.setSpacing(10)
+        self.layout.addStretch(1)
+
+    def add_section(self, title: str, content: QtWidgets.QWidget) -> None:
+        section = AccordionSection(title, content, self)
+        section.toggled.connect(self._handle_toggle)
+        self.sections.append(section)
+        self.layout.insertWidget(self.layout.count() - 1, section)
+        if len(self.sections) == 1:
+            section.set_open(True)
+
+    def _handle_toggle(self, target: AccordionSection, checked: bool) -> None:
+        for section in self.sections:
+            section.set_open(section is target and checked)
+
+
 class MainWindow(QtWidgets.QMainWindow):
     weather_refresh_finished = QtCore.pyqtSignal(object, object, bool)
 
@@ -263,20 +332,18 @@ class MainWindow(QtWidgets.QMainWindow):
                 spacing: 6px;
                 font-size: 11px;
             }}
-            QToolBox {{
-                background: transparent;
-                border: none;
-            }}
-            QToolBox::tab {{
+            QPushButton#accordionHeader {{
                 background: {palette['tab_bg']};
                 border: 1px solid {palette['input_border']};
                 border-radius: 8px;
-                padding: 7px 12px;
-                margin-bottom: 6px;
+                padding: 9px 14px;
+                min-height: 48px;
                 color: {palette['title']};
                 font-weight: 600;
+                font-size: 14px;
+                text-align: left;
             }}
-            QToolBox::tab:selected {{
+            QPushButton#accordionHeader:checked {{
                 background: {palette['group_bg']};
             }}
             QScrollArea {{
@@ -494,14 +561,14 @@ class MainWindow(QtWidgets.QMainWindow):
         left_layout.setContentsMargins(0, 0, 0, 0)
         left_layout.setSpacing(0)
 
-        self.leftSections = QtWidgets.QToolBox(left_panel)
-        self.leftSections.addItem(
-            make_tab_page(self.ui.connectionGroup, self.ui.clockGroup), "基础控制"
+        self.leftSections = AccordionWidget(left_panel)
+        self.leftSections.add_section(
+            "基础控制", make_tab_page(self.ui.connectionGroup, self.ui.clockGroup)
         )
-        self.leftSections.addItem(make_tab_page(self.ui.displayGroup), "显示与外设")
-        self.leftSections.addItem(make_tab_page(self.ui.demoGroup), "协议调试")
-        self.leftSections.addItem(self._build_extension_settings_page(), "扩展设置")
-        self.leftSections.addItem(self._build_schedule_dashboard_page(), "日程与看板")
+        self.leftSections.add_section("显示与外设", make_tab_page(self.ui.displayGroup))
+        self.leftSections.add_section("协议调试", make_tab_page(self.ui.demoGroup))
+        self.leftSections.add_section("扩展设置", self._build_extension_settings_page())
+        self.leftSections.add_section("日程与看板", self._build_schedule_dashboard_page())
         left_layout.addWidget(self.leftSections)
 
         right_panel = QtWidgets.QWidget(self.ui.centralwidget)
@@ -678,6 +745,7 @@ class MainWindow(QtWidgets.QMainWindow):
         network_layout.setContentsMargins(12, 22, 12, 12)
         network_layout.setHorizontalSpacing(10)
         network_layout.setVerticalSpacing(10)
+        network_layout.setColumnStretch(1, 1)
 
         self.cityEdit = QtWidgets.QLineEdit(network_group)
         self.cityEdit.setPlaceholderText("城市名，例如 Shanghai")
@@ -696,25 +764,50 @@ class MainWindow(QtWidgets.QMainWindow):
         self.sunriseSunsetLabel = QtWidgets.QLabel("日出/日落: -- / --", network_group)
         self.sunriseSunsetLabel.setProperty("class", "infoChip")
 
+        city_button_row = QtWidgets.QWidget(network_group)
+        city_button_layout = QtWidgets.QHBoxLayout(city_button_row)
+        city_button_layout.setContentsMargins(0, 0, 0, 0)
+        city_button_layout.setSpacing(8)
+        city_button_layout.addWidget(self.lookupCityButton)
+        city_button_layout.addWidget(self.saveExtensionConfigButton)
+
+        sync_button_row = QtWidgets.QWidget(network_group)
+        sync_button_layout = QtWidgets.QHBoxLayout(sync_button_row)
+        sync_button_layout.setContentsMargins(0, 0, 0, 0)
+        sync_button_layout.setSpacing(8)
+        sync_button_layout.addWidget(self.ntpSyncButton)
+        sync_button_layout.addWidget(self.weatherRefreshButton)
+
+        checkbox_row_1 = QtWidgets.QWidget(network_group)
+        checkbox_row_1_layout = QtWidgets.QVBoxLayout(checkbox_row_1)
+        checkbox_row_1_layout.setContentsMargins(0, 0, 0, 0)
+        checkbox_row_1_layout.setSpacing(6)
+        checkbox_row_1_layout.addWidget(self.autoDayNightCheck)
+        checkbox_row_1_layout.addWidget(self.themeFollowCheck)
+
+        checkbox_row_2 = QtWidgets.QWidget(network_group)
+        checkbox_row_2_layout = QtWidgets.QVBoxLayout(checkbox_row_2)
+        checkbox_row_2_layout.setContentsMargins(0, 0, 0, 0)
+        checkbox_row_2_layout.setSpacing(6)
+        checkbox_row_2_layout.addWidget(self.voiceEnabledCheck)
+        checkbox_row_2_layout.addWidget(self.quietNightCheck)
+
         network_layout.addWidget(QtWidgets.QLabel("城市"), 0, 0)
-        network_layout.addWidget(self.cityEdit, 0, 1, 1, 2)
-        network_layout.addWidget(self.lookupCityButton, 0, 3)
-        network_layout.addWidget(self.saveExtensionConfigButton, 0, 4)
-        network_layout.addWidget(self.ntpSyncButton, 1, 1, 1, 2)
-        network_layout.addWidget(self.weatherRefreshButton, 1, 3, 1, 2)
-        network_layout.addWidget(self.autoDayNightCheck, 2, 1)
-        network_layout.addWidget(self.themeFollowCheck, 2, 2)
-        network_layout.addWidget(self.voiceEnabledCheck, 2, 3)
-        network_layout.addWidget(self.quietNightCheck, 2, 4)
-        network_layout.addWidget(self.cityInfoLabel, 3, 1, 1, 4)
-        network_layout.addWidget(self.weatherInfoLabel, 4, 1, 1, 4)
-        network_layout.addWidget(self.sunriseSunsetLabel, 5, 1, 1, 4)
+        network_layout.addWidget(self.cityEdit, 0, 1)
+        network_layout.addWidget(city_button_row, 1, 1)
+        network_layout.addWidget(sync_button_row, 2, 1)
+        network_layout.addWidget(checkbox_row_1, 3, 1)
+        network_layout.addWidget(checkbox_row_2, 4, 1)
+        network_layout.addWidget(self.cityInfoLabel, 5, 1)
+        network_layout.addWidget(self.weatherInfoLabel, 6, 1)
+        network_layout.addWidget(self.sunriseSunsetLabel, 7, 1)
 
         ring_group = QtWidgets.QGroupBox("扩展提醒与铃声", host)
         ring_layout = QtWidgets.QGridLayout(ring_group)
         ring_layout.setContentsMargins(12, 22, 12, 12)
         ring_layout.setHorizontalSpacing(10)
         ring_layout.setVerticalSpacing(10)
+        ring_layout.setColumnStretch(1, 1)
 
         self.ringPreviewCombo = QtWidgets.QComboBox(ring_group)
         self.ringPreviewCombo.addItems([label for _, label in self.ring_names])
@@ -727,10 +820,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ntpStatusLabel.setStyleSheet("")
 
         ring_layout.addWidget(QtWidgets.QLabel("铃声类型"), 0, 0)
-        ring_layout.addWidget(self.ringPreviewCombo, 0, 1, 1, 2)
-        ring_layout.addWidget(self.ringPreviewButton, 0, 3)
-        ring_layout.addWidget(self.themeModeLabel, 1, 1, 1, 3)
-        ring_layout.addWidget(self.ntpStatusLabel, 2, 1, 1, 3)
+        ring_layout.addWidget(self.ringPreviewCombo, 0, 1)
+        ring_layout.addWidget(self.ringPreviewButton, 1, 1)
+        ring_layout.addWidget(self.themeModeLabel, 2, 1)
+        ring_layout.addWidget(self.ntpStatusLabel, 3, 1)
 
         outer.addWidget(network_group)
         outer.addWidget(ring_group)
@@ -757,20 +850,25 @@ class MainWindow(QtWidgets.QMainWindow):
         self.scheduleTable = QtWidgets.QTableWidget(schedule_group)
         self.scheduleTable.setColumnCount(5)
         self.scheduleTable.setHorizontalHeaderLabels(["启用", "标题", "规则", "时间", "铃声"])
-        self.scheduleTable.horizontalHeader().setStretchLastSection(True)
-        self.scheduleTable.horizontalHeader().setSectionResizeMode(
-            1, QtWidgets.QHeaderView.Stretch
-        )
+        header = self.scheduleTable.horizontalHeader()
+        header.setStretchLastSection(False)
+        header.setSectionResizeMode(0, QtWidgets.QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(1, QtWidgets.QHeaderView.Stretch)
+        header.setSectionResizeMode(2, QtWidgets.QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(3, QtWidgets.QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(4, QtWidgets.QHeaderView.ResizeToContents)
         self.scheduleTable.verticalHeader().setVisible(False)
         self.scheduleTable.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
         self.scheduleTable.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
         self.scheduleTable.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
+        self.scheduleTable.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
         self.scheduleTable.setMinimumHeight(180)
         schedule_layout.addWidget(self.scheduleTable)
 
         form = QtWidgets.QGridLayout()
         form.setHorizontalSpacing(10)
         form.setVerticalSpacing(10)
+        form.setColumnStretch(1, 1)
 
         self.scheduleTitleEdit = QtWidgets.QLineEdit(schedule_group)
         self.scheduleBoardLabelEdit = QtWidgets.QLineEdit(schedule_group)
@@ -807,24 +905,31 @@ class MainWindow(QtWidgets.QMainWindow):
 
         form.addWidget(QtWidgets.QLabel("标题"), 0, 0)
         form.addWidget(self.scheduleTitleEdit, 0, 1)
-        form.addWidget(QtWidgets.QLabel("板端标签"), 0, 2)
-        form.addWidget(self.scheduleBoardLabelEdit, 0, 3)
-        form.addWidget(QtWidgets.QLabel("时间"), 1, 0)
-        form.addWidget(self.scheduleTimeEdit, 1, 1)
-        form.addWidget(QtWidgets.QLabel("规则"), 1, 2)
-        form.addWidget(self.scheduleTypeCombo, 1, 3)
-        form.addWidget(QtWidgets.QLabel("日期"), 2, 0)
-        form.addWidget(self.scheduleDateEdit, 2, 1)
-        form.addWidget(QtWidgets.QLabel("每周"), 2, 2)
-        form.addWidget(weekday_host, 2, 3)
-        form.addWidget(QtWidgets.QLabel("铃声"), 3, 0)
-        form.addWidget(self.scheduleRingCombo, 3, 1)
-        form.addWidget(QtWidgets.QLabel("语音"), 3, 2)
-        form.addWidget(self.scheduleVoiceEdit, 3, 3)
-        form.addWidget(self.scheduleEnabledCheck, 4, 1)
-        form.addWidget(self.scheduleSaveButton, 4, 2)
-        form.addWidget(self.scheduleResetButton, 4, 3)
-        form.addWidget(self.scheduleDeleteButton, 5, 2, 1, 2)
+        form.addWidget(QtWidgets.QLabel("板端标签"), 1, 0)
+        form.addWidget(self.scheduleBoardLabelEdit, 1, 1)
+        form.addWidget(QtWidgets.QLabel("时间"), 2, 0)
+        form.addWidget(self.scheduleTimeEdit, 2, 1)
+        form.addWidget(QtWidgets.QLabel("规则"), 3, 0)
+        form.addWidget(self.scheduleTypeCombo, 3, 1)
+        form.addWidget(QtWidgets.QLabel("日期"), 4, 0)
+        form.addWidget(self.scheduleDateEdit, 4, 1)
+        form.addWidget(QtWidgets.QLabel("每周"), 5, 0)
+        form.addWidget(weekday_host, 5, 1)
+        form.addWidget(QtWidgets.QLabel("铃声"), 6, 0)
+        form.addWidget(self.scheduleRingCombo, 6, 1)
+        form.addWidget(QtWidgets.QLabel("语音"), 7, 0)
+        form.addWidget(self.scheduleVoiceEdit, 7, 1)
+        form.addWidget(self.scheduleEnabledCheck, 8, 1)
+
+        button_row = QtWidgets.QWidget(schedule_group)
+        button_layout = QtWidgets.QHBoxLayout(button_row)
+        button_layout.setContentsMargins(0, 0, 0, 0)
+        button_layout.setSpacing(8)
+        button_layout.addWidget(self.scheduleSaveButton)
+        button_layout.addWidget(self.scheduleResetButton)
+
+        form.addWidget(button_row, 9, 1)
+        form.addWidget(self.scheduleDeleteButton, 10, 1)
         schedule_layout.addLayout(form)
 
         dashboard_group = QtWidgets.QGroupBox("扩展数据看板", host)
