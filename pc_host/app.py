@@ -29,6 +29,7 @@ from extension_services import (
     fetch_ntp_time,
     fetch_weather_snapshot,
     geocode_city,
+    infer_timezone_offset_seconds,
     should_use_day_mode,
     speak_text,
     timezone_now,
@@ -272,10 +273,18 @@ class MainWindow(QtWidgets.QMainWindow):
         return self.config.saved_places[self.config.active_place_index]
 
     def _selected_zone_now(self, utc_moment: datetime | None = None) -> datetime:
-        return timezone_now(self._active_place().timezone, utc_moment)
+        place = self._active_place()
+        return timezone_now(
+            place.timezone,
+            utc_moment,
+            fallback_offset_seconds=place.utc_offset_seconds,
+        )
 
     def _current_place_label(self, place: SavedPlace) -> str:
-        current_text = timezone_now(place.timezone).strftime("%H:%M")
+        current_text = timezone_now(
+            place.timezone,
+            fallback_offset_seconds=place.utc_offset_seconds,
+        ).strftime("%H:%M")
         return f"{place.name} {current_text}"
 
     def refresh_place_combo_labels(self) -> None:
@@ -1688,6 +1697,7 @@ class MainWindow(QtWidgets.QMainWindow):
         place.latitude = result.latitude
         place.longitude = result.longitude
         place.timezone = result.timezone
+        place.utc_offset_seconds = result.utc_offset_seconds
         self.config.saved_places[self.config.active_place_index] = place
         save_config(APP_DIR, self.config)
         self.sync_extension_widgets_from_config()
@@ -1803,6 +1813,10 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.last_weather_refresh_at = datetime.now()
         self.last_weather_snapshot = snapshot
+        place = self._active_place()
+        place.utc_offset_seconds = snapshot.utc_offset_seconds
+        self.config.saved_places[self.config.active_place_index] = place
+        save_config(APP_DIR, self.config)
         self.cached_weather_text = snapshot.display_token or build_weather_token(
             snapshot.summary, snapshot.temperature_c
         )

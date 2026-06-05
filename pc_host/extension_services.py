@@ -5,14 +5,31 @@ import socket
 import subprocess
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import urlopen
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 NTP_EPOCH_OFFSET = 2208988800
+
+DEFAULT_UTC_OFFSET_SECONDS = 8 * 3600
+KNOWN_TIMEZONE_OFFSETS = {
+    "Asia/Shanghai": 8 * 3600,
+    "Asia/Chongqing": 8 * 3600,
+    "Asia/Hong_Kong": 8 * 3600,
+    "Asia/Singapore": 8 * 3600,
+    "Asia/Tokyo": 9 * 3600,
+    "Asia/Seoul": 9 * 3600,
+    "Asia/Bangkok": 7 * 3600,
+    "Europe/London": 0,
+    "Europe/Berlin": 1 * 3600,
+    "Europe/Paris": 1 * 3600,
+    "America/New_York": -5 * 3600,
+    "America/Los_Angeles": -8 * 3600,
+    "Australia/Sydney": 10 * 3600,
+}
 
 
 @dataclass
@@ -21,6 +38,7 @@ class CityLookupResult:
     latitude: float
     longitude: float
     timezone: str
+    utc_offset_seconds: int = DEFAULT_UTC_OFFSET_SECONDS
     country: str = ""
 
 
@@ -30,6 +48,7 @@ class WeatherSnapshot:
     temperature_c: float
     weather_code: int
     is_day: bool
+    utc_offset_seconds: int
     sunrise_at: datetime | None
     sunset_at: datetime | None
     display_token: str
@@ -50,11 +69,44 @@ def fetch_ntp_time(host: str = "pool.ntp.org", timeout: float = 2.0) -> datetime
     return datetime.fromtimestamp(seconds, tz=timezone.utc)
 
 
-def timezone_now(timezone_name: str, utc_moment: datetime | None = None) -> datetime:
+def timezone_now(
+    timezone_name: str,
+    utc_moment: datetime | None = None,
+    fallback_offset_seconds: int | None = None,
+) -> datetime:
     moment = utc_moment or datetime.now(timezone.utc)
     if moment.tzinfo is None:
         moment = moment.replace(tzinfo=timezone.utc)
-    return moment.astimezone(ZoneInfo(timezone_name))
+    try:
+        return moment.astimezone(ZoneInfo(timezone_name))
+    except (ZoneInfoNotFoundError, ModuleNotFoundError, ValueError):
+        offset_seconds = (
+            fallback_offset_seconds
+            if fallback_offset_seconds is not None
+            else infer_timezone_offset_seconds(timezone_name)
+        )
+        fallback_tz = timezone(
+            timedelta(seconds=offset_seconds),
+            name=timezone_name,
+        )
+        return moment.astimezone(fallback_tz)
+
+
+def infer_timezone_offset_seconds(
+    timezone_name: str,
+    default: int = DEFAULT_UTC_OFFSET_SECONDS,
+) -> int:
+    if timezone_name in KNOWN_TIMEZONE_OFFSETS:
+        return KNOWN_TIMEZONE_OFFSETS[timezone_name]
+    if timezone_name.startswith("Etc/GMT"):
+        suffix = timezone_name.removeprefix("Etc/GMT")
+        if suffix:
+            try:
+                parsed = int(suffix)
+            except ValueError:
+                return default
+            return -parsed * 3600
+    return default
 
 
 def geocode_city(city_name: str, timeout: float = 4.0) -> CityLookupResult:
@@ -77,6 +129,9 @@ def geocode_city(city_name: str, timeout: float = 4.0) -> CityLookupResult:
         latitude=float(first["latitude"]),
         longitude=float(first["longitude"]),
         timezone=first.get("timezone", "Asia/Shanghai"),
+        utc_offset_seconds=infer_timezone_offset_seconds(
+            first.get("timezone", "Asia/Shanghai")
+        ),
         country=first.get("country", ""),
     )
 
@@ -104,6 +159,12 @@ def fetch_weather_snapshot(
     daily = payload.get("daily") or {}
     weather_code = int(current.get("weather_code", 0))
     temp_c = float(current.get("temperature_2m", 0.0))
+    utc_offset_seconds = int(
+        payload.get(
+            "utc_offset_seconds",
+            infer_timezone_offset_seconds(timezone_name),
+        )
+    )
     sunrise_at = _safe_parse_iso((daily.get("sunrise") or [None])[0])
     sunset_at = _safe_parse_iso((daily.get("sunset") or [None])[0])
     summary = weather_code_summary(weather_code)
@@ -112,6 +173,7 @@ def fetch_weather_snapshot(
         temperature_c=temp_c,
         weather_code=weather_code,
         is_day=bool(current.get("is_day", 1)),
+        utc_offset_seconds=utc_offset_seconds,
         sunrise_at=sunrise_at,
         sunset_at=sunset_at,
         display_token=build_weather_token(summary, temp_c),

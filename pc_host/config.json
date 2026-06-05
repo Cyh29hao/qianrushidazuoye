@@ -14,31 +14,36 @@
       "name": "上海",
       "latitude": 31.2304,
       "longitude": 121.4737,
-      "timezone": "Asia/Shanghai"
+      "timezone": "Asia/Shanghai",
+      "utc_offset_seconds": 28800
     },
     {
       "name": "上海",
       "latitude": 31.2304,
       "longitude": 121.4737,
-      "timezone": "Asia/Shanghai"
+      "timezone": "Asia/Shanghai",
+      "utc_offset_seconds": 28800
     },
     {
       "name": "上海",
       "latitude": 31.2304,
       "longitude": 121.4737,
-      "timezone": "Asia/Shanghai"
+      "timezone": "Asia/Shanghai",
+      "utc_offset_seconds": 28800
     },
     {
       "name": "上海",
       "latitude": 31.2304,
       "longitude": 121.4737,
-      "timezone": "Asia/Shanghai"
+      "timezone": "Asia/Shanghai",
+      "utc_offset_seconds": 28800
     },
     {
       "name": "上海",
       "latitude": 31.2304,
       "longitude": 121.4737,
-      "timezone": "Asia/Shanghai"
+      "timezone": "Asia/Shanghai",
+      "utc_offset_seconds": 28800
     }
   ],
   "active_place_index": 0,
