@@ -1938,6 +1938,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.scheduleSaveButton.clicked.connect(self.save_schedule_item)
         self.scheduleDeleteButton.clicked.connect(self.delete_selected_schedule)
         self.scheduleTable.itemSelectionChanged.connect(self.load_selected_schedule)
+        self.scheduleTable.itemDoubleClicked.connect(self.toggle_schedule_enabled)
         self.scheduleTypeCombo.currentIndexChanged.connect(self._sync_schedule_type_ui)
         self.runChecksButton.clicked.connect(self.run_automated_checks)
         self.autoRunTestsCheck.toggled.connect(lambda _checked: self.save_extension_config(log_message=False))
