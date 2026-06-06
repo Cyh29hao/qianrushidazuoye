@@ -1163,12 +1163,12 @@ class MainWindow(QtWidgets.QMainWindow):
                         self.ui.queryAlarmButton, self.ui.syncNowButton,
                         self.ui.applyDisplayButton, self.ui.applyFormatButton,
                         self.ui.applyModeButton, self.ui.sendBeepButton,
-                        self.ui.sendLedButton, self.sendMessageButton,
+                        self.ui.sendLedButton, self.ui.sendMessageButton,
                         self.ui.sendPresetButton, self.ui.abbrevDemoButton,
                         self.ui.mixedCaseDemoButton, self.ui.sendRawCommandButton,
                         self.scheduleApplyAlarmButton, self.scheduleDisableAlarmButton,
                         self.scheduleQueryAlarmButton, self.scheduleSaveButton,
-                        self.scheduleResetButton, self.scheduleDeleteButton,
+                        self.scheduleDeleteButton,
                         self.runChecksButton, self.lookupCityButton,
                         self.saveExtensionConfigButton, self.syncWeatherApplyButton,
                         self.ringPreviewButton):
@@ -1371,7 +1371,6 @@ class MainWindow(QtWidgets.QMainWindow):
         weekday_layout.addStretch(1)
 
         self.scheduleSaveButton = QtWidgets.QPushButton("新增 / 更新提醒", schedule_group)
-        self.scheduleResetButton = QtWidgets.QPushButton("清空表单", schedule_group)
         self.scheduleDeleteButton = QtWidgets.QPushButton("删除选中提醒", schedule_group)
 
         form.addWidget(QtWidgets.QLabel("标题"), 0, 0)
@@ -1397,7 +1396,6 @@ class MainWindow(QtWidgets.QMainWindow):
         button_layout.setContentsMargins(0, 0, 0, 0)
         button_layout.setSpacing(8)
         button_layout.addWidget(self.scheduleSaveButton)
-        button_layout.addWidget(self.scheduleResetButton)
 
         form.addWidget(button_row, 9, 1)
         form.addWidget(self.scheduleDeleteButton, 10, 1)
@@ -1725,7 +1723,6 @@ class MainWindow(QtWidgets.QMainWindow):
         weekday_layout.addStretch(1)
 
         self.scheduleSaveButton = QtWidgets.QPushButton("新增 / 更新提醒", schedule_group)
-        self.scheduleResetButton = QtWidgets.QPushButton("清空表单", schedule_group)
         self.scheduleDeleteButton = QtWidgets.QPushButton("删除选中提醒", schedule_group)
 
         form.addWidget(QtWidgets.QLabel("标题"), 0, 0)
@@ -1939,7 +1936,6 @@ class MainWindow(QtWidgets.QMainWindow):
             lambda: self.send_command("*GET:ALARM", "ALARM")
         )
         self.scheduleSaveButton.clicked.connect(self.save_schedule_item)
-        self.scheduleResetButton.clicked.connect(self.reset_schedule_form)
         self.scheduleDeleteButton.clicked.connect(self.delete_selected_schedule)
         self.scheduleTable.itemSelectionChanged.connect(self.load_selected_schedule)
         self.scheduleTypeCombo.currentIndexChanged.connect(self._sync_schedule_type_ui)
