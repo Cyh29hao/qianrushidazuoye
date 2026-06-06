@@ -1,0 +1,15 @@
+[
+  {
+    "item_id": "schedule-1780683115938",
+    "title": "NBA总决赛",
+    "board_label": "NBAFINAL",
+    "trigger_time": "09:00:00",
+    "schedule_type": "once",
+    "weekdays": [],
+    "target_date": "2026-06-06",
+    "ring_type": "WAKE",
+    "enabled": true,
+    "voice_text": "",
+    "last_triggered_slot": ""
+  }
+]

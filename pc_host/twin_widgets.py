@@ -274,7 +274,7 @@ class DigitalTwinWidget(QtWidgets.QWidget):
             ("FORMAT", "SW7\nFORMAT", 0, 2),
             ("SPEED", "SW6\nSPEED", 0, 3),
             ("DISP", "SW5\nDISP", 0, 4),
-            ("USER1", "SW1\nUSER1/MODE", 1, 0),
+            ("USER1", "SW1\nUSER1/DN", 1, 0),
             ("FUNC", "SW1\nFUNC", 1, 1),
             ("SHIFT", "SW2\nSHIFT", 1, 2),
             ("ADD", "SW3\nADD", 1, 3),
