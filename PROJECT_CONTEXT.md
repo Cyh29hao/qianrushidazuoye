@@ -1,6 +1,6 @@
 # PROJECT_CONTEXT - 智能时钟联网系统
 
-最后更新：2026-06-08
+最后更新：2026-06-09
 
 本文件给新的 AI 对话快速接手使用，只记录当前最终状态、目录结构、要求、已实现功能、已知问题和下一步计划。不要把聊天记录、推理过程或临时争论写进来。后续以最新代码和本文件为准；旧任务文档可能已经过时，需要复核当前实现。
 
@@ -19,7 +19,9 @@
   - 已比对误认旧目录与真版本的关键源码：除 `pc_host/app.py` 外，`mcu/src/main.c`、`pc_host/protocol.py`、`extension_services.py`、`extension_store.py`、`run_extension_checks.py`、`twin_widgets.py`、`requirements.txt`、`README.md` 和主要 docs 哈希一致。不要用误认旧目录的 `pc_host/app.py` 覆盖真版本。
   - `.gitignore` 已排除根目录 `.venv/`、历史对话材料、运行缓存、Keil 本机 GUI 配置和编译中间目录，避免误传。
   - `docs/dialogue_with_codex.md` 和 `docs/summary_dialogue_with_codex.md` 是 Gemini/历史对话材料，已忽略；不要把它们当作正式报告。
-  - `PROJECT_CONTEXT.md`、`AGENTS.md`、`CHANGELOG_AI.md`、`docs/大作业要求/` 是接手/规则/变更记录/课程资料，准备纳入 GitHub 上传候选。
+  - `PROJECT_CONTEXT.md`、`AGENTS.md`、`AGENT.md`、`CHANGELOG_AI.md`、`docs/大作业要求/` 是接手/规则/变更记录/课程资料，准备纳入 GitHub 上传候选。
+  - 2026-06-09 UI 收口：PC 黑夜模式已补齐状态栏/页脚、滚动条、下拉框弹出列表、复选框、日志区、信息条和表格的深色主题；按钮保持统一蓝色主按钮；主页数据看板保持 6 张卡片布局；串口状态保留在“串口连接”模块。
+  - OTA 已从当前 PC 界面和最终说明文档中移除；历史聊天归档中可能仍出现 OTA 旧讨论，但不作为当前功能。
 
 ## 目录结构
 
@@ -66,6 +68,7 @@
 ├─ README.md
 ├─ PROJECT_CONTEXT.md
 ├─ CHANGELOG_AI.md
+├─ AGENT.md
 └─ AGENTS.md
 ```
 
@@ -131,6 +134,9 @@
 - 多日程提醒、板载单次闹钟、铃声类型、事件持久化。
 - 日程新增默认启用；启停入口保留为双击日程项；语音文本留空则不播报。
 - 数据看板：连接/显示、城市/时间、天气、昼夜模式、日程统计、下次提醒。
+- 主页数据看板已改为卡片式布局：当前时间、日期与星期、城市/天气、昼夜模式、下次提醒、系统状态；串口状态不再放入数据看板。
+- 白天/黑夜主题已统一覆盖主窗口背景、分组框、卡片、输入框、下拉框、表格、日志区、滚动条、状态栏/页脚和按钮状态。
+- 调试与测试页已删除 OTA 预留模块。
 - 自动化检查入口：真串口检查与 `--host-only` 离线检查；界面/CLI 可显示预计耗时、逐项 OK/FAIL/SKIP 和失败排查提示。
 - PC 数字孪生已支持 READY 后本地播放同款开机镜像帧，并在收到真实 `*EVT:DISP` 后切回实物跟随；`*EVT:KEY` 会高亮对应虚拟按键约 200ms。
 - 持久化：`config.json`、`schedules.json`、`runtime_state.json`、`logs/events.jsonl`。
@@ -143,7 +149,7 @@
 - 日程 UI 文案仍需收口：当前活动代码仍是 `单次日期`、`新增 / 更新提醒`，未完全变成旧任务书要求的 `单次执行`、按选中状态显示 `新增提醒/更新提醒/删除提醒`。
 - `pc_host/requirements.txt` 目前只有 PyQt5 与 pyserial，和新增参考文件建议的 Python 3.11.9、PyQt5 5.15.9、ntplib/requests/astral/matplotlib 不完全一致；当前实现使用标准库和 Open-Meteo 路线，不要贸然加依赖。
 - MCU 本轮 7SEG、开机帧、1Hz 事件和 `USER1` 语义改动尚未用 Keil/真板编译烧录验证；当前本机只找到 MinGW `gcc`，未发现 `UV4`/`armclang`/`armcc`/`arm-none-eabi-gcc`。
-- 当前 `.venv` 缺 PyQt5，无法在本机完成 GUI 离屏烟测；Python 语法检查、host-only 自动测试、7SEG 映射断言和 MCU `gcc -fsyntax-only` 已通过。
+- 当前 PC 端 `.venv` 可运行 PyQt5；已用 Windows 原生 Qt 平台截图检查主页、系统设置、闹钟与日程管理、调试与测试的白天/黑夜模式。Qt offscreen 平台可能不渲染部分文字，最终视觉判断优先使用 Windows 原生平台或真实窗口。
 - 正式提交材料尚未准备：未发现简介 PDF/Word、演示视频/PPT、正式截图集、`mcu/obj/*.axf` 可烧写产物。用户当前说暂时不着急提交材料，先把程序修到位。
 - `docs/next-step-ui-and-host-fixes.md` 是旧任务书，里面的问题可能已经部分修复，不能直接当作当前 bug 清单。
 
@@ -153,6 +159,6 @@
 
 1. 每次改动前先看 `git status`、`git diff` 和最新 `pc_host/app.py`，确认 Gemini 或用户已有改动。当前开发只在 `真正的最新版` 目录进行。
 2. 下一步优先做硬件验证：Keil 编译、烧录 S800，实测 `USER1` 短按触发 PC 对时、长按切 DAY/NIGHT、`USER2` 天气短显、`FORMAT RIGHT` 与事件同步。
-3. 再做上位机小 UI/交互收口：日程按钮显隐、文案、日志高度、下拉白底、无串口模式日志语义。
+3. 再做上位机小 UI/交互收口：日程按钮显隐、文案、日志高度、无串口模式日志语义；继续保持黑夜模式无白底、按钮统一蓝色。
 4. 每轮改完至少运行 Python 编译检查和 host-only 检查；涉及 UI 时做离屏启动/截图检查；涉及 MCU 时做 Keil 或可替代语法/构建验证。
 5. 用户明确同意上传 GitHub 时，先给出上传文件清单和操作计划；确认后再执行，并同步更新 `PROJECT_CONTEXT.md` 与 `CHANGELOG_AI.md`。

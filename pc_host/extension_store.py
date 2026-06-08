@@ -34,6 +34,7 @@ class AppConfig:
     latitude: float = 31.2304
     longitude: float = 121.4737
     timezone: str = "Asia/Shanghai"
+    user_name: str = "用户"
     auto_day_night: bool = True
     theme_follow_mode: bool = True
     voice_enabled: bool = True
@@ -51,6 +52,7 @@ class RuntimeState:
     display_on: bool = True
     format: str = "LEFT"
     mode: str = "DAY"
+    view_mode: str = "TIME"
     alarm_enabled: bool = False
     alarm_time: str = "07:30:00"
     led_mask: int = 0x00
@@ -139,10 +141,14 @@ def load_runtime_state(base_dir: Path) -> RuntimeState:
         return state
 
     defaults = RuntimeState()
+    view_mode = str(payload.get("view_mode", defaults.view_mode) or defaults.view_mode).upper()
+    if view_mode not in {"TIME", "DATE", "WEEKDAY", "YEAR"}:
+        view_mode = defaults.view_mode
     return RuntimeState(
         display_on=bool(payload.get("display_on", defaults.display_on)),
         format=str(payload.get("format", defaults.format) or defaults.format).upper(),
         mode=str(payload.get("mode", defaults.mode) or defaults.mode).upper(),
+        view_mode=view_mode,
         alarm_enabled=bool(payload.get("alarm_enabled", defaults.alarm_enabled)),
         alarm_time=str(payload.get("alarm_time", defaults.alarm_time) or defaults.alarm_time),
         led_mask=int(payload.get("led_mask", defaults.led_mask)) & 0xFF,
@@ -282,7 +288,9 @@ def schedule_trigger_matches(item: ScheduleItem, now: datetime) -> bool:
         return False
 
     hh, mm, ss = parse_clock_hms(item.trigger_time)
-    if (now.hour, now.minute, now.second) != (hh, mm, ss):
+    if (now.hour, now.minute) != (hh, mm):
+        return False
+    if now.second < ss:
         return False
 
     if item.schedule_type == "once":
@@ -293,6 +301,8 @@ def schedule_trigger_matches(item: ScheduleItem, now: datetime) -> bool:
 
 def mark_schedule_triggered(item: ScheduleItem, now: datetime) -> None:
     item.last_triggered_slot = now.strftime("%Y-%m-%d %H:%M")
+    if item.schedule_type == "once":
+        item.enabled = False
 
 
 def parse_clock_hms(text: str) -> tuple[int, int, int]:
@@ -313,6 +323,7 @@ def _normalize_config(payload: dict[str, Any]) -> AppConfig:
         latitude=float(payload.get("latitude", defaults.latitude)),
         longitude=float(payload.get("longitude", defaults.longitude)),
         timezone=str(payload.get("timezone", defaults.timezone) or defaults.timezone),
+        user_name=str(payload.get("user_name", defaults.user_name) or defaults.user_name),
         auto_day_night=bool(payload.get("auto_day_night", defaults.auto_day_night)),
         theme_follow_mode=bool(payload.get("theme_follow_mode", defaults.theme_follow_mode)),
         voice_enabled=bool(payload.get("voice_enabled", defaults.voice_enabled)),

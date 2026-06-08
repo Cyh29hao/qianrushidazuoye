@@ -5,7 +5,8 @@
 ## 接手顺序
 
 1. 先读 `PROJECT_CONTEXT.md`。
-2. 再读最新代码和关键文档，尤其是：
+2. 再读 `AGENT.md`，尤其是 UI 白天/黑夜主题、按钮、滚动条、状态栏和 OTA 禁止露出的规则。
+3. 再读最新代码和关键文档，尤其是：
    - `mcu/src/main.c`
    - `pc_host/app.py`
    - `pc_host/protocol.py`

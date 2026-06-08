@@ -4,9 +4,11 @@
     "title": "NBA总决赛",
     "board_label": "NBAFINAL",
     "trigger_time": "09:00:00",
-    "schedule_type": "once",
-    "weekdays": [],
-    "target_date": "2026-06-06",
+    "schedule_type": "weekly",
+    "weekdays": [
+      1
+    ],
+    "target_date": "",
     "ring_type": "WAKE",
     "enabled": true,
     "voice_text": "",

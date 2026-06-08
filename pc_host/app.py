@@ -12,11 +12,16 @@ from pathlib import Path
 
 from bootstrap_qt import configure_qt_runtime
 
-APP_DIR = Path(__file__).resolve().parent
+APP_DIR = (
+    Path(sys.executable).resolve().parent
+    if getattr(sys, "frozen", False)
+    else Path(__file__).resolve().parent
+)
+BUNDLE_DIR = Path(getattr(sys, "_MEIPASS", APP_DIR))
 QT_RUNTIME = configure_qt_runtime(APP_DIR)
 APP_VERSION = "v2.0"
 GITHUB_URL = "https://github.com/Cyh29hao"
-LOGO_PATH = APP_DIR / "assets" / "clock_logo.svg"
+LOGO_PATH = BUNDLE_DIR / "assets" / "clock_logo.svg"
 LOCAL_MODE_LABEL = "不使用串口"
 
 import serial
@@ -26,6 +31,7 @@ from serial.tools import list_ports
 from extension_services import (
     build_weather_led_mask,
     build_weather_token,
+    format_utc_offset,
     format_weather_summary,
     fetch_ntp_time,
     fetch_weather_snapshot,
@@ -140,6 +146,7 @@ class CollapsibleNavWidget(QtWidgets.QWidget):
 
 class MainWindow(QtWidgets.QMainWindow):
     weather_refresh_finished = QtCore.pyqtSignal(object, object, bool)
+    ntp_sync_finished = QtCore.pyqtSignal(object, object, str)
     test_point_finished = QtCore.pyqtSignal(str)
     test_run_finished = QtCore.pyqtSignal(str, bool)
 
@@ -179,7 +186,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self.latest_event_text = "等待数据"
         self.max_log_blocks = 400
         self.sync_in_progress = False
+        self.ntp_fetch_in_progress = False
         self.sync_snapshot: datetime | None = None
+        self.runtime_shadow_base_iso = ""
+        self.runtime_shadow_base_datetime: datetime | None = None
+        self.runtime_shadow_base_monotonic = 0.0
         self.weather_refresh_in_progress = False
         self.last_weather_refresh_at: datetime | None = None
         self.last_mode_auto_applied = ""
@@ -199,9 +210,14 @@ class MainWindow(QtWidgets.QMainWindow):
         self.pending_mode_deadline = 0.0
         self.board_ready_seen = False
         self.local_display_override_text = ""
+        self.local_display_override_started = 0.0
         self.local_display_override_until = 0.0
         self.local_display_override_led_mask: int | None = None
+        self.local_view_scroll_key = ""
+        self.local_view_scroll_started = 0.0
         self.boot_mirror_generation = 0
+        self.startup_sync_pending = False
+        self.syncing_extension_widgets = False
         self.preferred_port_name = ""
         self.manual_port_choice_made = False
         self.ring_names = [
@@ -223,6 +239,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._refine_layout()
         self._wire_signals()
         self.weather_refresh_finished.connect(self._finish_weather_refresh)
+        self.ntp_sync_finished.connect(self._finish_ntp_sync)
         self.test_point_finished.connect(self._append_test_output_line)
         self.test_run_finished.connect(self._finish_test_run)
 
@@ -402,6 +419,9 @@ class MainWindow(QtWidgets.QMainWindow):
     def _set_runtime_datetime(self, moment: datetime) -> None:
         clean = moment.replace(microsecond=0)
         self.runtime_state.board_datetime_iso = clean.isoformat(sep=" ")
+        self.runtime_shadow_base_iso = self.runtime_state.board_datetime_iso
+        self.runtime_shadow_base_datetime = clean
+        self.runtime_shadow_base_monotonic = time.monotonic()
         self.runtime_state.shadow_saved_at_utc_iso = datetime.utcnow().replace(
             microsecond=0
         ).isoformat(sep=" ")
@@ -412,6 +432,15 @@ class MainWindow(QtWidgets.QMainWindow):
         if raw:
             try:
                 board_time = datetime.fromisoformat(raw)
+                if (
+                    self.runtime_shadow_base_datetime is not None
+                    and self.runtime_shadow_base_iso == raw
+                ):
+                    elapsed = max(
+                        0,
+                        int(time.monotonic() - self.runtime_shadow_base_monotonic),
+                    )
+                    return self.runtime_shadow_base_datetime + timedelta(seconds=elapsed)
                 saved_raw = self.runtime_state.shadow_saved_at_utc_iso.strip()
                 if saved_raw:
                     try:
@@ -419,9 +448,18 @@ class MainWindow(QtWidgets.QMainWindow):
                     except ValueError:
                         return board_time
                     else:
-                        elapsed = int((datetime.utcnow() - saved_at).total_seconds())
-                        if elapsed > 0:
-                            return board_time + timedelta(seconds=elapsed)
+                        elapsed = max(
+                            0,
+                            int((datetime.utcnow() - saved_at).total_seconds()),
+                        )
+                        current = board_time + timedelta(seconds=elapsed)
+                        self.runtime_shadow_base_iso = raw
+                        self.runtime_shadow_base_datetime = current
+                        self.runtime_shadow_base_monotonic = time.monotonic()
+                        return current
+                self.runtime_shadow_base_iso = raw
+                self.runtime_shadow_base_datetime = board_time
+                self.runtime_shadow_base_monotonic = time.monotonic()
                 return board_time
             except ValueError:
                 pass
@@ -429,8 +467,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._set_runtime_datetime(fallback)
         return fallback
 
-    def _visible_text_to_frame(self, visible: str) -> tuple[str, int]:
-        oriented = visible[::-1] if self.runtime_state.format == "RIGHT" else visible
+    def _oriented_text_to_frame(self, oriented: str) -> tuple[str, int]:
         chars: list[str] = []
         dp_mask = 0
         for ch in oriented:
@@ -447,6 +484,10 @@ class MainWindow(QtWidgets.QMainWindow):
         token = "".join("_" if ch == " " else ch for ch in chars[:8])
         return token, dp_mask & 0xFF
 
+    def _visible_text_to_frame(self, visible: str) -> tuple[str, int]:
+        oriented = visible[::-1] if self.runtime_state.format == "RIGHT" else visible
+        return self._oriented_text_to_frame(oriented)
+
     def _set_local_display_override(
         self,
         visible_text: str,
@@ -454,8 +495,102 @@ class MainWindow(QtWidgets.QMainWindow):
         led_mask: int | None = None,
     ) -> None:
         self.local_display_override_text = visible_text
+        self.local_display_override_started = time.monotonic()
         self.local_display_override_until = time.monotonic() + duration_s
         self.local_display_override_led_mask = led_mask
+
+    def _message_display_duration_s(self, text: str) -> float:
+        visible_len = max(1, len(text.strip()))
+        if visible_len <= 8:
+            return 5.0
+        return 8.0
+
+    def _scroll_leg_count(self, limit: int) -> int:
+        if limit <= 0:
+            return 0
+        if limit <= 1:
+            return 1
+        if limit <= 5:
+            return 3
+        if limit <= 10:
+            return 2
+        return 1
+
+    def _scroll_max_step(self, limit: int) -> int:
+        legs = self._scroll_leg_count(limit)
+        if legs <= 0:
+            return 0
+        return legs * (limit + 1)
+
+    def _scroll_offset_for_step(self, step: int, limit: int) -> int:
+        if limit <= 0:
+            return 0
+        max_step = self._scroll_max_step(limit)
+        step = min(max(0, step), max_step)
+        if step == 0:
+            return 0
+
+        step -= 1
+        leg = step // (limit + 1)
+        in_leg = step % (limit + 1)
+        legs = self._scroll_leg_count(limit)
+        if leg >= legs:
+            leg = max(0, legs - 1)
+            in_leg = limit
+        progress = in_leg + 1 if in_leg < limit else limit
+        if leg % 2:
+            return limit - progress
+        return progress
+
+    def _finite_text_frame(self, text: str, started_at: float, duration_s: float) -> tuple[str, int]:
+        if len(text) <= 8:
+            return self._visible_text_to_frame(text)
+        elapsed = max(0.0, time.monotonic() - started_at)
+        limit = max(0, len(text) - 8)
+        duration = min(10.0, max(5.0, duration_s))
+        max_step = self._scroll_max_step(limit)
+        interval = duration / max(1, max_step + 1)
+        step = min(max_step, int(elapsed / max(0.1, interval)))
+        offset = self._scroll_offset_for_step(step, limit)
+        if self.runtime_state.format == "RIGHT":
+            oriented = text[::-1]
+            start = max(0, limit - offset)
+        else:
+            oriented = text
+            start = offset
+        return self._oriented_text_to_frame(oriented[start : start + 8])
+
+    def _local_override_frame(self) -> tuple[str, int]:
+        text = self.local_display_override_text
+        duration = self.local_display_override_until - self.local_display_override_started
+        return self._finite_text_frame(text, self.local_display_override_started, duration)
+
+    def _weekday_english_name(self, moment: datetime) -> str:
+        return [
+            "MONDAY",
+            "TUESDAY",
+            "WEDNESDAY",
+            "THURSDAY",
+            "FRIDAY",
+            "SATURDAY",
+            "SUNDAY",
+        ][moment.weekday()]
+
+    def _weekday_chinese_name(self, moment: datetime) -> str:
+        return ["周一", "周二", "周三", "周四", "周五", "周六", "周日"][moment.weekday()]
+
+    def _local_view_frame(self, visible: str, view_mode: str) -> tuple[str, int]:
+        if view_mode != "WEEKDAY" or len(visible) <= 8:
+            return self._visible_text_to_frame(visible)
+        key = f"{view_mode}:{visible}:{self.runtime_state.format}"
+        if self.local_view_scroll_key != key:
+            self.local_view_scroll_key = key
+            self.local_view_scroll_started = time.monotonic()
+        return self._finite_text_frame(
+            visible,
+            self.local_view_scroll_started,
+            self._message_display_duration_s(visible),
+        )
 
     def _current_local_display_frame(self) -> tuple[str, int]:
         if not self.runtime_state.display_on:
@@ -463,12 +598,22 @@ class MainWindow(QtWidgets.QMainWindow):
         now_monotonic = time.monotonic()
         if self.local_display_override_until and now_monotonic > self.local_display_override_until:
             self.local_display_override_text = ""
+            self.local_display_override_started = 0.0
             self.local_display_override_until = 0.0
             self.local_display_override_led_mask = None
         if self.local_display_override_text:
-            return self._visible_text_to_frame(self.local_display_override_text)
+            return self._local_override_frame()
         board_time = self._get_runtime_datetime()
-        if self.runtime_state.mode == "NIGHT":
+        view_mode = (getattr(self.runtime_state, "view_mode", "TIME") or "TIME").upper()
+        if view_mode not in {"TIME", "DATE", "WEEKDAY", "YEAR"}:
+            view_mode = "TIME"
+        if view_mode == "DATE":
+            visible = f"{board_time.year % 100:02d}.{board_time.month:02d}.{board_time.day:02d}"
+        elif view_mode == "WEEKDAY":
+            visible = self._weekday_english_name(board_time)
+        elif view_mode == "YEAR":
+            visible = f"{board_time.year:04d}.{board_time.month:02d}{board_time.day:02d}"
+        elif self.runtime_state.mode == "NIGHT":
             visible = f"{board_time.hour:02d}.{board_time.minute:02d}"
         else:
             visible = (
@@ -476,7 +621,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 f"{board_time.minute:02d}."
                 f"{board_time.second:02d}"
             )
-        return self._visible_text_to_frame(visible)
+        return self._local_view_frame(visible, view_mode)
 
     def _current_local_led_mask(self) -> int:
         if not self.runtime_state.display_on:
@@ -582,6 +727,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._refresh_local_twin_frame()
         self.status_mode.setText(f"MODE: {self.runtime_state.mode}")
         self._refresh_theme_from_mode()
+        self._refresh_single_alarm_ui()
 
     def _selected_zone_now(self, utc_moment: datetime | None = None) -> datetime:
         place = self._active_place()
@@ -607,7 +753,27 @@ class MainWindow(QtWidgets.QMainWindow):
             self.placeSlotCombo.addItem(self._current_place_label(place))
         self.placeSlotCombo.setCurrentIndex(self.config.active_place_index)
         self.placeSlotCombo.blockSignals(False)
-        self.last_selected_zone_time = self._selected_zone_now().strftime("%Y-%m-%d %H:%M:%S")
+        self._refresh_network_time_label()
+
+    def _active_place_time_context(self, utc_moment: datetime | None = None) -> tuple[SavedPlace, datetime, int]:
+        place = self._active_place()
+        zone_now = self._selected_zone_now(utc_moment)
+        offset_seconds = int(zone_now.utcoffset().total_seconds()) if zone_now.utcoffset() else place.utc_offset_seconds
+        return place, zone_now, offset_seconds
+
+    def _refresh_network_time_label(self) -> None:
+        place, zone_now, offset_seconds = self._active_place_time_context()
+        self.last_selected_zone_time = zone_now.strftime("%Y-%m-%d %H:%M:%S")
+        time_text = (
+            f"当前时间: {self.last_selected_zone_time} | "
+            f"时区: {place.timezone} ({format_utc_offset(offset_seconds)})"
+        )
+        if hasattr(self, "networkTimeLabel"):
+            self.networkTimeLabel.setText(time_text)
+        if hasattr(self, "sunriseSunsetLabel"):
+            self.sunriseSunsetLabel.setText(
+                f"日出/日落: {self.sunrise_text} / {self.sunset_text}"
+            )
 
     def _save_current_place_to_config(self) -> None:
         place = self._active_place()
@@ -664,6 +830,16 @@ class MainWindow(QtWidgets.QMainWindow):
         if age_minutes == 1:
             return "1 分钟前更新"
         return f"{age_minutes} 分钟前更新"
+
+    def _greeting_text(self, now: datetime) -> str:
+        if now.hour < 11:
+            period = "早上"
+        elif now.hour < 18:
+            period = "中午"
+        else:
+            period = "晚上"
+        name = (self.config.user_name or "用户").strip() or "用户"
+        return f"{period}好，{name}！"
 
     def _next_single_alarm_time(self, now: datetime) -> datetime | None:
         if self.last_alarm in {"OFF", "RINGING", ""}:
@@ -723,6 +899,26 @@ class MainWindow(QtWidgets.QMainWindow):
         when, label = min(candidates, key=lambda pair: pair[0])
         return label, when
 
+    def _palette_for_colors(self, background: str, foreground: str) -> QtGui.QPalette:
+        palette = QtGui.QPalette()
+        bg = QtGui.QColor(background)
+        fg = QtGui.QColor(foreground)
+        for role in (
+            QtGui.QPalette.Window,
+            QtGui.QPalette.Base,
+            QtGui.QPalette.AlternateBase,
+            QtGui.QPalette.Button,
+        ):
+            palette.setColor(role, bg)
+        for role in (
+            QtGui.QPalette.WindowText,
+            QtGui.QPalette.Text,
+            QtGui.QPalette.ButtonText,
+            QtGui.QPalette.ToolTipText,
+        ):
+            palette.setColor(role, fg)
+        return palette
+
     def _apply_theme(self) -> None:
         night = self.config.theme_follow_mode and self.last_mode == "NIGHT"
         palette = {
@@ -734,12 +930,17 @@ class MainWindow(QtWidgets.QMainWindow):
             "button": "#1f5b8c",
             "button_hover": "#2b76b3",
             "button_pressed": "#174969",
+            "button_disabled": "#8ba9c3",
             "input_bg": "#fcfaf7",
             "input_border": "#d7d0c6",
             "chip_bg": "#eef5fb",
             "chip_border": "#c5d7e8",
             "chip_text": "#234a70",
             "tab_bg": "#e5edf5",
+            "status_bg": "#fffdfa",
+            "scrollbar_bg": "#ebe4da",
+            "scrollbar_handle": "#b7cadb",
+            "scrollbar_handle_hover": "#96b5cf",
         }
         if night:
             palette.update(
@@ -752,12 +953,17 @@ class MainWindow(QtWidgets.QMainWindow):
                     "button": "#255f8c",
                     "button_hover": "#3477aa",
                     "button_pressed": "#194766",
+                    "button_disabled": "#405468",
                     "input_bg": "#1d2a38",
                     "input_border": "#445365",
                     "chip_bg": "#233345",
                     "chip_border": "#445365",
                     "chip_text": "#dbe7f2",
                     "tab_bg": "#2b3c4d",
+                    "status_bg": "#151e27",
+                    "scrollbar_bg": "#18212b",
+                    "scrollbar_handle": "#516477",
+                    "scrollbar_handle_hover": "#667b90",
                 }
             )
         self.setStyleSheet(
@@ -770,18 +976,23 @@ class MainWindow(QtWidgets.QMainWindow):
                 font-size: 13px;
                 color: {palette['text']};
             }}
+            QWidget#centralwidget {{
+                background: {palette['background']};
+            }}
             QGroupBox {{
                 background: {palette['group_bg']};
                 border: 1px solid {palette['group_border']};
-                border-radius: 10px;
-                margin-top: 16px;
+                border-radius: 8px;
+                margin-top: 26px;
                 font-weight: 700;
             }}
             QGroupBox::title {{
                 subcontrol-origin: margin;
                 subcontrol-position: top left;
-                left: 12px;
-                padding: 1px 6px 0 6px;
+                left: 14px;
+                top: 0px;
+                padding: 0 8px 2px 8px;
+                background: {palette['background']};
                 color: {palette['title']};
             }}
             QPushButton, QToolButton {{
@@ -801,7 +1012,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 background: {palette['button_pressed']};
             }}
             QPushButton:disabled, QToolButton:disabled {{
-                background: {palette['button']};
+                background: {palette['button_disabled']};
                 color: rgba(255, 255, 255, 0.55);
             }}
             QLineEdit, QComboBox, QDateEdit, QTimeEdit, QSpinBox, QTextEdit {{
@@ -820,19 +1031,52 @@ class MainWindow(QtWidgets.QMainWindow):
                 border-bottom-right-radius: 8px;
                 subcontrol-origin: border;
                 subcontrol-position: top right;
-                width: 24px;
+                width: 28px;
             }}
-            QSpinBox::up-button, QSpinBox::down-button {{
+            QComboBox::down-arrow, QDateEdit::down-arrow, QTimeEdit::down-arrow {{
+                image: none;
+                width: 0px;
+                height: 0px;
+                border-left: 5px solid transparent;
+                border-right: 5px solid transparent;
+                border-top: 6px solid {palette['text']};
+                margin-right: 8px;
+            }}
+            QComboBox QAbstractItemView {{
+                background: {palette['input_bg']};
+                color: {palette['text']};
+                border: 1px solid {palette['input_border']};
+                selection-background-color: {palette['button']};
+                selection-color: white;
+                outline: none;
+            }}
+            QAbstractSpinBox::up-button, QAbstractSpinBox::down-button {{
                 background: {palette['input_bg']};
                 border-left: 1px solid {palette['input_border']};
                 subcontrol-origin: border;
-                width: 24px;
+                width: 28px;
             }}
-            QSpinBox::up-button {{
+            QAbstractSpinBox::up-button {{
                 border-top-right-radius: 8px;
             }}
-            QSpinBox::down-button {{
+            QAbstractSpinBox::down-button {{
                 border-bottom-right-radius: 8px;
+            }}
+            QAbstractSpinBox::up-arrow {{
+                image: none;
+                width: 0px;
+                height: 0px;
+                border-left: 4px solid transparent;
+                border-right: 4px solid transparent;
+                border-bottom: 5px solid {palette['text']};
+            }}
+            QAbstractSpinBox::down-arrow {{
+                image: none;
+                width: 0px;
+                height: 0px;
+                border-left: 4px solid transparent;
+                border-right: 4px solid transparent;
+                border-top: 5px solid {palette['text']};
             }}
             QComboBox[stateField="true"] {{
                 padding-right: 8px;
@@ -899,6 +1143,57 @@ class MainWindow(QtWidgets.QMainWindow):
                 color: {palette['text']};
                 selection-background-color: {palette['button']};
                 selection-color: white;
+            }}
+            QScrollArea, QAbstractScrollArea {{
+                border: none;
+                background: {palette['background']};
+            }}
+            QScrollArea > QWidget > QWidget {{
+                background: {palette['background']};
+            }}
+            QScrollBar:vertical {{
+                background: {palette['scrollbar_bg']};
+                width: 12px;
+                margin: 0px;
+                border: none;
+            }}
+            QScrollBar::handle:vertical {{
+                background: {palette['scrollbar_handle']};
+                min-height: 28px;
+                border-radius: 6px;
+            }}
+            QScrollBar::handle:vertical:hover {{
+                background: {palette['scrollbar_handle_hover']};
+            }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
+                background: transparent;
+                border: none;
+                height: 0px;
+            }}
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
+                background: transparent;
+            }}
+            QScrollBar:horizontal {{
+                background: {palette['scrollbar_bg']};
+                height: 12px;
+                margin: 0px;
+                border: none;
+            }}
+            QScrollBar::handle:horizontal {{
+                background: {palette['scrollbar_handle']};
+                min-width: 28px;
+                border-radius: 6px;
+            }}
+            QScrollBar::handle:horizontal:hover {{
+                background: {palette['scrollbar_handle_hover']};
+            }}
+            QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{
+                background: transparent;
+                border: none;
+                width: 0px;
+            }}
+            QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {{
+                background: transparent;
             }}
             QLabel#twinTitle {{
                 font-size: 10px;
@@ -967,6 +1262,17 @@ class MainWindow(QtWidgets.QMainWindow):
                 background: {palette['background']};
             }}
             QStatusBar {{
+                background: {palette['status_bg']};
+                color: {palette['text']};
+                border-top: 1px solid {palette['group_border']};
+            }}
+            QStatusBar::item {{
+                border-left: 1px solid {palette['group_border']};
+                padding-left: 6px;
+                padding-right: 6px;
+            }}
+            QStatusBar QLabel {{
+                background: transparent;
                 color: {palette['text']};
             }}
             QToolButton {{
@@ -980,7 +1286,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 font-weight: 600;
             }}
             QToolButton:disabled {{
-                background: {palette['button']};
+                background: {palette['button_disabled']};
                 color: rgba(255, 255, 255, 0.55);
             }}
             """
@@ -988,11 +1294,60 @@ class MainWindow(QtWidgets.QMainWindow):
         self._apply_dynamic_theme_overrides(night, palette)
 
     def _apply_dynamic_theme_overrides(self, night: bool, palette: dict[str, str]) -> None:
+        scrollbar_style = (
+            f"QScrollBar:vertical {{"
+            f"background: {palette['scrollbar_bg']};"
+            f"width: 12px;"
+            f"margin: 0px;"
+            f"border: none;"
+            f"}}"
+            f"QScrollBar::handle:vertical {{"
+            f"background: {palette['scrollbar_handle']};"
+            f"min-height: 28px;"
+            f"border-radius: 6px;"
+            f"}}"
+            f"QScrollBar::handle:vertical:hover {{"
+            f"background: {palette['scrollbar_handle_hover']};"
+            f"}}"
+            f"QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{"
+            f"background: transparent;"
+            f"border: none;"
+            f"height: 0px;"
+            f"}}"
+            f"QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{"
+            f"background: transparent;"
+            f"}}"
+            f"QScrollBar:horizontal {{"
+            f"background: {palette['scrollbar_bg']};"
+            f"height: 12px;"
+            f"margin: 0px;"
+            f"border: none;"
+            f"}}"
+            f"QScrollBar::handle:horizontal {{"
+            f"background: {palette['scrollbar_handle']};"
+            f"min-width: 28px;"
+            f"border-radius: 6px;"
+            f"}}"
+            f"QScrollBar::handle:horizontal:hover {{"
+            f"background: {palette['scrollbar_handle_hover']};"
+            f"}}"
+            f"QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{"
+            f"background: transparent;"
+            f"border: none;"
+            f"width: 0px;"
+            f"}}"
+            f"QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {{"
+            f"background: transparent;"
+            f"}}"
+        )
         list_style = (
             f"background: {palette['input_bg']};"
             f"color: {palette['text']};"
             f"border: 1px solid {palette['input_border']};"
             f"border-radius: 8px;"
+            f"selection-background-color: {palette['button']};"
+            f"selection-color: white;"
+            f"{scrollbar_style}"
         )
         field_style = (
             f"background: {palette['input_bg']};"
@@ -1001,6 +1356,121 @@ class MainWindow(QtWidgets.QMainWindow):
             f"border-radius: 8px;"
             "padding: 6px 10px;"
         )
+        field_line_style = (
+            f"background: transparent;"
+            f"color: {palette['text']};"
+            "border: none;"
+            "padding: 0 4px;"
+        )
+        combo_style = (
+            f"QComboBox {{"
+            f"background: {palette['input_bg']};"
+            f"color: {palette['text']};"
+            f"border: 1px solid {palette['input_border']};"
+            f"border-radius: 8px;"
+            f"padding: 6px 34px 6px 10px;"
+            f"min-height: 32px;"
+            f"}}"
+            f"QComboBox::drop-down {{"
+            f"background: {palette['input_bg']};"
+            f"border-left: 1px solid {palette['input_border']};"
+            f"border-top-right-radius: 8px;"
+            f"border-bottom-right-radius: 8px;"
+            f"subcontrol-origin: border;"
+            f"subcontrol-position: top right;"
+            f"width: 28px;"
+            f"}}"
+            f"QComboBox::down-arrow {{"
+            f"image: none;"
+            f"width: 0px;"
+            f"height: 0px;"
+            f"border-left: 5px solid transparent;"
+            f"border-right: 5px solid transparent;"
+            f"border-top: 6px solid {palette['text']};"
+            f"margin-right: 8px;"
+            f"}}"
+            f"QComboBox QAbstractItemView {{"
+            f"background: {palette['input_bg']};"
+            f"color: {palette['text']};"
+            f"border: 1px solid {palette['input_border']};"
+            f"selection-background-color: {palette['button']};"
+            f"selection-color: white;"
+            f"outline: none;"
+            f"}}"
+            f"{scrollbar_style}"
+        )
+        state_combo_style = (
+            f"QComboBox {{"
+            f"background: {palette['input_bg']};"
+            f"color: {palette['text']};"
+            f"border: 1px solid {palette['input_border']};"
+            f"border-radius: 8px;"
+            f"padding: 6px 10px;"
+            f"min-height: 32px;"
+            f"}}"
+            f"QComboBox::drop-down {{ width: 0px; border: none; }}"
+            f"QComboBox::down-arrow {{ image: none; width: 0px; height: 0px; }}"
+            f"QComboBox QAbstractItemView {{"
+            f"background: {palette['input_bg']};"
+            f"color: {palette['text']};"
+            f"selection-background-color: {palette['button']};"
+            f"selection-color: white;"
+            f"outline: none;"
+            f"}}"
+        )
+        spin_style = (
+            f"QDateEdit, QTimeEdit, QSpinBox {{"
+            f"background: {palette['input_bg']};"
+            f"color: {palette['text']};"
+            f"border: 1px solid {palette['input_border']};"
+            f"border-radius: 8px;"
+            f"padding: 6px 34px 6px 10px;"
+            f"min-height: 32px;"
+            f"}}"
+            f"QDateEdit::drop-down, QTimeEdit::drop-down {{"
+            f"background: {palette['input_bg']};"
+            f"border-left: 1px solid {palette['input_border']};"
+            f"border-top-right-radius: 8px;"
+            f"border-bottom-right-radius: 8px;"
+            f"subcontrol-origin: border;"
+            f"subcontrol-position: top right;"
+            f"width: 28px;"
+            f"}}"
+            f"QDateEdit::down-arrow, QTimeEdit::down-arrow {{"
+            f"image: none;"
+            f"width: 0px;"
+            f"height: 0px;"
+            f"border-left: 5px solid transparent;"
+            f"border-right: 5px solid transparent;"
+            f"border-top: 6px solid {palette['text']};"
+            f"margin-right: 8px;"
+            f"}}"
+            f"QAbstractSpinBox::up-button, QAbstractSpinBox::down-button {{"
+            f"background: {palette['input_bg']};"
+            f"border-left: 1px solid {palette['input_border']};"
+            f"subcontrol-origin: border;"
+            f"width: 28px;"
+            f"}}"
+            f"QAbstractSpinBox::up-button {{ border-top-right-radius: 8px; }}"
+            f"QAbstractSpinBox::down-button {{ border-bottom-right-radius: 8px; }}"
+            f"QAbstractSpinBox::up-arrow {{"
+            f"image: none;"
+            f"width: 0px;"
+            f"height: 0px;"
+            f"border-left: 4px solid transparent;"
+            f"border-right: 4px solid transparent;"
+            f"border-bottom: 5px solid {palette['text']};"
+            f"}}"
+            f"QAbstractSpinBox::down-arrow {{"
+            f"image: none;"
+            f"width: 0px;"
+            f"height: 0px;"
+            f"border-left: 4px solid transparent;"
+            f"border-right: 4px solid transparent;"
+            f"border-top: 5px solid {palette['text']};"
+            f"}}"
+            f"{scrollbar_style}"
+        )
         header_style = (
             f"background: {palette['chip_bg']};"
             f"color: {palette['chip_text']};"
@@ -1008,32 +1478,148 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         page_style = f"background: {palette['background']}; color: {palette['text']};"
         viewport_style = f"background: {palette['input_bg']}; color: {palette['text']};"
+        scroll_page_style = (
+            f"QScrollArea {{ background: {palette['background']}; border: none; }}"
+            f"QScrollArea > QWidget > QWidget {{ background: {palette['background']}; }}"
+            f"{scrollbar_style}"
+        )
+        def make_button_style(selector: str) -> str:
+            return (
+                f"{selector} {{"
+                f"background: {palette['button']};"
+                f"color: white;"
+                f"border: none;"
+                f"border-radius: 8px;"
+                f"padding: 7px 14px;"
+                f"min-height: 34px;"
+                f"font-weight: 700;"
+                f"font-size: 12px;"
+                f"text-align: center;"
+                f"}}"
+                f"{selector}:hover {{"
+                f"background: {palette['button_hover']};"
+                f"}}"
+                f"{selector}:pressed {{"
+                f"background: {palette['button_pressed']};"
+                f"}}"
+                f"{selector}:disabled {{"
+                f"background: {palette['button_disabled']};"
+                f"color: rgba(255,255,255,0.58);"
+                f"}}"
+            )
+        card_style = (
+            f"background: {palette['chip_bg']};"
+            f"border: 1px solid {palette['chip_border']};"
+            f"border-radius: 8px;"
+        )
+        card_title_style = (
+            f"color: {palette['chip_text']};"
+            f"background: transparent;"
+            f"border: none;"
+            f"font-size: 11px;"
+            f"font-weight: 700;"
+        )
+        card_value_style = (
+            f"color: {palette['title']};"
+            f"background: transparent;"
+            f"border: none;"
+            f"font-size: 20px;"
+            f"font-weight: 800;"
+        )
+        card_sub_style = (
+            f"color: {palette['chip_text']};"
+            f"background: transparent;"
+            f"border: none;"
+            f"font-size: 11px;"
+        )
+        card_greeting_style = (
+            f"color: {palette['title']};"
+            f"background: transparent;"
+            f"border: none;"
+            f"font-size: 18px;"
+            f"font-weight: 800;"
+        )
+        info_chip_style = (
+            f"background: {palette['chip_bg']};"
+            f"border: 1px solid {palette['chip_border']};"
+            f"border-radius: 8px;"
+            f"padding: 4px 8px;"
+            f"color: {palette['chip_text']};"
+            f"font-size: 11px;"
+        )
+        checkbox_style = (
+            f"QCheckBox {{"
+            f"background: transparent;"
+            f"color: {palette['text']};"
+            f"spacing: 6px;"
+            f"font-size: 11px;"
+            f"}}"
+            f"QCheckBox::indicator {{"
+            f"width: 14px;"
+            f"height: 14px;"
+            f"border: 1px solid {palette['input_border']};"
+            f"border-radius: 3px;"
+            f"background: {palette['input_bg']};"
+            f"}}"
+            f"QCheckBox::indicator:checked {{"
+            f"background: {palette['button']};"
+            f"border: 1px solid {palette['button_hover']};"
+            f"}}"
+            f"QCheckBox::indicator:disabled {{"
+            f"background: {palette['button_disabled']};"
+            f"border: 1px solid {palette['group_border']};"
+            f"}}"
+        )
+        status_bar_style = (
+            f"QStatusBar {{"
+            f"background: {palette['status_bg']};"
+            f"color: {palette['text']};"
+            f"border-top: 1px solid {palette['group_border']};"
+            f"}}"
+            f"QStatusBar::item {{"
+            f"border-left: 1px solid {palette['group_border']};"
+            f"padding-left: 6px;"
+            f"padding-right: 6px;"
+            f"}}"
+        )
+        status_label_style = (
+            f"background: transparent;"
+            f"color: {palette['text']};"
+            f"font-size: 12px;"
+        )
 
         for widget in self.findChildren(QtWidgets.QWidget, "sectionPageHost"):
             widget.setStyleSheet(page_style)
         for area in self.findChildren(QtWidgets.QScrollArea):
+            area.setStyleSheet(scroll_page_style)
             area.viewport().setStyleSheet(page_style)
+        for button_type in (QtWidgets.QPushButton, QtWidgets.QToolButton):
+            for button in self.findChildren(button_type):
+                if button.objectName() in {"accordionHeader", "accordionOptionButton"}:
+                    continue
+                button.setStyleSheet(make_button_style(button_type.__name__))
+                button.setCursor(QtGui.QCursor(QtCore.Qt.PointingHandCursor))
         for widget in self.findChildren(QtWidgets.QLineEdit):
             widget.setStyleSheet(field_style)
         for widget in self.findChildren(QtWidgets.QComboBox):
-            widget.setStyleSheet(field_style)
+            widget.setStyleSheet(
+                state_combo_style if widget.property("stateField") else combo_style
+            )
             if widget is getattr(self.ui, "portCombo", None) and widget.lineEdit() is not None:
                 widget.lineEdit().setStyleSheet(
-                    f"background: transparent;"
-                    f"color: {palette['text']};"
-                    "border: none;"
-                    "padding: 0 2px;"
+                    field_line_style
                 )
             if widget.view() is not None:
                 widget.view().setStyleSheet(list_style)
+                widget.view().viewport().setStyleSheet(viewport_style)
         for widget_type in (QtWidgets.QDateEdit, QtWidgets.QTimeEdit, QtWidgets.QSpinBox):
             for widget in self.findChildren(widget_type):
-                widget.setStyleSheet(field_style)
-                widget.setAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
+                widget.setStyleSheet(spin_style)
+                widget.setAlignment(QtCore.Qt.AlignCenter)
                 line_edit = widget.findChild(QtWidgets.QLineEdit)
                 if line_edit is not None:
-                    line_edit.setAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
-                    line_edit.setStyleSheet(field_style)
+                    line_edit.setAlignment(QtCore.Qt.AlignCenter)
+                    line_edit.setStyleSheet(field_line_style)
         for calendar in self.findChildren(QtWidgets.QCalendarWidget):
             calendar.setStyleSheet(
                 f"background: {palette['input_bg']};"
@@ -1052,10 +1638,74 @@ class MainWindow(QtWidgets.QMainWindow):
             widget.setStyleSheet(list_style)
             if hasattr(widget, "viewport") and widget.viewport() is not None:
                 widget.viewport().setStyleSheet(viewport_style)
+        for checkbox in self.findChildren(QtWidgets.QCheckBox):
+            checkbox.setStyleSheet(checkbox_style)
         if hasattr(self, "scheduleTable"):
             header = self.scheduleTable.horizontalHeader()
             if header is not None:
                 header.setStyleSheet(f"QHeaderView::section {{{header_style}}}")
+            corner = self.scheduleTable.findChild(QtWidgets.QAbstractButton)
+            if corner is not None:
+                corner.setStyleSheet(header_style)
+        if hasattr(self.ui, "statusbar"):
+            self.ui.statusbar.setStyleSheet(status_bar_style)
+            self.ui.statusbar.setAutoFillBackground(True)
+            self.ui.statusbar.setPalette(self._palette_for_colors(palette["status_bg"], palette["text"]))
+        for label in (
+            getattr(self, "status_project", None),
+            getattr(self, "status_connection", None),
+            getattr(self, "status_mode", None),
+            getattr(self, "status_location", None),
+            getattr(self, "status_local_time", None),
+            getattr(self, "status_latency", None),
+            getattr(self, "status_version", None),
+            getattr(self, "status_developer", None),
+        ):
+            if label is not None:
+                label.setStyleSheet(status_label_style)
+        for card in self.findChildren(QtWidgets.QFrame):
+            if card.property("dashboardCard"):
+                card.setStyleSheet(card_style)
+        for label in self.findChildren(QtWidgets.QLabel):
+            if label.property("dashboardTitle"):
+                label.setStyleSheet(card_title_style)
+            elif label.property("dashboardValue"):
+                label.setStyleSheet(card_value_style)
+            elif label.property("dashboardSub"):
+                label.setStyleSheet(card_sub_style)
+            elif label.property("dashboardGreeting"):
+                label.setStyleSheet(card_greeting_style)
+            elif label.property("class") == "infoChip":
+                label.setStyleSheet(info_chip_style)
+
+    def _normalize_groupbox_layouts(self) -> None:
+        for group in self.findChildren(QtWidgets.QGroupBox):
+            layout = group.layout()
+            if layout is None:
+                continue
+            margins = layout.contentsMargins()
+            top = margins.top()
+            if group.title().strip() and top < 28:
+                top = 28
+            layout.setContentsMargins(
+                margins.left(),
+                top,
+                margins.right(),
+                margins.bottom(),
+            )
+            if isinstance(layout, QtWidgets.QGridLayout):
+                layout.setHorizontalSpacing(max(layout.horizontalSpacing(), 12))
+                layout.setVerticalSpacing(max(layout.verticalSpacing(), 12))
+                for row in range(layout.rowCount()):
+                    layout.setRowMinimumHeight(row, max(layout.rowMinimumHeight(row), 42))
+                for col in range(layout.columnCount()):
+                    if col == 0:
+                        layout.setColumnMinimumWidth(
+                            col,
+                            max(layout.columnMinimumWidth(col), 82),
+                        )
+            elif isinstance(layout, QtWidgets.QVBoxLayout):
+                layout.setSpacing(max(layout.spacing(), 10))
 
     def _refresh_theme_from_mode(self) -> None:
         if hasattr(self, "themeModeLabel"):
@@ -1260,7 +1910,7 @@ class MainWindow(QtWidgets.QMainWindow):
             return page
 
         left_panel = QtWidgets.QWidget(self.ui.centralwidget)
-        left_panel.setFixedWidth(528)
+        left_panel.setFixedWidth(600)
         left_panel.setSizePolicy(
             QtWidgets.QSizePolicy.Fixed,
             QtWidgets.QSizePolicy.Expanding,
@@ -1369,31 +2019,14 @@ class MainWindow(QtWidgets.QMainWindow):
             self.ui.portHintLabel.hide()
             self.ui.horizontalLayout_2.addWidget(self.ui.connectButton)
             self.ui.horizontalLayout_2.addWidget(self.ui.disconnectButton)
-            
-            # Apply explicit blue styling for connection buttons
-            for btn in (self.ui.connectButton, self.ui.disconnectButton, 
-                        self.ui.applyDateButton, self.ui.queryDateButton,
-                        self.ui.applyTimeButton, self.ui.queryTimeButton,
-                        self.ui.applyAlarmButton, self.ui.disableAlarmButton,
-                        self.ui.queryAlarmButton, self.ui.syncNowButton,
-                        self.ui.applyDisplayButton, self.ui.applyFormatButton,
-                        self.ui.applyModeButton, self.ui.sendBeepButton,
-                        self.ui.sendLedButton, self.ui.sendMessageButton,
-                        self.ui.sendPresetButton, self.ui.abbrevDemoButton,
-                        self.ui.mixedCaseDemoButton, self.ui.sendRawCommandButton,
-                        self.scheduleApplyAlarmButton, self.scheduleDisableAlarmButton,
-                        self.scheduleQueryAlarmButton, self.scheduleSaveButton,
-                        self.scheduleDeleteButton,
-                        self.runChecksButton, self.lookupCityButton,
-                        self.saveExtensionConfigButton, self.syncWeatherApplyButton,
-                        self.ringPreviewButton):
-                if btn is not None:
-                    btn.setStyleSheet(
-                        f"background-color: #1f5b8c; color: white; border-radius: 8px; padding: 5px 10px; font-weight: 600; min-height: 30px;"
-                    )
-            
             self.ui.verticalLayout_2.removeItem(self.ui.horizontalLayout_3)
             self.ui.verticalLayout_2.removeWidget(self.ui.portHintLabel)
+        if not hasattr(self, "serialStatusLabel"):
+            self.serialStatusLabel = QtWidgets.QLabel("串口状态：未连接", self.ui.connectionGroup)
+            self.serialStatusLabel.setProperty("class", "infoChip")
+            self.serialStatusLabel.setStyleSheet("")
+            self.serialStatusLabel.setWordWrap(True)
+            self.ui.verticalLayout_2.addWidget(self.serialStatusLabel)
         self.ui.horizontalLayout_2.setStretch(0, 6)
         self.ui.horizontalLayout_2.setStretch(1, 3)
         self.ui.horizontalLayout_2.setStretch(2, 3)
@@ -1415,7 +2048,8 @@ class MainWindow(QtWidgets.QMainWindow):
 
         for button in self.findChildren(QtWidgets.QPushButton):
             button.setCursor(QtGui.QCursor(QtCore.Qt.PointingHandCursor))
-            button.setMinimumHeight(32)
+            button.setMinimumHeight(36)
+            button.setMinimumWidth(104)
 
         for combo in self.findChildren(QtWidgets.QComboBox):
             self._install_wheel_guard(combo)
@@ -1437,19 +2071,30 @@ class MainWindow(QtWidgets.QMainWindow):
             if line_edit is not None:
                 line_edit.setClearButtonEnabled(False)
 
-        self.ui.gridLayout.setColumnStretch(0, 1)
-        self.ui.gridLayout.setColumnStretch(1, 3)
-        self.ui.gridLayout.setColumnStretch(2, 2)
-        self.ui.gridLayout.setColumnStretch(3, 2)
-        self.ui.gridLayout.setHorizontalSpacing(10)
-        self.ui.gridLayout.setVerticalSpacing(10)
+        self.ui.gridLayout.setColumnMinimumWidth(0, 86)
+        self.ui.gridLayout.setColumnMinimumWidth(2, 114)
+        self.ui.gridLayout.setColumnMinimumWidth(3, 86)
+        self.ui.gridLayout.setColumnStretch(0, 0)
+        self.ui.gridLayout.setColumnStretch(1, 4)
+        self.ui.gridLayout.setColumnStretch(2, 0)
+        self.ui.gridLayout.setColumnStretch(3, 0)
+        self.ui.gridLayout.setHorizontalSpacing(12)
+        self.ui.gridLayout.setVerticalSpacing(12)
         self.ui.gridLayout.setContentsMargins(12, 28, 12, 12)
-        self.ui.gridLayout_2.setColumnStretch(0, 1)
-        self.ui.gridLayout_2.setColumnStretch(1, 3)
-        self.ui.gridLayout_2.setColumnStretch(2, 2)
-        self.ui.gridLayout_2.setHorizontalSpacing(10)
-        self.ui.gridLayout_2.setVerticalSpacing(10)
+        for row in range(4):
+            self.ui.gridLayout.setRowMinimumHeight(row, 44)
+        self.ui.gridLayout_2.setColumnMinimumWidth(0, 86)
+        self.ui.gridLayout_2.setColumnMinimumWidth(2, 116)
+        self.ui.gridLayout_2.setColumnMinimumWidth(3, 104)
+        self.ui.gridLayout_2.setColumnStretch(0, 0)
+        self.ui.gridLayout_2.setColumnStretch(1, 4)
+        self.ui.gridLayout_2.setColumnStretch(2, 0)
+        self.ui.gridLayout_2.setColumnStretch(3, 0)
+        self.ui.gridLayout_2.setHorizontalSpacing(12)
+        self.ui.gridLayout_2.setVerticalSpacing(12)
         self.ui.gridLayout_2.setContentsMargins(12, 28, 12, 12)
+        for row in range(7):
+            self.ui.gridLayout_2.setRowMinimumHeight(row, 44)
         self.ui.verticalLayout_2.setSpacing(10)
         self.ui.verticalLayout_2.setContentsMargins(12, 28, 12, 12)
         self.ui.verticalLayout_3.setSpacing(8)
@@ -1467,6 +2112,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ui.sendLedButton.setText("设置 LED")
         self.ui.sendPresetButton.setText("发送预设")
         self.ui.mixedCaseDemoButton.setText("混合大小写")
+        self._normalize_groupbox_layouts()
 
     def _create_scroll_page(
         self,
@@ -1514,9 +2160,18 @@ class MainWindow(QtWidgets.QMainWindow):
         self.scheduleAlarmTimeEdit = QtWidgets.QTimeEdit(group)
         self.scheduleAlarmTimeEdit.setDisplayFormat("HH:mm:ss")
         self.scheduleAlarmTimeEdit.setTime(self.ui.alarmTimeEdit.time())
-        self.scheduleApplyAlarmButton = QtWidgets.QPushButton("启用/写入", group)
+        self.scheduleAlarmTimeEdit.setAlignment(QtCore.Qt.AlignCenter)
+        self.scheduleApplyAlarmButton = QtWidgets.QPushButton("启用", group)
         self.scheduleDisableAlarmButton = QtWidgets.QPushButton("关闭", group)
-        self.scheduleQueryAlarmButton = QtWidgets.QPushButton("查询闹钟", group)
+        self.scheduleDisableAlarmButton.setVisible(False)
+        self.scheduleQueryAlarmButton = QtWidgets.QPushButton("查询", group)
+        self.scheduleQueryAlarmButton.setMaximumWidth(96)
+        self.scheduleAlarmStatusLabel = QtWidgets.QLabel(
+            "当前状态：关    触发时间：--",
+            group,
+        )
+        self.scheduleAlarmStatusLabel.setProperty("class", "infoChip")
+        self.scheduleAlarmStatusLabel.setStyleSheet("")
         self.scheduleAlarmHintLabel = QtWidgets.QLabel(
             "离线场景可用板载单次闹钟；复杂提醒建议使用下方日程管理。",
             group,
@@ -1525,12 +2180,18 @@ class MainWindow(QtWidgets.QMainWindow):
         self.scheduleAlarmHintLabel.setWordWrap(True)
         self.scheduleAlarmHintLabel.setStyleSheet("")
 
+        button_row = QtWidgets.QWidget(group)
+        button_layout = QtWidgets.QHBoxLayout(button_row)
+        button_layout.setContentsMargins(0, 0, 0, 0)
+        button_layout.setSpacing(8)
+        button_layout.addWidget(self.scheduleQueryAlarmButton)
+        button_layout.addWidget(self.scheduleApplyAlarmButton)
+
         layout.addWidget(QtWidgets.QLabel("触发时间"), 0, 0)
-        layout.addWidget(self.scheduleAlarmTimeEdit, 0, 1)
-        layout.addWidget(self.scheduleApplyAlarmButton, 0, 2)
-        layout.addWidget(self.scheduleQueryAlarmButton, 1, 1)
-        layout.addWidget(self.scheduleDisableAlarmButton, 1, 2)
-        layout.addWidget(self.scheduleAlarmHintLabel, 2, 1, 1, 2)
+        layout.addWidget(self.scheduleAlarmTimeEdit, 0, 1, 1, 2)
+        layout.addWidget(self.scheduleAlarmStatusLabel, 1, 0, 1, 3)
+        layout.addWidget(button_row, 2, 1, 1, 2)
+        layout.addWidget(self.scheduleAlarmHintLabel, 3, 0, 1, 3)
         return group
 
     def _build_schedule_management_group(self, parent: QtWidgets.QWidget) -> QtWidgets.QGroupBox:
@@ -1569,7 +2230,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.scheduleTimeEdit.setDisplayFormat("HH:mm:ss")
         self.scheduleTimeEdit.setTime(QtCore.QTime(8, 0, 0))
         self.scheduleTypeCombo = QtWidgets.QComboBox(schedule_group)
-        self.scheduleTypeCombo.addItems(["单次日期", "每周重复"])
+        self.scheduleTypeCombo.addItems(["单次执行", "每周重复"])
         self.scheduleDateEdit = QtWidgets.QDateEdit(schedule_group)
         self.scheduleDateEdit.setCalendarPopup(True)
         self.scheduleDateEdit.setDate(QtCore.QDate.currentDate())
@@ -1591,6 +2252,9 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.scheduleSaveButton = QtWidgets.QPushButton("新增 / 更新提醒", schedule_group)
         self.scheduleDeleteButton = QtWidgets.QPushButton("删除选中提醒", schedule_group)
+        self.scheduleDateLabel = QtWidgets.QLabel("执行日期", schedule_group)
+        self.scheduleWeekdayLabel = QtWidgets.QLabel("每周", schedule_group)
+        self.scheduleWeekdayHost = weekday_host
 
         form.addWidget(QtWidgets.QLabel("标题"), 0, 0)
         form.addWidget(self.scheduleTitleEdit, 0, 1)
@@ -1600,9 +2264,9 @@ class MainWindow(QtWidgets.QMainWindow):
         form.addWidget(self.scheduleTimeEdit, 2, 1)
         form.addWidget(QtWidgets.QLabel("规则"), 3, 0)
         form.addWidget(self.scheduleTypeCombo, 3, 1)
-        form.addWidget(QtWidgets.QLabel("日期"), 4, 0)
+        form.addWidget(self.scheduleDateLabel, 4, 0)
         form.addWidget(self.scheduleDateEdit, 4, 1)
-        form.addWidget(QtWidgets.QLabel("每周"), 5, 0)
+        form.addWidget(self.scheduleWeekdayLabel, 5, 0)
         form.addWidget(weekday_host, 5, 1)
         form.addWidget(QtWidgets.QLabel("铃声"), 6, 0)
         form.addWidget(self.scheduleRingCombo, 6, 1)
@@ -1620,46 +2284,81 @@ class MainWindow(QtWidgets.QMainWindow):
         schedule_layout.addLayout(form)
         return schedule_group
 
+    def _build_dashboard_card(
+        self,
+        parent: QtWidgets.QWidget,
+        title: str,
+        value: str,
+        subtext: str,
+    ) -> tuple[QtWidgets.QFrame, QtWidgets.QLabel, QtWidgets.QLabel]:
+        card = QtWidgets.QFrame(parent)
+        card.setProperty("dashboardCard", True)
+        card.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Preferred)
+        layout = QtWidgets.QVBoxLayout(card)
+        layout.setContentsMargins(12, 10, 12, 10)
+        layout.setSpacing(4)
+
+        title_label = QtWidgets.QLabel(title, card)
+        title_label.setProperty("dashboardTitle", True)
+        value_label = QtWidgets.QLabel(value, card)
+        value_label.setProperty("dashboardValue", True)
+        sub_label = QtWidgets.QLabel(subtext, card)
+        sub_label.setProperty("dashboardSub", True)
+        for label in (title_label, value_label, sub_label):
+            label.setWordWrap(True)
+            label.setStyleSheet("")
+        value_label.setMinimumHeight(28)
+
+        layout.addWidget(title_label)
+        layout.addWidget(value_label)
+        layout.addWidget(sub_label)
+        layout.addStretch(1)
+        return card, value_label, sub_label
+
     def _build_dashboard_group(self, parent: QtWidgets.QWidget) -> QtWidgets.QGroupBox:
         dashboard_group = QtWidgets.QGroupBox("数据看板", parent)
         dashboard_layout = QtWidgets.QVBoxLayout(dashboard_group)
-        dashboard_layout.setContentsMargins(12, 22, 12, 12)
-        dashboard_layout.setSpacing(8)
+        dashboard_layout.setContentsMargins(14, 30, 14, 14)
+        dashboard_layout.setSpacing(12)
 
-        self.dashboardSummaryLabel = QtWidgets.QLabel("连接 | 显示: --", dashboard_group)
-        self.dashboardSummaryLabel.setProperty("class", "infoChip")
-        self.dashboardSummaryLabel.setStyleSheet("")
-        self.dashboardConnectionLabel = QtWidgets.QLabel("城市 | 时间: --", dashboard_group)
-        self.dashboardConnectionLabel.setProperty("class", "infoChip")
-        self.dashboardConnectionLabel.setStyleSheet("")
-        self.dashboardWeatherLabel = QtWidgets.QLabel("天气: --", dashboard_group)
-        self.dashboardWeatherLabel.setProperty("class", "infoChip")
-        self.dashboardWeatherLabel.setStyleSheet("")
-        self.dashboardModeLabel = QtWidgets.QLabel("昼夜模式: --", dashboard_group)
-        self.dashboardModeLabel.setProperty("class", "infoChip")
-        self.dashboardModeLabel.setStyleSheet("")
-        self.dashboardTestLabel = QtWidgets.QLabel("日程统计: --", dashboard_group)
-        self.dashboardTestLabel.setProperty("class", "infoChip")
-        self.dashboardTestLabel.setStyleSheet("")
-        self.dashboardScheduleLabel = QtWidgets.QLabel("下次提醒: --", dashboard_group)
-        self.dashboardScheduleLabel.setProperty("class", "infoChip")
-        self.dashboardScheduleLabel.setStyleSheet("")
-        for label in (
-            self.dashboardSummaryLabel,
-            self.dashboardConnectionLabel,
-            self.dashboardWeatherLabel,
-            self.dashboardModeLabel,
-            self.dashboardTestLabel,
-            self.dashboardScheduleLabel,
-        ):
-            label.setWordWrap(True)
+        self.greetingLabel = QtWidgets.QLabel("早上好，用户！", dashboard_group)
+        self.greetingLabel.setProperty("dashboardGreeting", True)
+        self.greetingLabel.setWordWrap(True)
+        self.greetingLabel.setStyleSheet("")
+        dashboard_layout.addWidget(self.greetingLabel)
 
-        dashboard_layout.addWidget(self.dashboardSummaryLabel)
-        dashboard_layout.addWidget(self.dashboardConnectionLabel)
-        dashboard_layout.addWidget(self.dashboardWeatherLabel)
-        dashboard_layout.addWidget(self.dashboardModeLabel)
-        dashboard_layout.addWidget(self.dashboardTestLabel)
-        dashboard_layout.addWidget(self.dashboardScheduleLabel)
+        card_grid = QtWidgets.QGridLayout()
+        card_grid.setHorizontalSpacing(10)
+        card_grid.setVerticalSpacing(10)
+        card_grid.setColumnStretch(0, 1)
+        card_grid.setColumnStretch(1, 1)
+
+        time_card, self.dashboardConnectionLabel, self.dashboardTimeSubLabel = (
+            self._build_dashboard_card(dashboard_group, "当前时间", "--:--:--", "城市时间")
+        )
+        date_card, self.dashboardDateLabel, self.dashboardDateSubLabel = (
+            self._build_dashboard_card(dashboard_group, "日期与星期", "----", "周几")
+        )
+        weather_card, self.dashboardWeatherLabel, self.dashboardWeatherSubLabel = (
+            self._build_dashboard_card(dashboard_group, "当前城市 / 天气", "--", "等待刷新")
+        )
+        mode_card, self.dashboardModeLabel, self.dashboardModeSubLabel = (
+            self._build_dashboard_card(dashboard_group, "昼夜模式", "--", "自动切换状态")
+        )
+        schedule_card, self.dashboardScheduleLabel, self.dashboardScheduleSubLabel = (
+            self._build_dashboard_card(dashboard_group, "下次提醒", "无", "暂无倒计时")
+        )
+        system_card, self.dashboardSummaryLabel, self.dashboardTestLabel = (
+            self._build_dashboard_card(dashboard_group, "系统状态", "显示 --", "提醒统计")
+        )
+
+        card_grid.addWidget(time_card, 0, 0)
+        card_grid.addWidget(date_card, 0, 1)
+        card_grid.addWidget(weather_card, 1, 0)
+        card_grid.addWidget(mode_card, 1, 1)
+        card_grid.addWidget(schedule_card, 2, 0)
+        card_grid.addWidget(system_card, 2, 1)
+        dashboard_layout.addLayout(card_grid)
         return dashboard_group
 
     def _build_alarm_schedule_page(self) -> QtWidgets.QScrollArea:
@@ -1717,21 +2416,7 @@ class MainWindow(QtWidgets.QMainWindow):
         test_layout.addWidget(self.boardShortcutLabel)
         test_layout.addWidget(self.testOutputText)
 
-        ota_group = QtWidgets.QGroupBox("版本更新（预留）", host)
-        ota_layout = QtWidgets.QVBoxLayout(ota_group)
-        ota_layout.setContentsMargins(12, 22, 12, 12)
-        ota_layout.setSpacing(8)
-        self.otaPlaceholderLabel = QtWidgets.QLabel(
-            "当前版本先保留 OTA 接口位置，后续可在这里接入 GitHub Release 更新流程。",
-            ota_group,
-        )
-        self.otaPlaceholderLabel.setWordWrap(True)
-        self.otaPlaceholderLabel.setProperty("class", "infoChip")
-        self.otaPlaceholderLabel.setStyleSheet("")
-        ota_layout.addWidget(self.otaPlaceholderLabel)
-
         outer.addWidget(test_group)
-        outer.addWidget(ota_group)
         outer.addStretch(1)
         return page
 
@@ -1764,7 +2449,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.ui.timeEdit,
             self.ui.alarmTimeEdit,
         ):
-            widget.setAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
+            widget.setAlignment(QtCore.Qt.AlignCenter)
 
         preset_items = [
             "*SET:DATE YEAR 2026 MONTH 06 DATE 02",
@@ -1791,6 +2476,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ui.displayGroup.setTitle("系统设置")
         self.voiceEnabledCheck = QtWidgets.QCheckBox("启用语音播报", self.ui.displayGroup)
         self.ui.verticalLayout_3.addWidget(self.voiceEnabledCheck)
+        self.usernameEdit = QtWidgets.QLineEdit(self.ui.displayGroup)
+        self.usernameEdit.setPlaceholderText("默认 用户")
+        self.usernameSaveButton = QtWidgets.QPushButton("确认用户名", self.ui.displayGroup)
+        self.ui.gridLayout_2.addWidget(QtWidgets.QLabel("用户名", self.ui.displayGroup), 6, 0)
+        self.ui.gridLayout_2.addWidget(self.usernameEdit, 6, 1)
+        self.ui.gridLayout_2.addWidget(self.usernameSaveButton, 6, 2)
         outer.addWidget(self.ui.displayGroup)
 
         network_group = QtWidgets.QGroupBox("网络对时与天气", host)
@@ -1813,6 +2504,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.themeFollowCheck = QtWidgets.QCheckBox("PC 主题跟随板端模式", network_group)
         self.cityInfoLabel = QtWidgets.QLabel("经纬度: -- | 时区: --", network_group)
         self.cityInfoLabel.setProperty("class", "infoChip")
+        self.networkTimeLabel = QtWidgets.QLabel("当前时间: --", network_group)
+        self.networkTimeLabel.setProperty("class", "infoChip")
         self.weatherInfoLabel = QtWidgets.QLabel("天气: 未刷新", network_group)
         self.weatherInfoLabel.setProperty("class", "infoChip")
         self.sunriseSunsetLabel = QtWidgets.QLabel("日出/日落: -- / --", network_group)
@@ -1838,8 +2531,9 @@ class MainWindow(QtWidgets.QMainWindow):
         network_layout.addWidget(sync_button_row, 2, 1)
         network_layout.addWidget(checkbox_row_1, 3, 1)
         network_layout.addWidget(self.cityInfoLabel, 4, 1)
-        network_layout.addWidget(self.weatherInfoLabel, 5, 1)
-        network_layout.addWidget(self.sunriseSunsetLabel, 6, 1)
+        network_layout.addWidget(self.networkTimeLabel, 5, 1)
+        network_layout.addWidget(self.weatherInfoLabel, 6, 1)
+        network_layout.addWidget(self.sunriseSunsetLabel, 7, 1)
 
         ring_group = QtWidgets.QGroupBox("扩展提醒与铃声", host)
         ring_layout = QtWidgets.QGridLayout(ring_group)
@@ -2001,24 +2695,35 @@ class MainWindow(QtWidgets.QMainWindow):
         self.refresh_place_combo_labels()
         if not hasattr(self, "cityEdit"):
             return
+        self.syncing_extension_widgets = True
         place = self._active_place()
-        self.cityEdit.setText(place.name)
-        self.placeSlotCombo.blockSignals(True)
-        self.placeSlotCombo.setCurrentIndex(self.config.active_place_index)
-        self.placeSlotCombo.blockSignals(False)
-        self.autoDayNightCheck.setChecked(self.config.auto_day_night)
-        self.themeFollowCheck.setChecked(self.config.theme_follow_mode)
-        self.voiceEnabledCheck.setChecked(self.config.voice_enabled)
-        self.quietNightCheck.setChecked(self.config.quiet_night_rings)
-        if hasattr(self, "autoRunTestsCheck"):
-            self.autoRunTestsCheck.setChecked(self.config.auto_run_tests_on_start)
+        try:
+            self.cityEdit.setText(place.name)
+            self.placeSlotCombo.blockSignals(True)
+            self.placeSlotCombo.setCurrentIndex(self.config.active_place_index)
+            self.placeSlotCombo.blockSignals(False)
+            for checkbox, value in (
+                (self.autoDayNightCheck, self.config.auto_day_night),
+                (self.themeFollowCheck, self.config.theme_follow_mode),
+                (self.voiceEnabledCheck, self.config.voice_enabled),
+                (self.quietNightCheck, self.config.quiet_night_rings),
+            ):
+                old_block = checkbox.blockSignals(True)
+                checkbox.setChecked(value)
+                checkbox.blockSignals(old_block)
+            if hasattr(self, "autoRunTestsCheck"):
+                old_block = self.autoRunTestsCheck.blockSignals(True)
+                self.autoRunTestsCheck.setChecked(self.config.auto_run_tests_on_start)
+                self.autoRunTestsCheck.blockSignals(old_block)
+            if hasattr(self, "usernameEdit"):
+                self.usernameEdit.setText(self.config.user_name or "用户")
+        finally:
+            self.syncing_extension_widgets = False
         self.cityInfoLabel.setText(
             f"经纬度: {place.latitude:.4f}, {place.longitude:.4f} | 时区: {place.timezone}"
         )
         self.weatherInfoLabel.setText(f"天气: {self.weather_summary_text}")
-        self.sunriseSunsetLabel.setText(
-            f"日出/日落: {self.sunrise_text} / {self.sunset_text} | 当前时间: {self.last_selected_zone_time}"
-        )
+        self._refresh_network_time_label()
         self.ntpStatusLabel.setText(f"最近 NTP: {self.last_ntp_sync_text}")
         if hasattr(self, "autoModeNoticeLabel") and self.config.auto_day_night:
             self.autoModeNoticeLabel.clear()
@@ -2035,20 +2740,37 @@ class MainWindow(QtWidgets.QMainWindow):
             self.scheduleTable.setItem(row, 1, QtWidgets.QTableWidgetItem(item.title))
             if item.schedule_type == "weekly":
                 weekday_names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-                rule = "每周 " + ",".join(
+                selected = ",".join(
                     weekday_names[index] for index in item.weekdays if 0 <= index < 7
                 )
+                rule = f"每周 {selected or '--'}"
             else:
-                rule = item.target_date or "--"
+                rule = f"单次 {item.target_date or '--'}"
             self.scheduleTable.setItem(row, 2, QtWidgets.QTableWidgetItem(rule))
             self.scheduleTable.setItem(row, 3, QtWidgets.QTableWidgetItem(item.trigger_time))
             self.scheduleTable.setItem(row, 4, QtWidgets.QTableWidgetItem(item.ring_type))
+
+    def _refresh_single_alarm_ui(self) -> None:
+        if not hasattr(self, "scheduleApplyAlarmButton"):
+            return
+        enabled = self.runtime_state.alarm_enabled or self.last_alarm == "RINGING"
+        current_time = self.runtime_state.alarm_time or self.scheduleAlarmTimeEdit.time().toString("HH:mm:ss")
+        if not enabled and self.scheduleAlarmTimeEdit.time().isValid():
+            current_time = self.scheduleAlarmTimeEdit.time().toString("HH:mm:ss")
+        if hasattr(self, "scheduleAlarmStatusLabel"):
+            self.scheduleAlarmStatusLabel.setText(
+                f"当前状态：{'开' if enabled else '关'}    触发时间：{current_time}"
+            )
+        self.scheduleApplyAlarmButton.setText("关闭" if enabled else "启用")
+        self.scheduleApplyAlarmButton.setToolTip(
+            "关闭当前板载单次闹钟" if enabled else "按上方时间启用板载单次闹钟"
+        )
 
     def refresh_dashboard(self) -> None:
         if not hasattr(self, "dashboardSummaryLabel"):
             return
         now = self._selected_zone_now().replace(tzinfo=None)
-        self.last_dashboard_minute = now.strftime("%Y-%m-%d %H:%M")
+        self.last_dashboard_minute = now.strftime("%Y-%m-%d %H:%M:%S")
         place = self._active_place()
         if self._is_local_mode_active():
             connection_text = "本地模式"
@@ -2056,6 +2778,8 @@ class MainWindow(QtWidgets.QMainWindow):
             connection_text = f"已连接 {self.ui.portCombo.currentText()}"
         else:
             connection_text = "未连接"
+        if hasattr(self, "serialStatusLabel"):
+            self.serialStatusLabel.setText(f"串口状态：{connection_text}")
         enabled_count = len([item for item in self.schedules if item.enabled])
         next_schedule_text, next_schedule_time = self._next_reminder_summary(now)
         expected_mode = (
@@ -2068,26 +2792,51 @@ class MainWindow(QtWidgets.QMainWindow):
                 f"{weather_code_summary(self.last_weather_snapshot.weather_code)} "
                 f"{self.last_weather_snapshot.temperature_c:.1f}C"
             )
-        city_time_text = now.strftime("%H:%M")
+        city_time_text = now.strftime("%H:%M:%S")
+        date_text = now.strftime("%Y-%m-%d")
+        weekday_text_cn = self._weekday_chinese_name(now)
         alarm_state = "开" if self.last_alarm not in {"OFF", "RINGING", ""} else "关"
         self.dashboardSummaryLabel.setText(
-            f"连接: {connection_text} | 显示: {'开' if self.runtime_state.display_on else '关'}"
+            f"显示{'开' if self.runtime_state.display_on else '关'}"
         )
         self.dashboardConnectionLabel.setText(
-            f"城市: {place.name} | 时间: {city_time_text}"
+            city_time_text
         )
+        if hasattr(self, "dashboardTimeSubLabel"):
+            self.dashboardTimeSubLabel.setText(f"{place.name} 城市时间")
+        if hasattr(self, "dashboardDateLabel"):
+            self.dashboardDateLabel.setText(
+                date_text
+            )
+        if hasattr(self, "dashboardDateSubLabel"):
+            self.dashboardDateSubLabel.setText(weekday_text_cn)
         self.dashboardWeatherLabel.setText(
-            f"天气: {weather_text} | 日出 {self.sunrise_text} | 日落 {self.sunset_text} | {self._format_weather_age(now)}"
+            weather_text
         )
+        if hasattr(self, "dashboardWeatherSubLabel"):
+            self.dashboardWeatherSubLabel.setText(
+                f"{place.name} | 日出 {self.sunrise_text} | 日落 {self.sunset_text} | {self._format_weather_age(now)}"
+            )
         self.dashboardModeLabel.setText(
-            f"昼夜模式: {self.last_mode} | 当前所处 {'日间' if expected_mode == 'DAY' else '夜间'} | 自动昼夜 {'开' if self.config.auto_day_night else '关'}"
+            self.last_mode
         )
+        if hasattr(self, "dashboardModeSubLabel"):
+            self.dashboardModeSubLabel.setText(
+                f"当前所处 {'日间' if expected_mode == 'DAY' else '夜间'} | 自动昼夜 {'开' if self.config.auto_day_night else '关'}"
+            )
         self.dashboardTestLabel.setText(
-            f"日程统计: 板载简易闹钟 {alarm_state} | 共有 {len(self.schedules)} 条提醒 | 启用 {enabled_count} 条"
+            f"板载闹钟 {alarm_state} | 提醒 {len(self.schedules)} 条，启用 {enabled_count} 条"
         )
         self.dashboardScheduleLabel.setText(
-            f"下次提醒: {next_schedule_text} | 剩余 {self._format_dashboard_countdown(next_schedule_time, now)}"
+            next_schedule_text
         )
+        if hasattr(self, "dashboardScheduleSubLabel"):
+            self.dashboardScheduleSubLabel.setText(
+                f"剩余 {self._format_dashboard_countdown(next_schedule_time, now)}"
+            )
+        if hasattr(self, "greetingLabel"):
+            self.greetingLabel.setText(self._greeting_text(now))
+        self._refresh_single_alarm_ui()
         self.status_connection.setText(f"连接: {connection_text}")
         self.status_mode.setText(f"MODE: {self.last_mode}")
         self.status_location.setText(f"LOCATION: {place.name}")
@@ -2112,7 +2861,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ui.queryTimeButton.clicked.connect(lambda: self.send_command("*GET:TIME", "TIME"))
         self.ui.applyAlarmButton.clicked.connect(self.apply_alarm)
         self.ui.disableAlarmButton.clicked.connect(
-            lambda: self.send_command("*SET:ALARM OFF")
+            self.disable_alarm
         )
         self.ui.queryAlarmButton.clicked.connect(
             lambda: self.send_command("*GET:ALARM", "ALARM")
@@ -2145,13 +2894,18 @@ class MainWindow(QtWidgets.QMainWindow):
         self.syncWeatherApplyButton.clicked.connect(
             lambda: self.sync_weather_and_apply(trigger_source="按钮", run_tests=False)
         )
+        self.autoDayNightCheck.toggled.connect(self.set_auto_day_night_enabled)
+        self.usernameSaveButton.clicked.connect(self.save_user_name)
         self.ringPreviewButton.clicked.connect(self.preview_ring)
-        self.scheduleApplyAlarmButton.clicked.connect(self.apply_schedule_alarm)
+        self.scheduleApplyAlarmButton.clicked.connect(self.toggle_schedule_alarm)
         self.scheduleDisableAlarmButton.clicked.connect(
-            lambda: self.send_command("*SET:ALARM OFF")
+            self.disable_alarm
         )
         self.scheduleQueryAlarmButton.clicked.connect(
             lambda: self.send_command("*GET:ALARM", "ALARM")
+        )
+        self.scheduleAlarmTimeEdit.timeChanged.connect(
+            lambda _time: self._refresh_single_alarm_ui()
         )
         self.scheduleSaveButton.clicked.connect(self.save_schedule_item)
         self.scheduleDeleteButton.clicked.connect(self.delete_selected_schedule)
@@ -2164,7 +2918,13 @@ class MainWindow(QtWidgets.QMainWindow):
     def toggle_schedule_enabled(self, item: QtWidgets.QTableWidgetItem) -> None:
         row = item.row()
         if 0 <= row < len(self.schedules):
-            self.schedules[row].enabled = not self.schedules[row].enabled
+            next_enabled = not self.schedules[row].enabled
+            if next_enabled and self.schedules[row].schedule_type == "once":
+                now = self._selected_zone_now().replace(tzinfo=None)
+                if self._next_schedule_time(self.schedules[row], now) is None:
+                    self.log("WARN", "这条单次提醒已经过期，请先更新执行日期/时间后再启用。")
+                    return
+            self.schedules[row].enabled = next_enabled
             save_schedules(APP_DIR, self.schedules)
             self.refresh_schedule_table()
             self.refresh_dashboard()
@@ -2174,9 +2934,10 @@ class MainWindow(QtWidgets.QMainWindow):
         now = datetime.now()
         zone_now = self._selected_zone_now().replace(tzinfo=None)
         self.status_local_time.setText(f"本地时间: {now.strftime('%H:%M:%S')}")
+        self._refresh_network_time_label()
         if not self.is_connected:
             self._refresh_local_twin_frame()
-        current_dashboard_minute = zone_now.strftime("%Y-%m-%d %H:%M")
+        current_dashboard_minute = zone_now.strftime("%Y-%m-%d %H:%M:%S")
         if current_dashboard_minute != self.last_dashboard_minute:
             self.refresh_dashboard()
         self.refresh_place_combo_labels()
@@ -2243,11 +3004,32 @@ class MainWindow(QtWidgets.QMainWindow):
         if self._update_active_place_from_city_input(log_message=True):
             self.refresh_weather_and_push()
 
+    def set_auto_day_night_enabled(self, checked: bool) -> None:
+        if self.syncing_extension_widgets:
+            return
+        self.config.auto_day_night = checked
+        save_config(APP_DIR, self.config)
+        append_event_log(APP_DIR, "auto_day_night_toggle", "ON" if checked else "OFF")
+        self.log("INFO", f"自动昼夜模式已{'开启' if checked else '关闭'}。")
+        if checked:
+            if hasattr(self, "autoModeNoticeLabel"):
+                self.autoModeNoticeLabel.clear()
+                self.autoModeNoticeLabel.setVisible(False)
+            self.apply_auto_day_night(self._selected_zone_now().replace(tzinfo=None), force_apply=True)
+        self.refresh_dashboard()
+
+    def save_user_name(self) -> None:
+        name = self.usernameEdit.text().strip() if hasattr(self, "usernameEdit") else ""
+        self.config.user_name = name or "用户"
+        save_config(APP_DIR, self.config)
+        append_event_log(APP_DIR, "user_name", self.config.user_name)
+        self.log("INFO", f"用户名已更新为：{self.config.user_name}")
+        self.refresh_dashboard()
+
     def save_extension_config(self, log_message: bool = True) -> None:
         place = self._active_place()
         place.name = self.cityEdit.text().strip() or place.name
         self.config.saved_places[self.config.active_place_index] = place
-        self.config.auto_day_night = self.autoDayNightCheck.isChecked()
         self.config.theme_follow_mode = self.themeFollowCheck.isChecked()
         self.config.voice_enabled = self.voiceEnabledCheck.isChecked()
         self.config.quiet_night_rings = self.quietNightCheck.isChecked()
@@ -2285,7 +3067,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.ntpStatusLabel.setText(f"最近 NTP: {source_text}")
 
     def request_user1_time_sync(self, trigger_source: str) -> None:
-        if self.sync_in_progress:
+        if self.ntp_fetch_in_progress or self.sync_in_progress:
             self.log("WARN", f"{trigger_source} 请求对时，但当前已有对时流程正在进行。")
             return
         self.log("INFO", f"{trigger_source} 请求 PC 侧 NTP 对时。")
@@ -2294,24 +3076,62 @@ class MainWindow(QtWidgets.QMainWindow):
         self.sync_ntp_time(trigger_source=trigger_source)
 
     def sync_ntp_time(self, trigger_source: str = "按钮") -> None:
-        try:
-            snapshot_utc = fetch_ntp_time(self.config.ntp_host)
-        except Exception as exc:  # noqa: BLE001
-            self.log("ERROR", f"NTP 对时失败: {exc}")
+        if self.ntp_fetch_in_progress or self.sync_in_progress:
+            self.log("WARN", f"{trigger_source} 请求对时，但当前已有对时流程正在进行。")
+            return
+        place = self._active_place()
+        self.ntp_fetch_in_progress = True
+        self.ui.syncNowButton.setEnabled(False)
+        if hasattr(self, "syncWeatherApplyButton"):
+            self.syncWeatherApplyButton.setEnabled(False)
+        self.log("INFO", f"开始 NTP 对时：{place.name} | {place.timezone} | 时间口径 NTP UTC -> 城市时区。")
+
+        def worker() -> None:
+            snapshot_utc = None
+            error = None
+            try:
+                snapshot_utc = fetch_ntp_time(self.config.ntp_host)
+            except Exception as exc:  # noqa: BLE001
+                error = exc
+            self.ntp_sync_finished.emit(snapshot_utc, error, trigger_source)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _finish_ntp_sync(self, snapshot_utc, error, trigger_source: str) -> None:
+        self.ntp_fetch_in_progress = False
+        if error is not None or snapshot_utc is None:
+            message = str(error) if error is not None else "NTP snapshot missing"
+            self.log("ERROR", f"NTP 对时失败: {message}")
             if "启动" in trigger_source or "USER1" in trigger_source:
                 self.log("WARN", "板端启动后若仍停在默认时间，可视为本次 NTP 对时失败。")
-            append_event_log(APP_DIR, "ntp_error", str(exc))
+            append_event_log(APP_DIR, "ntp_error", message)
+            self._restore_sync_buttons_if_idle()
             self.refresh_dashboard()
             return
-        snapshot = self._selected_zone_now(snapshot_utc).replace(tzinfo=None)
-        source_text = f"{snapshot.strftime('%Y-%m-%d %H:%M:%S')} @ {self._active_place().name}"
+        place, zone_snapshot, offset_seconds = self._active_place_time_context(snapshot_utc)
+        snapshot = zone_snapshot.replace(tzinfo=None)
+        source_text = (
+            f"{snapshot.strftime('%Y-%m-%d %H:%M:%S')} @ {place.name} "
+            f"{place.timezone} {format_utc_offset(offset_seconds)}"
+        )
         self._send_datetime_snapshot(snapshot, source_text)
         append_event_log(APP_DIR, "ntp_sync", f"{trigger_source} -> {source_text}")
         if self.is_connected:
-            self.log("INFO", f"NTP 对时成功并写入 S800（来源: {trigger_source}）。")
+            self.log("INFO", f"NTP 对时成功并写入 S800（来源: {trigger_source}；时间口径: NTP UTC -> 城市时区）。")
         else:
-            self.log("WARN", f"!!! 已完成上位机本地对时（来源: {trigger_source}），当前未下发板端。")
+            self.log("WARN", f"!!! 已完成上位机本地对时（来源: {trigger_source}；时间口径: NTP UTC -> 城市时区），当前未下发板端。")
         self.refresh_dashboard()
+
+    def _restore_sync_buttons_if_idle(self) -> None:
+        if self.ntp_fetch_in_progress or self.sync_in_progress:
+            return
+        self.ui.syncNowButton.setEnabled(True)
+        if (
+            not self.weather_refresh_in_progress
+            and hasattr(self, "syncWeatherApplyButton")
+        ):
+            self.syncWeatherApplyButton.setEnabled(True)
+            self.syncWeatherApplyButton.setText("一键对时、刷新天气并应用")
 
     def sync_weather_and_apply(
         self,
@@ -2319,6 +3139,10 @@ class MainWindow(QtWidgets.QMainWindow):
         run_tests: bool | None = None,
     ) -> None:
         self.log("INFO", "已开始更新，请稍等片刻；正在定位城市、NTP 对时并刷新天气。")
+        if hasattr(self, "syncWeatherApplyButton"):
+            self.syncWeatherApplyButton.setEnabled(False)
+            self.syncWeatherApplyButton.setText("更新中...")
+        QtWidgets.QApplication.processEvents(QtCore.QEventLoop.ExcludeUserInputEvents)
         self._update_active_place_from_city_input(log_message=True)
         self.save_extension_config(log_message=False)
         self.pending_auto_test_after_apply = (
@@ -2355,6 +3179,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _finish_weather_refresh(self, snapshot, error, log_trigger: bool) -> None:
         self.weather_refresh_in_progress = False
+        self._restore_sync_buttons_if_idle()
         if error is not None:
             self.last_weather_refresh_at = datetime.now()
             if log_trigger:
@@ -2394,10 +3219,15 @@ class MainWindow(QtWidgets.QMainWindow):
                 build_set_weather_command(self.cached_weather_text, self.cached_weather_led_mask)
             )
         if log_trigger:
+            _, zone_now, offset_seconds = self._active_place_time_context()
+            time_context = (
+                f"{place.name} {place.timezone} {format_utc_offset(offset_seconds)} "
+                f"当前 {zone_now.strftime('%Y-%m-%d %H:%M:%S')}"
+            )
             if self.is_connected:
-                self.log("INFO", f"天气已刷新并下发: {self.weather_summary_text}")
+                self.log("INFO", f"天气已刷新并下发: {self.weather_summary_text} | {time_context}")
             else:
-                self.log("WARN", f"!!! 已刷新上位机本地天气配置，未下发板端：{self.weather_summary_text}")
+                self.log("WARN", f"!!! 已刷新上位机本地天气配置，未下发板端：{self.weather_summary_text} | {time_context}")
         if self.config.auto_day_night:
             self.apply_auto_day_night(self._selected_zone_now().replace(tzinfo=None), force_apply=True)
         if self.pending_auto_test_after_apply:
@@ -2449,6 +3279,13 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _sync_schedule_type_ui(self) -> None:
         weekly = self.scheduleTypeCombo.currentIndex() == 1
+        if hasattr(self, "scheduleDateLabel"):
+            self.scheduleDateLabel.setVisible(not weekly)
+        if hasattr(self, "scheduleWeekdayLabel"):
+            self.scheduleWeekdayLabel.setVisible(weekly)
+        if hasattr(self, "scheduleWeekdayHost"):
+            self.scheduleWeekdayHost.setVisible(weekly)
+        self.scheduleDateEdit.setVisible(not weekly)
         self.scheduleDateEdit.setEnabled(not weekly)
         for check in self.scheduleWeekdayChecks:
             check.setEnabled(weekly)
@@ -2498,6 +3335,11 @@ class MainWindow(QtWidgets.QMainWindow):
         if item.schedule_type == "weekly" and not item.weekdays:
             self.log("WARN", "每周重复提醒至少要勾选一天。")
             return
+        if item.enabled and item.schedule_type == "once":
+            now = self._selected_zone_now().replace(tzinfo=None)
+            if self._next_schedule_time(item, now) is None:
+                self.log("WARN", "单次执行提醒的日期和时间已经过去，请选择未来时间或先停用该提醒。")
+                return
         if index is None:
             self.schedules.append(item)
             self.log("INFO", f"已新增提醒: {item.title}")
@@ -2819,7 +3661,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.runtime_state.message_text = text
             self.ui.messageEdit.setText(text)
             self._save_runtime_state()
-            self._set_local_display_override(text, 3.0)
+            self._set_local_display_override(text, self._message_display_duration_s(text))
             action = f"滚动消息 -> {text}"
         elif upper.startswith("*SET:WEATHER DISP "):
             parts = command.split()
@@ -2850,9 +3692,11 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.ui.formatCombo.setCurrentText(self.runtime_state.format)
                 action = f"虚拟按键 FORMAT -> {self.runtime_state.format}"
             elif key == "DISP":
-                self.runtime_state.display_on = not self.runtime_state.display_on
-                self.ui.displayToggleCombo.setCurrentText("ON" if self.runtime_state.display_on else "OFF")
-                action = f"虚拟按键 DISP -> {'ON' if self.runtime_state.display_on else 'OFF'}"
+                modes = ["TIME", "DATE", "WEEKDAY", "YEAR"]
+                current = self.runtime_state.view_mode if self.runtime_state.view_mode in modes else "TIME"
+                self.runtime_state.view_mode = modes[(modes.index(current) + 1) % len(modes)]
+                self.local_view_scroll_key = ""
+                action = f"虚拟按键 DISP -> {self.runtime_state.view_mode}"
             self._save_runtime_state()
         elif upper.startswith("*SET:RING "):
             action = f"铃声预览 -> {upper.removeprefix('*SET:RING ').strip()}"
@@ -2931,11 +3775,9 @@ class MainWindow(QtWidgets.QMainWindow):
             self._start_boot_mirror_playback()
             if (time.monotonic() - self.last_ready_sync_monotonic) > 2.5:
                 self.last_ready_sync_monotonic = time.monotonic()
-                self.log("INFO", "检测到板端启动完成，自动执行一次对时、天气刷新和模式同步；不自动运行联合测试。")
-                self.sync_weather_and_apply(
-                    trigger_source="板端启动",
-                    run_tests=False,
-                )
+                self.startup_sync_pending = True
+                self.log("INFO", "检测到板端 RESET/启动，已显示 88888888 开机镜像；即将后台自动对时、刷新天气并同步模式。")
+                QtCore.QTimer.singleShot(150, self._run_startup_sync_after_ready)
             return
         parsed = parse_line(line)
         if not self._should_suppress_rx_log(parsed, line):
@@ -3047,6 +3889,15 @@ class MainWindow(QtWidgets.QMainWindow):
             self.refresh_dashboard()
             self._set_latest_event(f"保存 {parsed.data}: {parsed.extra[0]}")
 
+    def _run_startup_sync_after_ready(self) -> None:
+        if not self.startup_sync_pending:
+            return
+        self.startup_sync_pending = False
+        self.sync_weather_and_apply(
+            trigger_source="板端启动",
+            run_tests=False,
+        )
+
     def handle_ok(self, parsed: ParsedLine) -> None:
         if not self.pending_queries:
             return
@@ -3127,11 +3978,25 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def apply_alarm(self) -> None:
         time_value = self.ui.alarmTimeEdit.time()
+        self.runtime_state.alarm_enabled = True
+        self.runtime_state.alarm_time = time_value.toString("HH:mm:ss")
+        self.last_alarm = self.runtime_state.alarm_time
+        self._save_runtime_state()
+        if hasattr(self, "scheduleAlarmTimeEdit"):
+            self.scheduleAlarmTimeEdit.setTime(time_value)
+        self._refresh_single_alarm_ui()
         command = (
             f"*SET:ALARM HOUR {time_value.hour():02d} "
             f"MINUTE {time_value.minute():02d} SECOND {time_value.second():02d}"
         )
         self.send_command(command)
+
+    def disable_alarm(self) -> None:
+        self.runtime_state.alarm_enabled = False
+        self.last_alarm = "OFF"
+        self._save_runtime_state()
+        self._refresh_single_alarm_ui()
+        self.send_command("*SET:ALARM OFF")
 
     def sync_host_time(self) -> None:
         self.sync_ntp_time(trigger_source="按钮")
@@ -3149,9 +4014,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def _finish_sync_host_time(self) -> None:
         self.sync_in_progress = False
         self.sync_snapshot = None
-        self.ui.syncNowButton.setEnabled(True)
-        if hasattr(self, "syncWeatherApplyButton"):
-            self.syncWeatherApplyButton.setEnabled(True)
+        self._restore_sync_buttons_if_idle()
         self.refresh_dashboard()
 
     def apply_display_state(self) -> None:
@@ -3219,6 +4082,12 @@ class MainWindow(QtWidgets.QMainWindow):
         time_value = self.scheduleAlarmTimeEdit.time()
         self.ui.alarmTimeEdit.setTime(time_value)
         self.apply_alarm()
+
+    def toggle_schedule_alarm(self) -> None:
+        if self.runtime_state.alarm_enabled or self.last_alarm == "RINGING":
+            self.disable_alarm()
+        else:
+            self.apply_schedule_alarm()
 
     def run_automated_checks(self) -> None:
         if self.test_run_in_progress:
@@ -3322,7 +4191,9 @@ class MainWindow(QtWidgets.QMainWindow):
             self.autoModeNoticeLabel.clear()
             self.autoModeNoticeLabel.setVisible(False)
         if hasattr(self, "autoDayNightCheck"):
+            old_block = self.autoDayNightCheck.blockSignals(True)
             self.autoDayNightCheck.setChecked(False)
+            self.autoDayNightCheck.blockSignals(old_block)
         append_event_log(APP_DIR, "auto_mode_disabled", message)
         self.log("INFO", message)
         self.refresh_dashboard()

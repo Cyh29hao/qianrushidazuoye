@@ -171,10 +171,14 @@ def timezone_now(
     try:
         return moment.astimezone(ZoneInfo(timezone_name))
     except (ZoneInfoNotFoundError, ModuleNotFoundError, ValueError):
-        offset_seconds = (
-            fallback_offset_seconds
-            if fallback_offset_seconds is not None
-            else infer_timezone_offset_seconds(timezone_name)
+        offset_seconds = infer_timezone_offset_seconds(
+            timezone_name,
+            default=(
+                fallback_offset_seconds
+                if fallback_offset_seconds is not None
+                else DEFAULT_UTC_OFFSET_SECONDS
+            ),
+            utc_moment=moment,
         )
         fallback_tz = timezone(
             timedelta(seconds=offset_seconds),
@@ -186,7 +190,11 @@ def timezone_now(
 def infer_timezone_offset_seconds(
     timezone_name: str,
     default: int = DEFAULT_UTC_OFFSET_SECONDS,
+    utc_moment: datetime | None = None,
 ) -> int:
+    dst_offset = _dst_aware_offset_seconds(timezone_name, utc_moment)
+    if dst_offset is not None:
+        return dst_offset
     if timezone_name in KNOWN_TIMEZONE_OFFSETS:
         return KNOWN_TIMEZONE_OFFSETS[timezone_name]
     if timezone_name.startswith("Etc/GMT"):
@@ -198,6 +206,69 @@ def infer_timezone_offset_seconds(
                 return default
             return -parsed * 3600
     return default
+
+
+def format_utc_offset(offset_seconds: int) -> str:
+    sign = "+" if offset_seconds >= 0 else "-"
+    absolute = abs(offset_seconds)
+    hours, remainder = divmod(absolute, 3600)
+    minutes = remainder // 60
+    return f"UTC{sign}{hours:02d}:{minutes:02d}"
+
+
+def _dst_aware_offset_seconds(
+    timezone_name: str,
+    utc_moment: datetime | None,
+) -> int | None:
+    moment = utc_moment or datetime.now(timezone.utc)
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    moment = moment.astimezone(timezone.utc)
+    year = moment.year
+    if timezone_name == "America/New_York":
+        start = _nth_weekday_utc(year, 3, 6, 2, 7)
+        end = _nth_weekday_utc(year, 11, 6, 1, 6)
+        return -4 * 3600 if start <= moment < end else -5 * 3600
+    if timezone_name == "America/Los_Angeles":
+        start = _nth_weekday_utc(year, 3, 6, 2, 10)
+        end = _nth_weekday_utc(year, 11, 6, 1, 9)
+        return -7 * 3600 if start <= moment < end else -8 * 3600
+    if timezone_name == "Europe/London":
+        start = _last_weekday_utc(year, 3, 6, 1)
+        end = _last_weekday_utc(year, 10, 6, 1)
+        return 1 * 3600 if start <= moment < end else 0
+    if timezone_name in {"Europe/Paris", "Europe/Berlin"}:
+        start = _last_weekday_utc(year, 3, 6, 1)
+        end = _last_weekday_utc(year, 10, 6, 1)
+        return 2 * 3600 if start <= moment < end else 1 * 3600
+    return None
+
+
+def _nth_weekday_utc(
+    year: int,
+    month: int,
+    weekday: int,
+    nth: int,
+    hour_utc: int,
+) -> datetime:
+    day = datetime(year, month, 1, hour_utc, tzinfo=timezone.utc)
+    days_until = (weekday - day.weekday()) % 7
+    day = day + timedelta(days=days_until + (nth - 1) * 7)
+    return day
+
+
+def _last_weekday_utc(
+    year: int,
+    month: int,
+    weekday: int,
+    hour_utc: int,
+) -> datetime:
+    if month == 12:
+        day = datetime(year + 1, 1, 1, hour_utc, tzinfo=timezone.utc)
+    else:
+        day = datetime(year, month + 1, 1, hour_utc, tzinfo=timezone.utc)
+    day = day - timedelta(days=1)
+    return day - timedelta(days=(day.weekday() - weekday) % 7)
 
 
 def geocode_city(city_name: str, timeout: float = 4.0) -> CityLookupResult:

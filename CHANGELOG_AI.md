@@ -2,6 +2,38 @@
 
 只记录阶段性最终修改、关键文件、验证结果和未解决问题；不记录无关对话。
 
+## 2026-06-09
+
+### 已完成修改
+
+- 修复 PC 黑夜模式 UI：补齐状态栏/页脚、滚动条、下拉框弹出列表、复选框、信息条、表格、日志区和页面背景的深色主题规则。
+- 保持全局按钮为统一蓝色主按钮风格，白天/黑夜均包含默认、悬停、按下、禁用状态。
+- 主页数据看板保持 6 张卡片式布局；串口状态保留在“串口连接”模块，不再放回数据看板。
+- 删除当前界面和最终说明文档中的 OTA 预留/占位露出。
+- 新增 `AGENT.md`，记录后续 AI 必须遵守的 UI 主题、布局、OTA、验证和 Git 规则；`AGENTS.md` 已提示先读 `AGENT.md`。
+- 更新 `PROJECT_CONTEXT.md`，记录当前最终状态和本轮验证结果。
+
+### 关键文件
+
+- `pc_host/app.py`
+- `AGENT.md`
+- `AGENTS.md`
+- `PROJECT_CONTEXT.md`
+- `CHANGELOG_AI.md`
+- `docs/extensions-roadmap.md`
+- `docs/host-2.0-architecture.md`
+
+### 验证结果
+
+- `python -m py_compile pc_host/app.py pc_host/run_extension_checks.py pc_host/twin_widgets.py pc_host/protocol.py pc_host/extension_services.py pc_host/extension_store.py` 通过。
+- Windows 原生 Qt 平台截图检查通过：主页、系统设置、闹钟与日程管理、调试与测试在白天/黑夜模式下均无可见 OTA，按钮未丢失蓝色主样式。
+- 程序化检查通过：四个页面白天/黑夜可见按钮均有样式；黑夜模式状态栏前景色为浅色、背景为深色。
+
+### 未解决问题
+
+- MCU 端改动仍需 Keil5 正式编译、烧录与实板验证。
+- 如果提交/展示使用的是已打包 `.exe`，需要重新打包 PC 端以包含本轮 UI 修复。
+
 ## 2026-06-08
 
 ### 已完成修改

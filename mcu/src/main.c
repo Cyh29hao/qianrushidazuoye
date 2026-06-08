@@ -25,8 +25,9 @@
 #define ADD_REPEAT_INTERVAL_TICKS  15U
 #define EDIT_TIMEOUT_MS            5000UL
 #define RXTX_FLASH_MS              300UL
-#define MESSAGE_SHORT_HOLD_MS      1800UL
-#define MESSAGE_END_HOLD_MS        1200UL
+#define MESSAGE_SHORT_HOLD_MS      5000UL
+#define MESSAGE_MIN_SHOW_MS        5000UL
+#define MESSAGE_SLOW_SHOW_MS       8000UL
 #define SCROLL_SLOW_MS             1000UL
 #define SCROLL_FAST_MS             500UL
 #define BOOT_STEP_SHORT_MS         1000UL
@@ -77,6 +78,7 @@
 typedef enum {
     VIEW_TIME = 0,
     VIEW_DATE,
+    VIEW_WEEKDAY,
     VIEW_YEAR
 } ViewMode;
 
@@ -194,6 +196,11 @@ static void ReverseVisibleText(const char *in, char *out, uint8_t outSize);
 static uint8_t VisibleTextToCells(const char *text, SegmentCell *cells,
                                   uint8_t maxCells);
 static uint32_t CurrentScrollIntervalMs(void);
+static uint8_t CurrentVisibleScrollLimit(void);
+static bool IsFiniteScrollActive(void);
+static uint8_t ScrollLegCount(uint8_t scrollLimit);
+static uint8_t ScrollMaxStep(uint8_t scrollLimit);
+static uint8_t ScrollOffsetForStep(uint8_t step, uint8_t scrollLimit);
 static void ComposeFrameFromCells(const SegmentCell *cells, uint8_t count,
                                   uint8_t startIndex, DisplayFrame *frame);
 static void ApplyBootAllOnFrame(DisplayFrame *frame);
@@ -234,6 +241,7 @@ static void TrimAscii(char *text);
 static uint8_t StringLengthBounded(const char *text, uint8_t maxLen);
 static bool IsLeapYear(uint16_t year);
 static uint8_t DaysInMonth(uint16_t year, uint8_t month);
+static uint8_t CalculateWeekdayIndex(const DateTime *value);
 static void AdvanceClockOneSecond(DateTime *value);
 
 static void ResetRuntimeState(void);
@@ -243,9 +251,10 @@ static void BuildDottedTime(const DateTime *value, char *out, uint8_t outSize);
 static void BuildDottedDateShort(const DateTime *value, char *out,
                                  uint8_t outSize);
 static void BuildDottedDateYear(const DateTime *value, char *out,
-                                uint8_t outSize);
+                                 uint8_t outSize);
+static void BuildWeekdayName(const DateTime *value, char *out, uint8_t outSize);
 static void BuildDottedAlarm(const AlarmState *value, char *out,
-                             uint8_t outSize);
+                              uint8_t outSize);
 
 static void HandleSetDate(const char *params);
 static void HandleSetTime(const char *params);
@@ -298,6 +307,7 @@ static uint32_t g_messageDeadlineMs;
 static uint8_t g_messageActive;
 static uint8_t g_messageScrollLimit;
 static uint8_t g_messageEndArmed;
+static uint8_t g_viewScrollCompleted;
 static uint8_t g_manualLedMask;
 static uint32_t g_manualLedUntilMs;
 static uint32_t g_rxFlashUntilMs;
@@ -368,8 +378,8 @@ int main(void)
 
 static void Clock_Init(void)
 {
-    g_sysClock = SysCtlClockFreqSet((SYSCTL_XTAL_16MHZ |
-                                     SYSCTL_OSC_INT |
+    g_sysClock = SysCtlClockFreqSet((SYSCTL_XTAL_25MHZ |
+                                     SYSCTL_OSC_MAIN |
                                      SYSCTL_USE_PLL |
                                      SYSCTL_CFG_VCO_480), 20000000U);
     SysTickPeriodSet(g_sysClock / SYSTICK_FREQUENCY);
@@ -614,11 +624,29 @@ static void Tick10ms(void)
     if ((g_millis >= g_nextScrollMs) && (g_bootPhase == BOOT_DONE)) {
         if ((g_messageActive != 0U) && (g_messageText[0] != '\0') &&
             (g_messageScrollLimit != 0U)) {
-            if (g_scrollOffset < g_messageScrollLimit) {
+            uint8_t maxStep = ScrollMaxStep(g_messageScrollLimit);
+            if (g_scrollOffset < maxStep) {
                 g_scrollOffset++;
+                if ((g_scrollOffset >= maxStep) &&
+                    (g_messageEndArmed == 0U) &&
+                    (g_messageDeadlineMs == 0UL)) {
+                    g_messageEndArmed = 1U;
+                    g_messageDeadlineMs = g_millis + CurrentScrollIntervalMs();
+                }
             } else if ((g_messageEndArmed == 0U) && (g_messageDeadlineMs == 0UL)) {
                 g_messageEndArmed = 1U;
-                g_messageDeadlineMs = g_millis + MESSAGE_END_HOLD_MS;
+                g_messageDeadlineMs = g_millis + CurrentScrollIntervalMs();
+            }
+        } else if (g_viewMode == VIEW_WEEKDAY) {
+            uint8_t scrollLimit = CurrentVisibleScrollLimit();
+            uint8_t maxStep = ScrollMaxStep(scrollLimit);
+            if ((scrollLimit != 0U) && (g_viewScrollCompleted == 0U)) {
+                if (g_scrollOffset < maxStep) {
+                    g_scrollOffset++;
+                }
+                if (g_scrollOffset >= maxStep) {
+                    g_viewScrollCompleted = 1U;
+                }
             }
         } else {
             g_scrollOffset++;
@@ -648,6 +676,13 @@ static void Tick1000ms(void)
     uint8_t forceEvent = 0U;
     if (g_bootPhase == BOOT_DONE) {
         AdvanceClockOneSecond(&g_now);
+        if ((g_viewMode == VIEW_WEEKDAY) &&
+            (g_now.hour == 0U) &&
+            (g_now.minute == 0U) &&
+            (g_now.second == 0U)) {
+            g_scrollOffset = 0U;
+            g_viewScrollCompleted = 0U;
+        }
         g_heartbeatBit = (uint8_t)!g_heartbeatBit;
         forceEvent = 1U;
         if ((g_alarm.enabled != 0U) &&
@@ -802,6 +837,7 @@ static void ResetRuntimeState(void)
     g_messageDeadlineMs = 0U;
     g_messageScrollLimit = 0U;
     g_messageEndArmed = 0U;
+    g_viewScrollCompleted = 0U;
     g_manualLedMask = 0U;
     g_manualLedUntilMs = 0U;
     g_rxFlashUntilMs = 0U;
@@ -871,12 +907,26 @@ static void BuildDottedDateShort(const DateTime *value, char *out,
 }
 
 static void BuildDottedDateYear(const DateTime *value, char *out,
-                                uint8_t outSize)
+                                 uint8_t outSize)
 {
     snprintf(out, outSize, "%04u.%02u%02u",
              (unsigned)value->year,
              (unsigned)value->month,
              (unsigned)value->day);
+}
+
+static void BuildWeekdayName(const DateTime *value, char *out, uint8_t outSize)
+{
+    static const char *kWeekdays[7] = {
+        "MONDAY",
+        "TUESDAY",
+        "WEDNESDAY",
+        "THURSDAY",
+        "FRIDAY",
+        "SATURDAY",
+        "SUNDAY"
+    };
+    snprintf(out, outSize, "%s", kWeekdays[CalculateWeekdayIndex(value)]);
 }
 
 static void BuildDottedAlarm(const AlarmState *value, char *out,
@@ -956,6 +1006,10 @@ static void BuildVisibleText(char *out, uint8_t outSize)
         BuildDottedDateShort(&g_now, out, outSize);
         return;
     }
+    if (g_viewMode == VIEW_WEEKDAY) {
+        BuildWeekdayName(&g_now, out, outSize);
+        return;
+    }
     if (g_viewMode == VIEW_YEAR) {
         BuildDottedDateYear(&g_now, out, outSize);
         return;
@@ -1002,16 +1056,118 @@ static uint8_t VisibleTextToCells(const char *text, SegmentCell *cells,
 
 static uint32_t CurrentScrollIntervalMs(void)
 {
+    uint8_t scrollLimit = 0U;
+    if ((g_messageActive != 0U) && (g_messageScrollLimit != 0U)) {
+        scrollLimit = g_messageScrollLimit;
+    } else if ((g_messageActive == 0U) && (g_viewMode == VIEW_WEEKDAY)) {
+        scrollLimit = CurrentVisibleScrollLimit();
+    }
+    if (scrollLimit != 0U) {
+        uint32_t totalMs = (g_scrollFast != 0U) ?
+                           MESSAGE_MIN_SHOW_MS : MESSAGE_SLOW_SHOW_MS;
+        uint32_t steps = (uint32_t)ScrollMaxStep(scrollLimit) + 1UL;
+        uint32_t intervalMs;
+        if (totalMs < MESSAGE_MIN_SHOW_MS) {
+            totalMs = MESSAGE_MIN_SHOW_MS;
+        }
+        intervalMs = totalMs / steps;
+        if (intervalMs < 150UL) {
+            intervalMs = 150UL;
+        }
+        return intervalMs;
+    }
     if (g_scrollFast != 0U) {
         return SCROLL_FAST_MS;
     }
-    if ((g_messageActive != 0U) && (g_messageScrollLimit >= 12U)) {
-        return 650UL;
-    }
-    if ((g_messageActive != 0U) && (g_messageScrollLimit >= 6U)) {
-        return 800UL;
-    }
     return SCROLL_SLOW_MS;
+}
+
+static uint8_t CurrentVisibleScrollLimit(void)
+{
+    char visible[VISIBLE_TEXT_MAX];
+    char oriented[VISIBLE_TEXT_MAX];
+    SegmentCell cells[VISIBLE_TEXT_MAX];
+    uint8_t count;
+
+    BuildVisibleText(visible, sizeof(visible));
+    if (g_displayFormat == FORMAT_RIGHT) {
+        ReverseVisibleText(visible, oriented, sizeof(oriented));
+    } else {
+        snprintf(oriented, sizeof(oriented), "%s", visible);
+    }
+    count = VisibleTextToCells(oriented, cells, VISIBLE_TEXT_MAX);
+    if (count > DISPLAY_WIDTH) {
+        return (uint8_t)(count - DISPLAY_WIDTH);
+    }
+    return 0U;
+}
+
+static bool IsFiniteScrollActive(void)
+{
+    if ((g_messageActive != 0U) && (g_messageText[0] != '\0')) {
+        return true;
+    }
+    return (g_messageActive == 0U) && (g_viewMode == VIEW_WEEKDAY);
+}
+
+static uint8_t ScrollLegCount(uint8_t scrollLimit)
+{
+    if (scrollLimit == 0U) {
+        return 0U;
+    }
+    if (scrollLimit <= 1U) {
+        return 1U;
+    }
+    if (scrollLimit <= 5U) {
+        return 3U;
+    }
+    if (scrollLimit <= 10U) {
+        return 2U;
+    }
+    return 1U;
+}
+
+static uint8_t ScrollMaxStep(uint8_t scrollLimit)
+{
+    uint8_t legs = ScrollLegCount(scrollLimit);
+    if (legs == 0U) {
+        return 0U;
+    }
+    return (uint8_t)((uint16_t)legs * ((uint16_t)scrollLimit + 1U));
+}
+
+static uint8_t ScrollOffsetForStep(uint8_t step, uint8_t scrollLimit)
+{
+    uint8_t legs;
+    uint8_t maxStep;
+    uint8_t leg;
+    uint8_t inLeg;
+    uint8_t progress;
+
+    if (scrollLimit == 0U) {
+        return 0U;
+    }
+    legs = ScrollLegCount(scrollLimit);
+    maxStep = ScrollMaxStep(scrollLimit);
+    if (step > maxStep) {
+        step = maxStep;
+    }
+    if (step == 0U) {
+        return 0U;
+    }
+
+    step--;
+    leg = (uint8_t)(step / (scrollLimit + 1U));
+    inLeg = (uint8_t)(step % (scrollLimit + 1U));
+    if (leg >= legs) {
+        leg = (uint8_t)(legs - 1U);
+        inLeg = scrollLimit;
+    }
+    progress = (inLeg < scrollLimit) ? (uint8_t)(inLeg + 1U) : scrollLimit;
+    if ((leg & 0x01U) != 0U) {
+        return (uint8_t)(scrollLimit - progress);
+    }
+    return progress;
 }
 
 static void ComposeFrameFromCells(const SegmentCell *cells, uint8_t count,
@@ -1132,14 +1288,27 @@ static void RefreshDisplayAndLeds(bool forceEvent)
 
     if (count > DISPLAY_WIDTH) {
         maxStart = (uint8_t)(count - DISPLAY_WIDTH);
-        if (g_scrollOffset > maxStart) {
-            g_scrollOffset = ((g_messageActive != 0U) && (g_messageText[0] != '\0')) ?
-                             maxStart : 0U;
-        }
-        if (g_displayFormat == FORMAT_RIGHT) {
-            startIndex = (uint8_t)(maxStart - g_scrollOffset);
+        if (IsFiniteScrollActive() != false) {
+            uint8_t maxStep = ScrollMaxStep(maxStart);
+            uint8_t visibleOffset;
+            if (g_scrollOffset > maxStep) {
+                g_scrollOffset = maxStep;
+            }
+            visibleOffset = ScrollOffsetForStep(g_scrollOffset, maxStart);
+            if (g_displayFormat == FORMAT_RIGHT) {
+                startIndex = (uint8_t)(maxStart - visibleOffset);
+            } else {
+                startIndex = visibleOffset;
+            }
         } else {
-            startIndex = g_scrollOffset;
+            if (g_scrollOffset > maxStart) {
+                g_scrollOffset = 0U;
+            }
+            if (g_displayFormat == FORMAT_RIGHT) {
+                startIndex = (uint8_t)(maxStart - g_scrollOffset);
+            } else {
+                startIndex = g_scrollOffset;
+            }
         }
     } else {
         g_scrollOffset = 0U;
@@ -1495,7 +1664,10 @@ static void HandleKeyPress(KeyCode key, bool emitEvent)
         break;
     case KEY_DISP:
         if (g_editMode == EDIT_NONE) {
-            g_viewMode = (ViewMode)(((uint8_t)g_viewMode + 1U) % 3U);
+            g_viewMode = (ViewMode)(((uint8_t)g_viewMode + 1U) % 4U);
+            g_scrollOffset = 0U;
+            g_viewScrollCompleted = 0U;
+            g_nextScrollMs = g_millis + CurrentScrollIntervalMs();
         }
         break;
     case KEY_SPEED:
@@ -1874,6 +2046,26 @@ static bool IsLeapYear(uint16_t year)
     return ((year % 4U) == 0U);
 }
 
+static uint8_t CalculateWeekdayIndex(const DateTime *value)
+{
+    uint16_t year = value->year;
+    uint8_t month = value->month;
+    uint8_t day = value->day;
+    uint16_t k;
+    uint16_t j;
+    uint8_t h;
+
+    if (month < 3U) {
+        month = (uint8_t)(month + 12U);
+        year--;
+    }
+    k = (uint16_t)(year % 100U);
+    j = (uint16_t)(year / 100U);
+    h = (uint8_t)((day + ((13U * (uint16_t)(month + 1U)) / 5U) +
+                   k + (k / 4U) + (j / 4U) + (5U * j)) % 7U);
+    return (uint8_t)((h + 5U) % 7U);
+}
+
 static uint8_t DaysInMonth(uint16_t year, uint8_t month)
 {
     static const uint8_t kDays[12] = {
@@ -2088,6 +2280,10 @@ static void HandleSetDate(const char *params)
     g_now.year = nextValue.year;
     g_now.month = nextValue.month;
     g_now.day = nextValue.day;
+    if (g_viewMode == VIEW_WEEKDAY) {
+        g_scrollOffset = 0U;
+        g_viewScrollCompleted = 0U;
+    }
     RefreshDisplayAndLeds(true);
     UART_ReplyOk(NULL);
 }

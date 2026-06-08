@@ -4,6 +4,10 @@ pc_host/__pycache__/
 pc_host/*.pyc
 pc_host/logs/
 pc_host/runtime_state.json
+build/
+dist/
+build_release/
+*.spec
 mcu/*.uvgui*
 mcu/*.uvguix*
 mcu/obj/
