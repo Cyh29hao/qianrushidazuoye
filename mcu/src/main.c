@@ -16,11 +16,11 @@
 #define SYSTICK_FREQUENCY          1000U
 #define DISPLAY_WIDTH              8U
 #define VISIBLE_TEXT_MAX           64U
-#define UART_LINE_MAX              80U
+#define UART_LINE_MAX              65U
 #define DISPLAY_HEARTBEAT_MS       1000U
 #define KEY_SCAN_PERIOD_MS         10U
 #define DEBOUNCE_TICKS             3U
-#define FUNC_LONG_PRESS_TICKS      60U
+#define FUNC_LONG_PRESS_TICKS      80U
 #define ADD_REPEAT_START_TICKS     40U
 #define ADD_REPEAT_INTERVAL_TICKS  15U
 #define EDIT_TIMEOUT_MS            5000UL
@@ -38,8 +38,8 @@
 #define REMOTE_BEEP_MAX_MS         5000UL
 #define MANUAL_LED_SHOW_MS         1000UL
 #define WEATHER_SHOW_MS            5000UL
-#define USER1_LONG_PRESS_TICKS     45U
-#define DISP_LONG_PRESS_TICKS      45U
+#define USER1_LONG_PRESS_TICKS     80U
+#define DISP_LONG_PRESS_TICKS      80U
 
 #define TCA6424_I2CADDR            0x22
 #define PCA9557_I2CADDR            0x18
@@ -196,6 +196,7 @@ static uint8_t VisibleTextToCells(const char *text, SegmentCell *cells,
 static uint32_t CurrentScrollIntervalMs(void);
 static void ComposeFrameFromCells(const SegmentCell *cells, uint8_t count,
                                   uint8_t startIndex, DisplayFrame *frame);
+static void ApplyBootAllOnFrame(DisplayFrame *frame);
 static void ApplyEditBlink(DisplayFrame *frame);
 static void RenderFrameToSegments(const DisplayFrame *frame);
 static void Display_ScanNextDigit(void);
@@ -213,6 +214,7 @@ static void HandleKeyPress(KeyCode key, bool emitEvent);
 static void HandleKeyRelease(KeyCode key);
 static void HandleFuncLongPress(void);
 static void HandleDisplayLongPress(void);
+static void ToggleDayNightMode(void);
 static void AdvanceEditField(void);
 static void IncrementEditField(void);
 static void DecrementEditField(void);
@@ -643,10 +645,11 @@ static void Tick500ms(void)
 
 static void Tick1000ms(void)
 {
-    uint8_t forceWeatherEvent = 0U;
+    uint8_t forceEvent = 0U;
     if (g_bootPhase == BOOT_DONE) {
         AdvanceClockOneSecond(&g_now);
         g_heartbeatBit = (uint8_t)!g_heartbeatBit;
+        forceEvent = 1U;
         if ((g_alarm.enabled != 0U) &&
             (g_now.hour == g_alarm.hour) &&
             (g_now.minute == g_alarm.minute) &&
@@ -655,10 +658,10 @@ static void Tick1000ms(void)
             StartAlarmRing();
         }
         if (g_weatherShowUntilMs > g_millis) {
-            forceWeatherEvent = 1U;
+            forceEvent = 1U;
         }
     }
-    RefreshDisplayAndLeds(forceWeatherEvent != 0U);
+    RefreshDisplayAndLeds(forceEvent != 0U);
 }
 
 static void ServiceBuzzer(void)
@@ -892,7 +895,7 @@ static void BuildDottedAlarm(const AlarmState *value, char *out,
 static void BuildVisibleText(char *out, uint8_t outSize)
 {
     if (g_bootPhase == BOOT_ALL_ON) {
-        snprintf(out, outSize, "88.88.88");
+        snprintf(out, outSize, "88888888");
         return;
     }
     if (g_bootPhase == BOOT_ALL_OFF) {
@@ -921,7 +924,7 @@ static void BuildVisibleText(char *out, uint8_t outSize)
     }
 
     if (g_editMode == EDIT_DATE) {
-        BuildDottedDateYear(&g_editDateTime, out, outSize);
+        BuildDottedDateShort(&g_editDateTime, out, outSize);
         return;
     }
     if (g_editMode == EDIT_TIME) {
@@ -979,8 +982,10 @@ static uint8_t VisibleTextToCells(const char *text, SegmentCell *cells,
     uint8_t count = 0U;
     while (*text != '\0') {
         if (*text == '.') {
-            if (count > 0U) {
-                cells[count - 1U].dp = 1U;
+            if (count < maxCells) {
+                cells[count].ch = ' ';
+                cells[count].dp = 1U;
+                count++;
             }
         } else {
             if (count >= maxCells) {
@@ -1028,6 +1033,15 @@ static void ComposeFrameFromCells(const SegmentCell *cells, uint8_t count,
     }
 }
 
+static void ApplyBootAllOnFrame(DisplayFrame *frame)
+{
+    uint8_t index;
+    for (index = 0U; index < DISPLAY_WIDTH; index++) {
+        frame->chars[index] = '8';
+    }
+    frame->dp_mask = 0xFFU;
+}
+
 static void ApplyEditBlink(DisplayFrame *frame)
 {
     uint8_t start = 0U;
@@ -1038,29 +1052,28 @@ static void ApplyEditBlink(DisplayFrame *frame)
         return;
     }
 
+    count = 8U;
     if (g_editMode == EDIT_DATE) {
-        count = 8U;
         if (g_editField == 0U) {
             start = 0U;
-            end = 3U;
+            end = 1U;
         } else if (g_editField == 1U) {
-            start = 4U;
-            end = 5U;
+            start = 3U;
+            end = 4U;
         } else {
             start = 6U;
             end = 7U;
         }
     } else {
-        count = 6U;
         if (g_editField == 0U) {
             start = 0U;
             end = 1U;
         } else if (g_editField == 1U) {
-            start = 2U;
-            end = 3U;
+            start = 3U;
+            end = 4U;
         } else {
-            start = 4U;
-            end = 5U;
+            start = 6U;
+            end = 7U;
         }
     }
 
@@ -1133,6 +1146,9 @@ static void RefreshDisplayAndLeds(bool forceEvent)
     }
 
     ComposeFrameFromCells(cells, count, startIndex, &g_currentFrame);
+    if (g_bootPhase == BOOT_ALL_ON) {
+        ApplyBootAllOnFrame(&g_currentFrame);
+    }
     ApplyEditBlink(&g_currentFrame);
     RenderFrameToSegments(&g_currentFrame);
     UpdateLedHardware(forceEvent);
@@ -1210,6 +1226,16 @@ static uint8_t Encode7Seg(char value)
 static uint8_t BuildSystemLedByte(void)
 {
     uint8_t result = 0U;
+
+    if (g_bootPhase != BOOT_DONE) {
+        if ((g_bootPhase == BOOT_ALL_ON) ||
+            (g_bootPhase == BOOT_ID) ||
+            (g_bootPhase == BOOT_NAME) ||
+            (g_bootPhase == BOOT_VERSION)) {
+            return 0xFFU;
+        }
+        return 0U;
+    }
 
     if ((g_displayEnabled == 0U) && (g_bootPhase == BOOT_DONE) &&
         (g_editMode == EDIT_NONE)) {
@@ -1388,6 +1414,13 @@ static void Keys_Scan(void)
                     g_longPressDone[index] = 1U;
                     HandleDisplayLongPress();
                 }
+                if ((index == KEY_USER1) &&
+                    (g_editMode == EDIT_NONE) &&
+                    (g_holdTicks[index] >= USER1_LONG_PRESS_TICKS) &&
+                    (g_longPressDone[index] == 0U)) {
+                    g_longPressDone[index] = 1U;
+                    ToggleDayNightMode();
+                }
                 if ((index == KEY_ADD) &&
                     (g_editMode != EDIT_NONE) &&
                     (g_holdTicks[index] >= ADD_REPEAT_START_TICKS) &&
@@ -1491,8 +1524,7 @@ static void HandleKeyPress(KeyCode key, bool emitEvent)
         }
         break;
     case KEY_USER1:
-        g_dayNight = (g_dayNight == MODE_DAY) ? MODE_NIGHT : MODE_DAY;
-        EmitModeEvent();
+        /* Short USER1 only emits *EVT:KEY USER1; PC handles NTP sync. */
         break;
     case KEY_USER2:
         if (g_editMode != EDIT_NONE) {
@@ -1528,6 +1560,13 @@ static void HandleFuncLongPress(void)
     if (g_editMode != EDIT_NONE) {
         SaveEditState();
     }
+}
+
+static void ToggleDayNightMode(void)
+{
+    g_dayNight = (g_dayNight == MODE_DAY) ? MODE_NIGHT : MODE_DAY;
+    RefreshDisplayAndLeds(true);
+    EmitModeEvent();
 }
 
 static void HandleDisplayLongPress(void)

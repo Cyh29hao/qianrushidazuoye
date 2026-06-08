@@ -268,13 +268,15 @@ class DigitalTwinWidget(QtWidgets.QWidget):
         self.grid.setVerticalSpacing(1)
 
         self.key_buttons: list[QtWidgets.QPushButton] = []
+        self.key_button_by_name: dict[str, QtWidgets.QPushButton] = {}
+        self.key_button_base_style = "padding: 2px 4px;"
         keys = [
             ("USER2", "SW2\nUSER2/SUB", 0, 0),
             ("EXT", "SW8\nEXT", 0, 1),
             ("FORMAT", "SW7\nFORMAT", 0, 2),
             ("SPEED", "SW6\nSPEED", 0, 3),
             ("DISP", "SW5\nDISP", 0, 4),
-            ("USER1", "SW1\nUSER1/DN", 1, 0),
+            ("USER1", "SW1\nUSER1/NTP", 1, 0),
             ("FUNC", "SW1\nFUNC", 1, 1),
             ("SHIFT", "SW2\nSHIFT", 1, 2),
             ("ADD", "SW3\nADD", 1, 3),
@@ -282,9 +284,11 @@ class DigitalTwinWidget(QtWidgets.QWidget):
         ]
         for key_name, label, row, column in keys:
             button = QtWidgets.QPushButton(label)
+            if key_name == "USER1":
+                button.setToolTip("短按请求 PC 对时；板端长按切换 DAY/NIGHT")
             button.setMinimumHeight(26)
             button.setMaximumHeight(30)
-            button.setStyleSheet("padding: 2px 4px;")
+            button.setStyleSheet(self.key_button_base_style)
             font = button.font()
             font.setPointSize(6)
             font.setBold(True)
@@ -293,6 +297,7 @@ class DigitalTwinWidget(QtWidgets.QWidget):
                 lambda checked=False, value=key_name: self.virtual_key_requested.emit(value)
             )
             self.key_buttons.append(button)
+            self.key_button_by_name[key_name] = button
             self.grid.addWidget(button, row, column)
 
         for column in range(5):
@@ -329,3 +334,21 @@ class DigitalTwinWidget(QtWidgets.QWidget):
 
     def set_led_byte(self, value: int) -> None:
         self.leds.set_led_byte(value)
+
+    def highlight_key(self, key_name: str, duration_ms: int = 200) -> None:
+        key = key_name.strip().upper()
+        button = self.key_button_by_name.get(key)
+        if button is None:
+            return
+        button.setStyleSheet(
+            self.key_button_base_style
+            + " background-color: #ffd166; color: #101820; border: 1px solid #ffb703;"
+        )
+        QtCore.QTimer.singleShot(
+            duration_ms,
+            lambda key=key, button=button: self._clear_key_highlight(key, button),
+        )
+
+    def _clear_key_highlight(self, key: str, button: QtWidgets.QPushButton) -> None:
+        if self.key_button_by_name.get(key) is button:
+            button.setStyleSheet(self.key_button_base_style)

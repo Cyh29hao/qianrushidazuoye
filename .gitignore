@@ -1,11 +1,16 @@
+/.venv/
 pc_host/.venv/
 pc_host/__pycache__/
 pc_host/*.pyc
 pc_host/logs/
 pc_host/runtime_state.json
+mcu/*.uvgui*
+mcu/*.uvguix*
 mcu/obj/
 mcu/listings/
 mcu/Objects/
 mcu/Listings/
 tmp/
 docs/source-materials/
+docs/dialogue_with_codex.md
+docs/summary_dialogue_with_codex.md
