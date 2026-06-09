@@ -61,10 +61,10 @@ class SevenSegmentDisplayWidget(QtWidgets.QWidget):
         )
 
     def sizeHint(self) -> QtCore.QSize:
-        return QtCore.QSize(500, 72)
+        return QtCore.QSize(420, 72)
 
     def minimumSizeHint(self) -> QtCore.QSize:
-        return QtCore.QSize(380, 62)
+        return QtCore.QSize(320, 62)
 
     def set_frame(self, token: str, dp_mask: int) -> None:
         self._text = token[:8].ljust(8, "_")
@@ -186,10 +186,10 @@ class LedBarWidget(QtWidgets.QWidget):
         self.setMaximumHeight(30)
 
     def sizeHint(self) -> QtCore.QSize:
-        return QtCore.QSize(500, 28)
+        return QtCore.QSize(420, 28)
 
     def minimumSizeHint(self) -> QtCore.QSize:
-        return QtCore.QSize(380, 24)
+        return QtCore.QSize(320, 24)
 
     def set_led_byte(self, value: int) -> None:
         self._value = value & 0xFF
@@ -339,10 +339,10 @@ class DigitalTwinWidget(QtWidgets.QWidget):
             + layout.spacing() * 3
             + 4
         )
-        return QtCore.QSize(500, total_height + 6)
+        return QtCore.QSize(420, total_height + 6)
 
     def minimumSizeHint(self) -> QtCore.QSize:
-        return QtCore.QSize(380, self.sizeHint().height())
+        return QtCore.QSize(320, self.sizeHint().height())
 
     def set_display_frame(self, token: str, dp_mask: int) -> None:
         self.display.set_frame(token, dp_mask)

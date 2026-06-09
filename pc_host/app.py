@@ -339,6 +339,43 @@ class MainWindow(QtWidgets.QMainWindow):
         super().showEvent(event)
         if not self._startup_theme_polished:
             self._finalize_startup_theme()
+        QtCore.QTimer.singleShot(0, self._enforce_main_splitter_layout)
+
+    def resizeEvent(self, event: QtGui.QResizeEvent) -> None:  # noqa: N802 - Qt API
+        super().resizeEvent(event)
+        if hasattr(self, "mainSplitter"):
+            QtCore.QTimer.singleShot(0, self._enforce_main_splitter_layout)
+
+    def _right_panel_width_for(self, total_width: int) -> int:
+        if total_width < 980:
+            return 380
+        if total_width < 1180:
+            return 420
+        if total_width < 1380:
+            return 450
+        return 500
+
+    def _enforce_main_splitter_layout(self) -> None:
+        splitter = getattr(self, "mainSplitter", None)
+        right_panel = getattr(self, "rightPanel", None)
+        left_panel = getattr(self, "leftPanel", None)
+        if splitter is None or right_panel is None or left_panel is None:
+            return
+
+        available = max(0, splitter.width() - splitter.handleWidth())
+        if available <= 0:
+            return
+
+        right_width = self._right_panel_width_for(available)
+        if available - right_width < 360:
+            right_width = max(360, available - 360)
+        right_width = max(360, min(500, right_width))
+        left_width = max(360, available - right_width)
+
+        right_panel.setMinimumWidth(right_width)
+        right_panel.setMaximumWidth(right_width)
+        left_panel.setMinimumWidth(360)
+        splitter.setSizes([left_width, right_width])
 
     def _finalize_startup_theme(self) -> None:
         self._refresh_theme_from_mode()
@@ -2380,10 +2417,10 @@ class MainWindow(QtWidgets.QMainWindow):
     def _refine_layout(self) -> None:
         screen = QtWidgets.QApplication.primaryScreen()
         available = screen.availableGeometry() if screen is not None else QtCore.QRect(0, 0, 1440, 900)
-        target_width = min(1500, max(1120, int(available.width() * 0.94)))
-        target_height = min(900, max(680, int(available.height() * 0.92)))
+        target_width = min(1500, max(920, int(available.width() * 0.94)))
+        target_height = min(900, max(600, int(available.height() * 0.92)))
         self.resize(target_width, target_height)
-        self.setMinimumSize(1180, 720)
+        self.setMinimumSize(900, 600)
         self.ui.horizontalLayout.setContentsMargins(10, 10, 10, 10)
         self.ui.horizontalLayout.setSpacing(10)
 
@@ -2426,7 +2463,7 @@ class MainWindow(QtWidgets.QMainWindow):
         left_panel = QtWidgets.QWidget(self.ui.centralwidget)
         left_panel.setObjectName("mainLeftPanel")
         self.leftPanel = left_panel
-        left_panel.setMinimumWidth(620)
+        left_panel.setMinimumWidth(360)
         left_panel.setSizePolicy(
             QtWidgets.QSizePolicy.Expanding,
             QtWidgets.QSizePolicy.Expanding,
@@ -2446,8 +2483,9 @@ class MainWindow(QtWidgets.QMainWindow):
         right_panel.setObjectName("mainRightPanel")
         self.rightPanel = right_panel
         self.rightScrollArea = None
-        right_panel.setMinimumWidth(500)
-        right_panel.setMaximumWidth(560)
+        right_width = self._right_panel_width_for(target_width)
+        right_panel.setMinimumWidth(right_width)
+        right_panel.setMaximumWidth(right_width)
         right_panel.setSizePolicy(
             QtWidgets.QSizePolicy.Fixed,
             QtWidgets.QSizePolicy.Expanding,
@@ -2494,10 +2532,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self.mainSplitter.addWidget(right_panel)
         self.mainSplitter.setStretchFactor(0, 1)
         self.mainSplitter.setStretchFactor(1, 0)
-        right_size = min(540, max(500, int(target_width * 0.36)))
-        left_size = max(620, target_width - right_size - 20)
+        right_size = right_width
+        left_size = max(360, target_width - right_size - 20)
         self.mainSplitter.setSizes([left_size, right_size])
         self.ui.horizontalLayout.addWidget(self.mainSplitter)
+        QtCore.QTimer.singleShot(0, self._enforce_main_splitter_layout)
 
         log_layout = self.ui.logGroup.layout()
         if log_layout is not None and not hasattr(self, "latestDisplayLabel"):

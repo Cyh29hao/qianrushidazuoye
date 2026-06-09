@@ -4,6 +4,31 @@
 
 ## 2026-06-09
 
+### v2.1 小逻辑桌面右侧栏防挤压回修
+
+#### 已完成修改
+- 修复用户真实 Windows 缩放环境下右侧数字孪生栏再次被挤掉/裁切的问题。根因是窗口实际可用逻辑尺寸约 `1080x622`，旧布局仍存在左侧最小宽度、右侧固定宽度和 twin 控件 `sizeHint` 总和过大的风险。
+- `pc_host/app.py` 新增 `_right_panel_width_for()` 和 `_enforce_main_splitter_layout()`，在 `showEvent`、`resizeEvent` 和 `_refine_layout()` 后按真实 `QSplitter` 宽度重新钳制左右栏；右侧宽度自适应约 `360-500px`，左侧最小宽度降为 `360px`。
+- `pc_host/twin_widgets.py` 降低 7SEG、LED、DigitalTwinWidget 的建议宽度和最小建议宽度，避免右侧内部控件继续强行要求 500px 以上宽度。
+- `AGENT.md` 新增 `Small Logical Desktop Layout Rule`，要求后续 UI 修改必须验证小逻辑桌面和记录几何数据，不能只看大屏截图。
+
+#### 关键文件
+- `pc_host/app.py`
+- `pc_host/twin_widgets.py`
+- `AGENT.md`
+- `PROJECT_CONTEXT.md`
+- `CHANGELOG_AI.md`
+
+#### 验证结果
+- `python -m py_compile pc_host/app.py pc_host/twin_widgets.py pc_host/run_extension_checks.py pc_host/protocol.py pc_host/extension_services.py pc_host/extension_store.py pc_host/ui_main.py` 通过。
+- `python pc_host/run_extension_checks.py --host-only` 通过。
+- Windows 原生 Qt 最大化截图验证：窗口 `1080x622`，`QSplitter` 宽 `1060`，sizes `[634, 420]`，右侧栏宽 `420`、右边界 `1059`，未出屏；系统设置、闹钟日程、调试测试三个可见左页 horizontal scrollbar maximum 均为 `0`。
+- 截图保存在 `tmp/right_guard_page_0.png`、`tmp/right_guard_page_1.png`、`tmp/right_guard_page_2.png`、`tmp/right_guard_page_3.png`，不纳入 Git。
+
+#### 未解决问题
+- 这次只修 PC 源码版布局和规则文档；如果继续使用 v2.1 打包 exe，需要重新打包 release 才能包含此回修。
+- `pc_host/config.json` 有运行程序造成的换行状态变化，未纳入本次提交。
+
 ### v2.1 体验修复、右侧无滚动布局与协议测试收口
 
 #### 已完成修改

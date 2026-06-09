@@ -1,5 +1,12 @@
 # PROJECT_CONTEXT - 智能时钟联网系统
 
+## 2026-06-09 v2.1 小逻辑桌面右侧栏防挤压回修
+- 最新 UI 回修针对用户真实机器上约 `1080x622` 的 Qt 逻辑窗口：此前左侧最小宽度、右侧固定宽度和右侧控件 `sizeHint` 总和过大，导致右侧数字孪生栏在真实缩放环境中被挤掉或裁切。
+- `pc_host/app.py` 现在在窗口 `show()`、`resizeEvent` 和 `_refine_layout()` 完成后都会调用 `_enforce_main_splitter_layout()`，按当前 `QSplitter` 实际宽度重新钳制左右尺寸；右侧栏按总宽自适应为约 `360-500px`，左侧保留最小 `360px` 并允许纵向滚动。
+- `pc_host/twin_widgets.py` 已降低 7SEG、LED、DigitalTwinWidget 的 `sizeHint()`/`minimumSizeHint()`，避免右侧内部控件继续要求 500px 以上宽度反向撑爆主窗口。
+- `AGENT.md` 新增 `Small Logical Desktop Layout Rule`，要求后续 UI 修改必须按小逻辑桌面验证：记录 window、splitter sizes、left/right width、right edge 和当前可见左页 horizontal scrollbar maximum。
+- 本轮验证：真实 Qt 最大化窗口 `1080x622` 下，`QSplitter` 宽 `1060`、sizes 为 `[634, 420]`，右侧栏右边界 `1059` 未出屏；系统设置、闹钟日程、调试测试三个可见左页横向滚动最大值均为 `0`；截图已输出到 `tmp/right_guard_page_*.png`。Python 语法检查和 host-only 检查通过。
+
 最后更新：2026-06-09（v2.1 体验修复与协议测试收口）
 
 本文件给新的 AI 对话快速接手使用，只记录当前最终状态、目录结构、要求、已实现功能、已知问题和下一步计划。不要把聊天记录、推理过程或临时争论写进来。后续以最新代码和本文件为准；旧任务文档可能已经过时，需要复核当前实现。

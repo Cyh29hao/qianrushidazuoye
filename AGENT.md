@@ -85,3 +85,11 @@
 - PC 端新增或重排动态 UI 容器后，必须确认这些控件在第一次 `show()` 前后都经过主题刷新。尤其是 `QSplitter` 分栏、右侧数字孪生面板、日志面板、页面宿主、临时创建的标题/信息条，不能只依赖用户切换 DAY/NIGHT 后才刷新样式。
 - 对首屏可见的动态容器要设置稳定 `objectName`，并纳入全局 QSS 或动态主题覆盖；必要时同时设置 palette 和 `setAutoFillBackground(True)`，防止 release exe 第一帧露出 Qt/Windows 默认白底。
 - 修 UI 后必须至少做一次 “NIGHT 状态下从冷启动进入主窗口” 的验证。只验证切换主题后的效果不够，因为这类问题往往在切换后消失、但首启仍然存在。
+
+## Small Logical Desktop Layout Rule
+
+- 不要把 1600x900 或 1366x768 当作唯一可用窗口。用户机器在 Windows 缩放/任务栏存在时，Qt 可能只暴露约 1080x622 的可用逻辑桌面；主窗口必须在这种尺寸下仍能展示完整右侧数字孪生栏。
+- 右侧数字孪生栏必须由顶层 `QSplitter` 保护宽度，窗口 `show()`、最大化、resize、切页后都要重新钳制左右尺寸；不要只在初始化时 `setSizes()` 一次。
+- 右侧栏内部控件的 `sizeHint()`/`minimumSizeHint()` 不能反向撑爆主窗口。7SEG、LED、按键和日志摘要应优先压缩到 360-500px 的右栏范围内，而不是要求 500px 以上固定宽度。
+- 左侧页面可以纵向滚动，但当前可见页的水平滚动最大值必须为 0；如果为了保右侧而让左侧产生横向滚动，仍视为 UI 失败。
+- 每次改主窗口布局后，至少在真实 Qt 窗口中验证最大化几何：记录 window、splitter sizes、left/right width、right edge、当前可见左页 horizontal scrollbar maximum，并保存截图。
