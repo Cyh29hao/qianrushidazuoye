@@ -4,6 +4,19 @@
 
 本文件给新的 AI 对话快速接手使用，只记录当前最终状态、目录结构、要求、已实现功能、已知问题和下一步计划。不要把聊天记录、推理过程或临时争论写进来。后续以最新代码和本文件为准；旧任务文档可能已经过时，需要复核当前实现。
 
+## 2026-06-09 主窗口 UI 布局稳定化
+
+- 当前主版本仍为 `D:\桌面\大二下\大二下 嵌入式系统与接口技术\ARM\真正的最新版`，当前分支为 `gemini-ui-improvements`，远程仓库为 `https://github.com/Cyh29hao/qianrushidazuoye`。
+- 本轮重点修复 PC 上位机 UI 顶层布局反复被改坏的问题。`AGENT.md` 已新增“UI 修改硬性规则：禁止再犯的布局问题”，以后 UI 修改必须先读；新增 `docs/UI自检清单.md` 作为每次提交前自检标准。
+- 主窗口布局策略更新为：左侧主功能区固定在 520-600 逻辑像素范围，右侧数字孪生/日志区域通过 `QScrollArea` 包裹并获得伸展优先级，底部状态栏保持正常 `QStatusBar`，三者不允许互相覆盖。
+- 右侧数字孪生现在按正常布局流显示在上方，日志区在下方；`twinGroup` 不再用过低固定高度裁切内容。若窗口高度不足，右侧区域纵向滚动，而不是让日志盖住第二行虚拟按键。
+- `pc_host/twin_widgets.py` 收缩了 7SEG/LED 的 size hint，右上说明文字改为短标题并允许收缩，虚拟按键宽度可收缩但保留两行完整显示，解决高 DPI 下最右侧数码管/第二行按钮被裁切的问题。
+- 状态栏按钮使用更紧凑的蓝色专用样式，状态栏最大高度限制为 34px；`QGroupBox` 标题统一改成分组框底色并下移，减少标题压线。
+- 已新增/更新的文档：`AGENT.md`、`docs/UI自检清单.md`、`PROJECT_CONTEXT.md`、`CHANGELOG_AI.md`。
+- 已验证：Python 语法检查通过、host-only 自动测试通过、Windows 原生 Qt 截图覆盖 DAY/NIGHT 和 4 个页面、1366x819/1600x900/2048x1228 几何检查通过、等价 `launch_pc_host.bat` 启动路径 5 秒无 stderr/QSS parse 报错。
+- v2.1 release 已重新打包：`build_release/SmartClockHost-v2.1/SmartClockHost.exe` 与 `build_release/SmartClockHost-v2.1.zip`。`build_release/` 仍被 `.gitignore` 忽略，不提交到 Git。
+- 本轮未修改 MCU，因此不需要重新烧录。若使用 exe 演示，需要使用本轮重新打包后的 release。
+
 ## 当前主版本
 
 - 项目根目录：`D:\桌面\大二下\大二下 嵌入式系统与接口技术\ARM\真正的最新版`

@@ -342,6 +342,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self._startup_theme_polished = True
 
     def _build_statusbar(self) -> None:
+        self.ui.statusbar.setSizeGripEnabled(False)
+        self.ui.statusbar.setMaximumHeight(34)
         self.status_project = QtWidgets.QLabel("智能时钟")
         self.status_project.setContentsMargins(4, 0, 8, 0)
         self.status_project_icon = QtWidgets.QLabel()
@@ -391,8 +393,10 @@ class MainWindow(QtWidgets.QMainWindow):
             self.status_export_button,
             self.status_github_button,
         ):
-            button.setMinimumWidth(64)
-            button.setMaximumWidth(86)
+            button.setMinimumWidth(52)
+            button.setMaximumWidth(72)
+            button.setMinimumHeight(24)
+            button.setMaximumHeight(28)
         self.ui.statusbar.addWidget(self.status_project_icon)
         self.ui.statusbar.addWidget(self.status_project)
         self.ui.statusbar.addPermanentWidget(self.status_connection)
@@ -1137,16 +1141,16 @@ class MainWindow(QtWidgets.QMainWindow):
                 background: {palette['group_bg']};
                 border: 1px solid {palette['group_border']};
                 border-radius: 8px;
-                margin-top: 26px;
+                margin-top: 24px;
                 font-weight: 700;
             }}
             QGroupBox::title {{
                 subcontrol-origin: margin;
                 subcontrol-position: top left;
                 left: 14px;
-                top: 0px;
+                top: 4px;
                 padding: 0 8px 2px 8px;
-                background: {palette['background']};
+                background: {palette['group_bg']};
                 color: {palette['title']};
             }}
             QGroupBox#twinGroup {{
@@ -1854,6 +1858,28 @@ class MainWindow(QtWidgets.QMainWindow):
             f"color: {palette['text']};"
             f"font-size: 12px;"
         )
+        status_action_style = (
+            f"QToolButton#statusActionButton {{"
+            f"background: {palette['button']};"
+            f"color: white;"
+            f"border: none;"
+            f"border-radius: 8px;"
+            f"padding: 2px 8px;"
+            f"min-height: 22px;"
+            f"font-size: 11px;"
+            f"font-weight: 700;"
+            f"}}"
+            f"QToolButton#statusActionButton:hover {{"
+            f"background: {palette['button_hover']};"
+            f"}}"
+            f"QToolButton#statusActionButton:pressed {{"
+            f"background: {palette['button_pressed']};"
+            f"}}"
+            f"QToolButton#statusActionButton:disabled {{"
+            f"background: {palette['button_disabled']};"
+            f"color: rgba(255,255,255,0.58);"
+            f"}}"
+        )
         background_palette = self._palette_for_colors(palette["background"], palette["text"])
         group_palette = self._palette_for_colors(palette["group_bg"], palette["text"])
         input_palette = self._palette_for_colors(palette["input_bg"], palette["text"])
@@ -1861,6 +1887,7 @@ class MainWindow(QtWidgets.QMainWindow):
         for widget in (
             getattr(self.ui, "centralwidget", None),
             getattr(self, "leftPanel", None),
+            getattr(self, "rightScrollArea", None),
             getattr(self, "rightPanel", None),
         ):
             if widget is None:
@@ -1971,6 +1998,13 @@ class MainWindow(QtWidgets.QMainWindow):
         ):
             if label is not None:
                 label.setStyleSheet(status_label_style)
+        for button in (
+            getattr(self, "status_clear_button", None),
+            getattr(self, "status_export_button", None),
+            getattr(self, "status_github_button", None),
+        ):
+            if button is not None:
+                button.setStyleSheet(status_action_style)
         for card in self.findChildren(QtWidgets.QFrame):
             if card.property("dashboardCard"):
                 card.setStyleSheet(card_style)
@@ -2335,7 +2369,7 @@ class MainWindow(QtWidgets.QMainWindow):
         target_width = min(1500, max(1120, int(available.width() * 0.94)))
         target_height = min(900, max(680, int(available.height() * 0.92)))
         self.resize(target_width, target_height)
-        self.setMinimumSize(1040, 700)
+        self.setMinimumSize(1180, 720)
         self.ui.horizontalLayout.setContentsMargins(10, 10, 10, 10)
         self.ui.horizontalLayout.setSpacing(10)
 
@@ -2358,7 +2392,7 @@ class MainWindow(QtWidgets.QMainWindow):
         def make_tab_page(*groups: QtWidgets.QGroupBox) -> QtWidgets.QScrollArea:
             page = QtWidgets.QScrollArea(self.ui.centralwidget)
             page.setWidgetResizable(True)
-            page.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
+            page.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
             page.setFrameShape(QtWidgets.QFrame.NoFrame)
 
             host = QtWidgets.QWidget()
@@ -2378,8 +2412,8 @@ class MainWindow(QtWidgets.QMainWindow):
         left_panel = QtWidgets.QWidget(self.ui.centralwidget)
         left_panel.setObjectName("mainLeftPanel")
         self.leftPanel = left_panel
-        left_panel.setMinimumWidth(500)
-        left_panel.setMaximumWidth(650)
+        left_panel.setMinimumWidth(520)
+        left_panel.setMaximumWidth(600)
         left_panel.setSizePolicy(
             QtWidgets.QSizePolicy.Preferred,
             QtWidgets.QSizePolicy.Expanding,
@@ -2395,19 +2429,33 @@ class MainWindow(QtWidgets.QMainWindow):
         self.leftSections.add_section("调试与测试", self._build_debug_test_page())
         left_layout.addWidget(self.leftSections)
 
-        right_panel = QtWidgets.QWidget(self.ui.centralwidget)
+        right_scroll = QtWidgets.QScrollArea(self.ui.centralwidget)
+        right_scroll.setObjectName("mainRightScrollArea")
+        right_scroll.setWidgetResizable(True)
+        right_scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
+        right_scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
+        right_scroll.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
+        right_scroll.setMinimumWidth(600)
+        right_scroll.setSizePolicy(
+            QtWidgets.QSizePolicy.Expanding,
+            QtWidgets.QSizePolicy.Expanding,
+        )
+        self.rightScrollArea = right_scroll
+
+        right_panel = QtWidgets.QWidget()
         right_panel.setObjectName("mainRightPanel")
         self.rightPanel = right_panel
         right_panel.setMinimumWidth(600)
         right_panel.setSizePolicy(
             QtWidgets.QSizePolicy.Expanding,
-            QtWidgets.QSizePolicy.Expanding,
+            QtWidgets.QSizePolicy.MinimumExpanding,
         )
         right_layout = QtWidgets.QVBoxLayout(right_panel)
         right_layout.setContentsMargins(0, 0, 0, 0)
-        right_layout.setSpacing(8)
-        right_layout.addWidget(self.ui.twinGroup, 0, QtCore.Qt.AlignTop)
+        right_layout.setSpacing(10)
+        right_layout.addWidget(self.ui.twinGroup, 0)
         right_layout.addWidget(self.ui.logGroup, 1)
+        right_scroll.setWidget(right_panel)
 
         self.ui.connectionGroup.setMinimumHeight(124)
         self.ui.clockGroup.setMinimumHeight(178)
@@ -2415,21 +2463,20 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ui.demoGroup.setMinimumHeight(220)
 
         available_height = max(target_height, available.height())
-        min_log_height = 175 if available_height >= 760 else 145
-        required_twin_height = max(
-            self.twin.sizeHint().height() + 82,
-            self.twin.minimumSizeHint().height() + 72,
-            390,
+        min_log_height = 240 if available_height >= 760 else 190
+        self.twin.ensurePolished()
+        twin_content_height = max(
+            self.twin.sizeHint().height(),
+            self.twin.minimumSizeHint().height(),
         )
-        required_twin_height = min(
-            required_twin_height,
-            max(self.twin.minimumSizeHint().height() + 72, available_height - min_log_height - 56),
-        )
+        required_twin_height = max(twin_content_height + 58, 440)
         self.ui.twinGroup.setTitle("")
-        self.ui.twinGroup.setFixedHeight(required_twin_height)
+        self.twin.setMinimumHeight(twin_content_height + 12)
+        self.ui.twinGroup.setMinimumHeight(required_twin_height)
+        self.ui.twinGroup.setMaximumHeight(16777215)
         self.ui.twinGroup.setSizePolicy(
             QtWidgets.QSizePolicy.Expanding,
-            QtWidgets.QSizePolicy.Fixed,
+            QtWidgets.QSizePolicy.Preferred,
         )
 
         self.ui.logGroup.setSizePolicy(
@@ -2438,18 +2485,20 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         self.ui.logGroup.setTitle("")
         self.ui.logGroup.setMinimumHeight(min_log_height)
+        right_panel.setMinimumHeight(required_twin_height + min_log_height + 18)
 
         self.mainSplitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal, self.ui.centralwidget)
         self.mainSplitter.setChildrenCollapsible(False)
         self.mainSplitter.setHandleWidth(6)
         self.mainSplitter.addWidget(left_panel)
-        self.mainSplitter.addWidget(right_panel)
+        self.mainSplitter.addWidget(right_scroll)
         self.mainSplitter.setStretchFactor(0, 0)
         self.mainSplitter.setStretchFactor(1, 1)
-        left_size = min(620, max(520, int(target_width * 0.43)))
-        if target_width - left_size < 600:
-            left_size = max(500, target_width - 600)
-        right_size = max(600, target_width - left_size)
+        right_min_width = 600
+        left_size = min(600, max(540, int(target_width * 0.42)))
+        if target_width - left_size < right_min_width:
+            left_size = max(520, target_width - right_min_width)
+        right_size = max(right_min_width, target_width - left_size)
         self.mainSplitter.setSizes([left_size, right_size])
         self.ui.horizontalLayout.addWidget(self.mainSplitter)
 
@@ -2544,8 +2593,8 @@ class MainWindow(QtWidgets.QMainWindow):
         for button in self.findChildren(QtWidgets.QPushButton):
             button.setCursor(QtGui.QCursor(QtCore.Qt.PointingHandCursor))
             if button.objectName() == "twinKeyButton":
-                button.setMinimumHeight(38)
-                button.setMaximumHeight(44)
+                button.setMinimumHeight(40)
+                button.setMaximumHeight(48)
                 continue
             button.setMinimumHeight(34)
             button.setMinimumWidth(max(button.minimumWidth(), 76))

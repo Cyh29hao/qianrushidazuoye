@@ -4,6 +4,38 @@
 
 ## 2026-06-09
 
+### 主窗口 UI 布局稳定化与硬规则补充
+
+#### 已完成修改
+- `AGENT.md` 新增“UI 修改硬性规则：禁止再犯的布局问题”，明确禁止绝对定位覆盖、右侧数字孪生裁切、左侧页面被压窄、黑夜白底、按钮无色、下拉箭头黑方块、checkbox 无勾、小标题压线等问题。
+- 新增 `docs/UI自检清单.md`，列出主页、系统设置、时间与同步、闹钟与日程、调试与测试、数字孪生、日志区、状态栏、DAY/NIGHT、普通窗口/全屏窗口等提交前检查标准。
+- 主窗口顶层布局改为更稳定的左侧主功能区 + 右侧滚动容器 + 底部状态栏：左侧宽度限制在 520-600 逻辑像素，右侧数字孪生获得伸展优先级且不再被日志区覆盖。
+- 右侧数字孪生镜像区改为正常布局流中的上方固定内容区，日志区位于下方；窗口高度不足时右侧区域纵向滚动，不再硬裁切第二行按键。
+- 收缩数字孪生的 7SEG/LED size hint，右上角说明文字改为可收缩短标题，避免高 DPI 下撑出横向滚动或裁掉最右侧数码管。
+- 状态栏按钮改为更紧凑的状态栏专用蓝色按钮样式，状态栏高度限制为 34px，减少底部拥挤。
+- 全局 `QGroupBox` 标题背景改为分组框底色并下移，缓解小标题贴线/压线问题。
+- 重新打包 v2.1 release：`build_release/SmartClockHost-v2.1/SmartClockHost.exe` 与 `build_release/SmartClockHost-v2.1.zip` 已更新，仍不纳入 Git。
+
+#### 关键文件
+- `AGENT.md`
+- `docs/UI自检清单.md`
+- `pc_host/app.py`
+- `pc_host/twin_widgets.py`
+- `PROJECT_CONTEXT.md`
+- `CHANGELOG_AI.md`
+
+#### 验证结果
+- `python -m py_compile pc_host/app.py pc_host/twin_widgets.py pc_host/run_extension_checks.py pc_host/protocol.py pc_host/extension_services.py pc_host/extension_store.py` 通过。
+- `python pc_host/run_extension_checks.py --host-only` 通过。
+- Windows 原生 Qt 平台截图验证覆盖 DAY/NIGHT 与 4 个页面：在 1366x819 逻辑窗口下，左侧页面 `hmax=0`，右侧 `hmax=0`，数字孪生与日志间距 10px。
+- 几何验证覆盖 1600x900 与 2048x1228：DAY/NIGHT、4 个页面均无左/右横向滚动，数字孪生和日志不重叠。
+- 使用 `pc_host/.venv/Scripts/python.exe pc_host/app.py` 等价启动 5 秒，无 stderr 输出，无 `Could not parse stylesheet`。
+- v2.1 release exe 启动 5 秒未退出；烟测运行态文件已清理并重新压缩 release zip。
+
+#### 未解决问题
+- 本轮未修改 MCU，不需要重新烧录。若演示使用 release exe，必须使用本轮重新打包后的 `build_release/SmartClockHost-v2.1/SmartClockHost.exe`。
+- 仍建议在用户真实桌面双击 release exe 复核一次最大化和普通窗口，尤其确认高 DPI 下右侧纵向滚动条不会影响演示观感。
+
 ### RESET/重连同步稳定版
 
 #### 已完成修改
