@@ -4,6 +4,37 @@
 
 ## 2026-06-09
 
+### RESET/重连同步稳定版
+
+#### 已完成修改
+- 串口连接成功后自动按当前城市/时区写入板端日期和时间；NTP 不可用时使用 PC 本机时间 + 城市时区 fallback，不再要求用户手动点一次对时。
+- 收到 `S800 CLOCK READY` 后清空旧查询队列，先等待/映射板端真实显示帧，再后台执行快速写时、NTP 对时和天气刷新，避免 PC 本地开机镜像或网络任务覆盖真实板端显示。
+- 数字孪生镜像加固数据源优先级：连接串口时本地模拟刷新和本地开机镜像不再写入孪生画面；真实 `*EVT:DISP`/`*EVT:LED` 永远优先。
+- `MODE` 清洗为只允许 `DAY`/`NIGHT`：加载运行状态、收到 `*EVT:MODE`、处理 `*GET:MODE` 时都会忽略 `OFF` 等非法值，避免 RESET/插拔后 UI 显示 `OFF`。
+- MCU 增加 EEPROM 时间备份：启动读取最近时间，写日期/写时间后立即保存，运行时每约 10 秒保存一次，作为无 PC 时 RESET 后不回到默认 00:00:00 的稳妥 fallback。
+- 日程板端标签改为最多 32 个 ASCII 字符，通过 `*SET:MSG` 走 MCU 原有滚动消息状态机显示完整标签，不再静默截断前 8 位。
+- 问候语改为 05-10 早上、11-13 中午、14-17 下午、18-21 晚上、22-04 夜深了/注意休息。
+- 主窗口左右比例微调：左侧主功能区变宽以容纳日期、系统设置和日程控件；右侧数字孪生固定高度增加，避免第二行按键被日志区裁切。
+
+#### 关键文件
+- `pc_host/app.py`
+- `pc_host/extension_store.py`
+- `mcu/src/main.c`
+- `PROJECT_CONTEXT.md`
+- `CHANGELOG_AI.md`
+- `AGENT.md`
+
+#### 验证结果
+- `python -m py_compile pc_host/app.py pc_host/extension_store.py pc_host/protocol.py pc_host/twin_widgets.py pc_host/run_extension_checks.py pc_host/extension_services.py` 通过。
+- `python pc_host/run_extension_checks.py --host-only` 通过。
+- PyQt offscreen 几何烟测通过：1280x720、1366x768、1500x900 下右侧第二行按键无裁切，左侧系统设置/日程/调试页无横向滚动条。
+- `gcc -fsyntax-only -DPART_TM4C1294NCPDT -DTARGET_IS_TM4C129_RA0 -I mcu/Inc -I mcu/Driverlib mcu/src/main.c` 通过。
+- PyInstaller onedir 重新打包成功：`build_release/SmartClockHost-v2.1/SmartClockHost.exe`；压缩包 `build_release/SmartClockHost-v2.1.zip` 已更新，exe 启动 5 秒未退出，release 目录运行态文件已清理。
+
+#### 未解决问题
+- MCU 改动需要 Keil5 重新编译、烧录并在实板验证 EEPROM 恢复时间、串口连接自动写时和 RESET 显示帧同步。
+- `build_release/` 仍按 `.gitignore` 不提交；如需 GitHub Release 附件，可上传 `SmartClockHost-v2.1.zip`。
+
 ### v2.1 真实窗口布局回修
 
 #### 已完成修改

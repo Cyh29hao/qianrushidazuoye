@@ -7,6 +7,7 @@
 #include "hw_i2c.h"
 #include "hw_types.h"
 #include "i2c.h"
+#include "eeprom.h"
 #include "interrupt.h"
 #include "pin_map.h"
 #include "sysctl.h"
@@ -41,6 +42,10 @@
 #define WEATHER_SHOW_MS            5000UL
 #define USER1_LONG_PRESS_TICKS     80U
 #define DISP_LONG_PRESS_TICKS      80U
+#define TIME_BACKUP_SAVE_MS        10000UL
+#define TIME_BACKUP_EEPROM_ADDR    0x0000UL
+#define TIME_BACKUP_MAGIC          0x53434C4BU
+#define TIME_BACKUP_VERSION        0x00010001U
 
 #define TCA6424_I2CADDR            0x22
 #define PCA9557_I2CADDR            0x18
@@ -148,6 +153,14 @@ typedef struct {
 } DateTime;
 
 typedef struct {
+    uint32_t magic;
+    uint32_t version;
+    uint32_t ymd;
+    uint32_t hms;
+    uint32_t checksum;
+} TimeBackupRecord;
+
+typedef struct {
     uint8_t hour;
     uint8_t minute;
     uint8_t second;
@@ -243,6 +256,11 @@ static bool IsLeapYear(uint16_t year);
 static uint8_t DaysInMonth(uint16_t year, uint8_t month);
 static uint8_t CalculateWeekdayIndex(const DateTime *value);
 static void AdvanceClockOneSecond(DateTime *value);
+static void TimeBackup_Init(void);
+static bool TimeBackup_Load(DateTime *value);
+static void TimeBackup_Save(const DateTime *value);
+static uint32_t TimeBackup_Checksum(const TimeBackupRecord *record);
+static bool IsValidDateTime(const DateTime *value);
 
 static void ResetRuntimeState(void);
 static void SetDefaultDateTime(DateTime *value);
@@ -337,6 +355,8 @@ static uint32_t g_weatherShowUntilMs;
 static char g_uartLine[UART_LINE_MAX];
 static uint8_t g_uartLen;
 static uint8_t g_uartOverflow;
+static uint8_t g_timeBackupReady;
+static uint32_t g_nextTimeBackupMs;
 
 int main(void)
 {
@@ -344,6 +364,7 @@ int main(void)
     GPIO_Init();
     I2C0_Init();
     UART0_Init();
+    TimeBackup_Init();
     ResetRuntimeState();
     RefreshDisplayAndLeds(true);
     UART_WriteLine("S800 CLOCK READY");
@@ -697,6 +718,10 @@ static void Tick1000ms(void)
         if (g_weatherShowUntilMs > g_millis) {
             forceEvent = 1U;
         }
+        if ((g_timeBackupReady != 0U) && (g_millis >= g_nextTimeBackupMs)) {
+            TimeBackup_Save(&g_now);
+            g_nextTimeBackupMs = g_millis + TIME_BACKUP_SAVE_MS;
+        }
     }
     RefreshDisplayAndLeds(forceEvent != 0U);
 }
@@ -818,6 +843,7 @@ static void ResetRuntimeState(void)
     uint8_t index;
 
     SetDefaultDateTime(&g_now);
+    (void)TimeBackup_Load(&g_now);
     SetDefaultAlarm(&g_alarm);
     g_viewMode = VIEW_TIME;
     g_dayNight = MODE_DAY;
@@ -856,6 +882,7 @@ static void ResetRuntimeState(void)
     g_buzzerPatternStep = 0U;
     g_uartLen = 0U;
     g_uartOverflow = 0U;
+    g_nextTimeBackupMs = g_millis + TIME_BACKUP_SAVE_MS;
     memset(&g_currentFrame, 0, sizeof(g_currentFrame));
     memset(&g_previousFrame, 0, sizeof(g_previousFrame));
     memset(g_currentSegments, 0, sizeof(g_currentSegments));
@@ -1920,11 +1947,15 @@ static void ExitEditMode(bool saveChanges)
             g_now.year = g_editDateTime.year;
             g_now.month = g_editDateTime.month;
             g_now.day = g_editDateTime.day;
+            TimeBackup_Save(&g_now);
+            g_nextTimeBackupMs = g_millis + TIME_BACKUP_SAVE_MS;
             EmitEditEvent(oldMode);
         } else if (g_editMode == EDIT_TIME) {
             g_now.hour = g_editDateTime.hour;
             g_now.minute = g_editDateTime.minute;
             g_now.second = g_editDateTime.second;
+            TimeBackup_Save(&g_now);
+            g_nextTimeBackupMs = g_millis + TIME_BACKUP_SAVE_MS;
             EmitEditEvent(oldMode);
         } else if (g_editMode == EDIT_ALARM) {
             g_alarm = g_editAlarm;
@@ -2143,6 +2174,99 @@ static void AdvanceClockOneSecond(DateTime *value)
     value->year++;
 }
 
+static void TimeBackup_Init(void)
+{
+    uint32_t status;
+
+    g_timeBackupReady = 0U;
+    g_nextTimeBackupMs = g_millis + TIME_BACKUP_SAVE_MS;
+    SysCtlPeripheralEnable(SYSCTL_PERIPH_EEPROM0);
+    while (!SysCtlPeripheralReady(SYSCTL_PERIPH_EEPROM0)) {
+    }
+    status = EEPROMInit();
+    if (status == EEPROM_INIT_RETRY) {
+        status = EEPROMInit();
+    }
+    if (status == EEPROM_INIT_OK) {
+        g_timeBackupReady = 1U;
+    }
+}
+
+static uint32_t TimeBackup_Checksum(const TimeBackupRecord *record)
+{
+    return record->magic ^ record->version ^ record->ymd ^
+           record->hms ^ 0xA5A55A5AU;
+}
+
+static bool IsValidDateTime(const DateTime *value)
+{
+    if ((value->year < 2020U) || (value->year > 2099U)) {
+        return false;
+    }
+    if ((value->month < 1U) || (value->month > 12U)) {
+        return false;
+    }
+    if ((value->day < 1U) ||
+        (value->day > DaysInMonth(value->year, value->month))) {
+        return false;
+    }
+    if ((value->hour > 23U) || (value->minute > 59U) ||
+        (value->second > 59U)) {
+        return false;
+    }
+    return true;
+}
+
+static bool TimeBackup_Load(DateTime *value)
+{
+    TimeBackupRecord record;
+    DateTime candidate;
+
+    if (g_timeBackupReady == 0U) {
+        return false;
+    }
+    EEPROMRead((uint32_t *)&record, TIME_BACKUP_EEPROM_ADDR,
+               sizeof(record));
+    if ((record.magic != TIME_BACKUP_MAGIC) ||
+        (record.version != TIME_BACKUP_VERSION) ||
+        (record.checksum != TimeBackup_Checksum(&record))) {
+        return false;
+    }
+
+    candidate.year = (uint16_t)((record.ymd >> 16) & 0xFFFFU);
+    candidate.month = (uint8_t)((record.ymd >> 8) & 0xFFU);
+    candidate.day = (uint8_t)(record.ymd & 0xFFU);
+    candidate.hour = (uint8_t)((record.hms >> 16) & 0xFFU);
+    candidate.minute = (uint8_t)((record.hms >> 8) & 0xFFU);
+    candidate.second = (uint8_t)(record.hms & 0xFFU);
+    if (IsValidDateTime(&candidate) == false) {
+        return false;
+    }
+
+    *value = candidate;
+    return true;
+}
+
+static void TimeBackup_Save(const DateTime *value)
+{
+    TimeBackupRecord record;
+
+    if ((g_timeBackupReady == 0U) || (IsValidDateTime(value) == false)) {
+        return;
+    }
+    record.magic = TIME_BACKUP_MAGIC;
+    record.version = TIME_BACKUP_VERSION;
+    record.ymd = (((uint32_t)value->year) << 16) |
+                 (((uint32_t)value->month) << 8) |
+                 (uint32_t)value->day;
+    record.hms = (((uint32_t)value->hour) << 16) |
+                 (((uint32_t)value->minute) << 8) |
+                 (uint32_t)value->second;
+    record.checksum = TimeBackup_Checksum(&record);
+    (void)EEPROMProgram((uint32_t *)&record, TIME_BACKUP_EEPROM_ADDR,
+                        sizeof(record));
+}
+
 static void UART_ProcessLine(char *line)
 {
     char token[20];
@@ -2310,6 +2434,8 @@ static void HandleSetDate(const char *params)
     g_now.year = nextValue.year;
     g_now.month = nextValue.month;
     g_now.day = nextValue.day;
+    TimeBackup_Save(&g_now);
+    g_nextTimeBackupMs = g_millis + TIME_BACKUP_SAVE_MS;
     ClearTransientDisplayState();
     if (g_viewMode == VIEW_WEEKDAY) {
         g_scrollOffset = 0U;
@@ -2374,6 +2500,8 @@ static void HandleSetTime(const char *params)
     g_now.hour = nextValue.hour;
     g_now.minute = nextValue.minute;
     g_now.second = nextValue.second;
+    TimeBackup_Save(&g_now);
+    g_nextTimeBackupMs = g_millis + TIME_BACKUP_SAVE_MS;
     ClearTransientDisplayState();
     RefreshDisplayAndLeds(true);
     UART_ReplyOk(NULL);

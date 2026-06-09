@@ -196,3 +196,32 @@
 - 因 `mcu/src/main.c` 已修改，需要 Keil5 打开 `mcu/clock.uvprojx` 重新编译、烧录 S800 实板。
 - 实板重点测：RESET 后一键对时/天气、USER2 天气短显/无天气 `NO WX`、自动测试串口步骤、数码管对时后是否回到正常时间显示。
 - 已有 v2.1 `.exe` 包，但提交材料或演示前仍建议在 Windows 真实窗口下手动双击验证一次白天/黑夜、串口下拉、系统设置和自动测试页面。
+
+## 2026-06-09 RESET/重连同步稳定版
+
+本轮继续在 `真正的最新版` 主版本上修复串口连接、RESET/断电重插、板端时间恢复、PC 数字孪生镜像同步和昼夜模式状态恢复。
+
+- 串口连接成功后，PC 会立即按当前地点/时区计算当前时间并写入 S800。该流程不等待 NTP；NTP 不可用时也能用 PC 本机时间 + 城市时区作为 fallback。写入后延迟查询运行状态，避免 `SET` 的 `OK` 和 `GET` 队列串台。
+- 收到 `S800 CLOCK READY` 后，PC 会清空旧查询队列，数字孪生优先等待/映射板端真实 `*EVT:DISP` 帧；后台先做一次快速写时，再延后启动原有 NTP + 天气刷新流程。
+- 数字孪生数据源优先级已明确：串口连接且收到板端显示帧时，永远以板端 `*EVT:DISP`/`*EVT:LED` 为准；串口连接但暂未收到新帧时保留最后一帧/等待状态；未连接串口或本地模式时才允许 PC 本地模拟显示。
+- `MODE` 状态只接受 `DAY`/`NIGHT`。`runtime_state.json` 加载时会清洗非法值；`*EVT:MODE` 和 `*GET:MODE` 返回 `OFF` 或其它无效值时只写日志，不更新 UI、不污染主题和数据看板。
+- MCU 增加 EEPROM 时间备份：启动时尝试从 EEPROM 恢复最近保存时间；PC/板端写入日期或时间后立即保存；正常运行时约每 10 秒保存一次。没有 RTC 时无法估计断电时长，所以这是“尽量不回到默认 00:00:00”的 fallback，PC 连接后仍会自动对时覆盖。
+- 日程“板端标签”不再按 8 字符静默截断。PC 端清洗为最多 32 个 ASCII 字符并通过 `*SET:MSG` 下发，MCU 端沿用现有滚动消息状态机显示完整标签，数字孪生通过真实显示帧同步。
+- 问候语时间段改为：05:00-10:59 早上好，11:00-13:59 中午好，14:00-17:59 下午好，18:00-21:59 晚上好，22:00-04:59 夜深了/注意休息。
+- 主窗口分栏重新取中间值：左侧主功能区默认更宽以容纳日期、日程和设置控件；右侧数字孪生保留足够宽高，第二行按键不应被日志区裁切。普通窗口和全屏仍需在真实 Windows 窗口复核。
+
+关键文件：
+- `pc_host/app.py`
+- `pc_host/extension_store.py`
+- `mcu/src/main.c`
+
+已验证：
+- `python -m py_compile pc_host/app.py pc_host/extension_store.py pc_host/protocol.py pc_host/twin_widgets.py pc_host/run_extension_checks.py pc_host/extension_services.py` 通过。
+- `python pc_host/run_extension_checks.py --host-only` 通过。
+- PyQt offscreen 几何烟测通过：1280x720、1366x768、1500x900 下右侧第二行按键无裁切，左侧主要滚动页无横向滚动条。
+- MCU 替代语法检查通过：`gcc -fsyntax-only -DPART_TM4C1294NCPDT -DTARGET_IS_TM4C129_RA0 -I mcu/Inc -I mcu/Driverlib mcu/src/main.c`。
+
+仍需人工/硬件验证：
+- 需要 Keil5 重新编译并烧录 `mcu/clock.uvprojx`，验证 EEPROM 初始化是否在目标板正常、RESET 后是否恢复最近时间、串口连接后是否自动写入现实时间。
+- 需要真实串口测试：PC 已连接时 RESET、断电重插、NTP/天气刷新中 RESET、自动测试中 RESET/短暂断开。
+- PC 端 v2.1 打包版已重新生成：`build_release/SmartClockHost-v2.1/SmartClockHost.exe`，压缩包为 `build_release/SmartClockHost-v2.1.zip`。`build_release/` 仍按 `.gitignore` 不提交。

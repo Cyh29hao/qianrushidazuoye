@@ -144,10 +144,16 @@ def load_runtime_state(base_dir: Path) -> RuntimeState:
     view_mode = str(payload.get("view_mode", defaults.view_mode) or defaults.view_mode).upper()
     if view_mode not in {"TIME", "DATE", "WEEKDAY", "YEAR"}:
         view_mode = defaults.view_mode
+    display_format = str(payload.get("format", defaults.format) or defaults.format).upper()
+    if display_format not in {"LEFT", "RIGHT"}:
+        display_format = defaults.format
+    mode = str(payload.get("mode", defaults.mode) or defaults.mode).upper()
+    if mode not in {"DAY", "NIGHT"}:
+        mode = defaults.mode
     return RuntimeState(
         display_on=bool(payload.get("display_on", defaults.display_on)),
-        format=str(payload.get("format", defaults.format) or defaults.format).upper(),
-        mode=str(payload.get("mode", defaults.mode) or defaults.mode).upper(),
+        format=display_format,
+        mode=mode,
         view_mode=view_mode,
         alarm_enabled=bool(payload.get("alarm_enabled", defaults.alarm_enabled)),
         alarm_time=str(payload.get("alarm_time", defaults.alarm_time) or defaults.alarm_time),
@@ -271,6 +277,15 @@ def normalize_board_token(text: str) -> str:
     )
     cleaned = cleaned[:8].ljust(8, "_")
     return cleaned or "NOTICE__"
+
+
+def normalize_board_message(text: str, max_len: int = 32) -> str:
+    cleaned = "".join(
+        ch.upper() if ch.isascii() and (ch.isalnum() or ch in {"-", "_", "."}) else "_"
+        for ch in text.strip()
+    )
+    cleaned = cleaned[:max_len].strip("_")
+    return cleaned or normalize_board_token(text).strip("_") or "NOTICE"
 
 
 def weekday_text(weekdays: list[int]) -> str:

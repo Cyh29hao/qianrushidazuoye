@@ -55,6 +55,7 @@ from extension_store import (
     load_runtime_state,
     load_schedules,
     mark_schedule_triggered,
+    normalize_board_message,
     normalize_board_token,
     parse_clock_hms,
     save_config,
@@ -235,6 +236,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.last_dashboard_minute = ""
         self.last_display_event: tuple[str, int] | None = None
         self.last_led_event: int | None = None
+        self.last_board_display_monotonic = 0.0
         self.latest_display_text = "--"
         self.latest_led_text = "--"
         self.latest_event_text = "等待数据"
@@ -291,6 +293,7 @@ class MainWindow(QtWidgets.QMainWindow):
         twin_layout.addWidget(self.twin)
 
         self._build_statusbar()
+        self._sanitize_runtime_state()
         self._apply_theme()
         self._prepare_widgets()
         self._refine_layout()
@@ -481,6 +484,42 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _save_runtime_state(self) -> None:
         save_runtime_state(APP_DIR, self.runtime_state)
+
+    def _normalize_mode_value(self, value: str | None, fallback: str = "DAY") -> str:
+        candidate = (value or "").strip().upper()
+        if candidate in {"DAY", "NIGHT"}:
+            return candidate
+        fallback_value = (fallback or "").strip().upper()
+        return fallback_value if fallback_value in {"DAY", "NIGHT"} else "DAY"
+
+    def _set_mode_state(
+        self,
+        value: str | None,
+        *,
+        save: bool = True,
+        update_combo: bool = True,
+        update_theme: bool = True,
+    ) -> str:
+        mode = self._normalize_mode_value(value, self.last_mode)
+        self.last_mode = mode
+        self.runtime_state.mode = mode
+        if update_combo and hasattr(self.ui, "modeCombo"):
+            self.ui.modeCombo.setCurrentText(mode)
+        if hasattr(self, "status_mode"):
+            self.status_mode.setText(mode)
+        if save:
+            self._save_runtime_state()
+        if update_theme:
+            self._refresh_theme_from_mode()
+        return mode
+
+    def _is_valid_mode_value(self, value: str | None) -> bool:
+        return (value or "").strip().upper() in {"DAY", "NIGHT"}
+
+    def _sanitize_runtime_state(self) -> None:
+        if self.runtime_state.format not in {"LEFT", "RIGHT"}:
+            self.runtime_state.format = "LEFT"
+        self._set_mode_state(self.runtime_state.mode, save=False, update_combo=False, update_theme=False)
 
     def _set_runtime_datetime(self, moment: datetime) -> None:
         clean = moment.replace(microsecond=0)
@@ -714,6 +753,8 @@ class MainWindow(QtWidgets.QMainWindow):
         return result & 0xFF
 
     def _refresh_local_twin_frame(self) -> None:
+        if self.is_connected:
+            return
         token, dp_mask = self._current_local_display_frame()
         led_mask = self._current_local_led_mask()
         self.twin.set_display_frame(token, dp_mask)
@@ -758,6 +799,8 @@ class MainWindow(QtWidgets.QMainWindow):
     ) -> None:
         if generation != self.boot_mirror_generation:
             return
+        if self.is_connected:
+            return
         self.twin.set_display_frame(token, dp_mask)
         self.twin.set_led_byte(led_mask)
         self.latest_display_text = f"{token} / {dp_mask:02X}"
@@ -781,8 +824,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def _apply_runtime_state_to_ui(self) -> None:
         self.ui.displayToggleCombo.setCurrentText("ON" if self.runtime_state.display_on else "OFF")
         self.ui.formatCombo.setCurrentText(self.runtime_state.format)
-        self.ui.modeCombo.setCurrentText(self.runtime_state.mode)
-        self.last_mode = self.runtime_state.mode
+        self._set_mode_state(self.runtime_state.mode, save=False, update_combo=True, update_theme=False)
         self.last_alarm = self.runtime_state.alarm_time if self.runtime_state.alarm_enabled else "OFF"
         alarm_time = QtCore.QTime.fromString(self.runtime_state.alarm_time, "HH:mm:ss")
         if alarm_time.isValid():
@@ -795,7 +837,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ui.ledHexEdit.setText(f"{self.runtime_state.led_mask:02X}")
         self.ui.messageEdit.setText(self.runtime_state.message_text)
         self._refresh_local_twin_frame()
-        self.status_mode.setText(self.runtime_state.mode)
         self._refresh_theme_from_mode()
         self._refresh_single_alarm_ui()
 
@@ -902,14 +943,16 @@ class MainWindow(QtWidgets.QMainWindow):
         return f"{age_minutes} 分钟前更新"
 
     def _greeting_text(self, now: datetime) -> str:
-        if now.hour < 11:
-            period = "早上"
-        elif now.hour < 18:
-            period = "中午"
-        else:
-            period = "晚上"
         name = (self.config.user_name or "用户").strip() or "用户"
-        return f"{period}好，{name}！"
+        if 5 <= now.hour < 11:
+            return f"早上好，{name}！"
+        if 11 <= now.hour < 14:
+            return f"中午好，{name}！"
+        if 14 <= now.hour < 18:
+            return f"下午好，{name}！"
+        if 18 <= now.hour < 22:
+            return f"晚上好，{name}！"
+        return f"夜深了，{name}，注意休息！"
 
     def _next_single_alarm_time(self, now: datetime) -> datetime | None:
         if self.last_alarm in {"OFF", "RINGING", ""}:
@@ -2272,8 +2315,8 @@ class MainWindow(QtWidgets.QMainWindow):
             return page
 
         left_panel = QtWidgets.QWidget(self.ui.centralwidget)
-        left_panel.setMinimumWidth(430)
-        left_panel.setMaximumWidth(560)
+        left_panel.setMinimumWidth(500)
+        left_panel.setMaximumWidth(650)
         left_panel.setSizePolicy(
             QtWidgets.QSizePolicy.Preferred,
             QtWidgets.QSizePolicy.Expanding,
@@ -2290,7 +2333,7 @@ class MainWindow(QtWidgets.QMainWindow):
         left_layout.addWidget(self.leftSections)
 
         right_panel = QtWidgets.QWidget(self.ui.centralwidget)
-        right_panel.setMinimumWidth(620)
+        right_panel.setMinimumWidth(600)
         right_panel.setSizePolicy(
             QtWidgets.QSizePolicy.Expanding,
             QtWidgets.QSizePolicy.Expanding,
@@ -2307,15 +2350,15 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ui.demoGroup.setMinimumHeight(220)
 
         available_height = max(target_height, available.height())
-        min_log_height = 180 if available_height >= 760 else 150
+        min_log_height = 175 if available_height >= 760 else 145
         required_twin_height = max(
-            self.twin.sizeHint().height() + 44,
-            self.twin.minimumSizeHint().height() + 40,
-            312,
+            self.twin.sizeHint().height() + 82,
+            self.twin.minimumSizeHint().height() + 72,
+            390,
         )
         required_twin_height = min(
             required_twin_height,
-            max(self.twin.minimumSizeHint().height() + 40, available_height - min_log_height - 70),
+            max(self.twin.minimumSizeHint().height() + 72, available_height - min_log_height - 56),
         )
         self.ui.twinGroup.setTitle("")
         self.ui.twinGroup.setFixedHeight(required_twin_height)
@@ -2338,8 +2381,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.mainSplitter.addWidget(right_panel)
         self.mainSplitter.setStretchFactor(0, 0)
         self.mainSplitter.setStretchFactor(1, 1)
-        left_size = min(540, max(460, int(target_width * 0.40)))
-        right_size = max(620, target_width - left_size)
+        left_size = min(620, max(520, int(target_width * 0.43)))
+        if target_width - left_size < 600:
+            left_size = max(500, target_width - 600)
+        right_size = max(600, target_width - left_size)
         self.mainSplitter.setSizes([left_size, right_size])
         self.ui.horizontalLayout.addWidget(self.mainSplitter)
 
@@ -2715,7 +2760,8 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.scheduleTitleEdit = QtWidgets.QLineEdit(schedule_group)
         self.scheduleBoardLabelEdit = QtWidgets.QLineEdit(schedule_group)
-        self.scheduleBoardLabelEdit.setPlaceholderText("板端短标签，最多 8 字符")
+        self.scheduleBoardLabelEdit.setMaxLength(32)
+        self.scheduleBoardLabelEdit.setPlaceholderText("板端标签，最多 32 个 ASCII 字符；超出 8 位自动走马灯")
         self.scheduleTimeEdit = QtWidgets.QTimeEdit(schedule_group)
         self.scheduleTimeEdit.setDisplayFormat("HH:mm:ss")
         self.scheduleTimeEdit.setTime(QtCore.QTime(8, 0, 0))
@@ -3111,7 +3157,8 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.scheduleTitleEdit = QtWidgets.QLineEdit(schedule_group)
         self.scheduleBoardLabelEdit = QtWidgets.QLineEdit(schedule_group)
-        self.scheduleBoardLabelEdit.setPlaceholderText("板端短标签，最多 8 字符")
+        self.scheduleBoardLabelEdit.setMaxLength(32)
+        self.scheduleBoardLabelEdit.setPlaceholderText("板端标签，最多 32 个 ASCII 字符；超出 8 位自动走马灯")
         self.scheduleTimeEdit = QtWidgets.QTimeEdit(schedule_group)
         self.scheduleTimeEdit.setDisplayFormat("HH:mm:ss")
         self.scheduleTimeEdit.setTime(QtCore.QTime(8, 0, 0))
@@ -3548,9 +3595,9 @@ class MainWindow(QtWidgets.QMainWindow):
         if log_message:
             self.log("INFO", "扩展配置已保存。")
 
-    def _send_datetime_snapshot(self, moment: datetime, source_text: str) -> None:
+    def _send_datetime_snapshot(self, moment: datetime, source_text: str) -> bool:
         if self.sync_in_progress:
-            return
+            return False
         self.sync_snapshot = moment.replace(microsecond=0)
         self._set_runtime_datetime(self.sync_snapshot)
         self.sync_in_progress = True
@@ -3575,6 +3622,35 @@ class MainWindow(QtWidgets.QMainWindow):
             5000,
             lambda token=sync_token: self._abort_sync_write_if_stale(token),
         )
+        return True
+
+    def _auto_sync_time_after_connect(self, trigger_source: str, query_after: bool = True) -> None:
+        if not self.is_connected:
+            return
+        place, zone_now, offset_seconds = self._active_place_time_context()
+        snapshot = zone_now.replace(tzinfo=None, microsecond=0)
+        source_text = (
+            f"{trigger_source}: {snapshot.strftime('%Y-%m-%d %H:%M:%S')} @ "
+            f"{place.name} {place.timezone} {format_utc_offset(offset_seconds)} "
+            "(PC/city time fallback)"
+        )
+        if self.sync_in_progress:
+            self.log("WARN", f"{trigger_source}：当前已有对时写入流程，已跳过本次自动写时。")
+            if query_after:
+                QtCore.QTimer.singleShot(1200, self.query_runtime_state)
+            return
+        self.pending_queries.clear()
+        if self._send_datetime_snapshot(snapshot, source_text):
+            self.log(
+                "INFO",
+                f"{trigger_source}，已自动向板端同步当前时间："
+                f"{snapshot.strftime('%Y-%m-%d %H:%M:%S')} | {place.name} | {place.timezone}",
+            )
+            append_event_log(APP_DIR, "auto_time_sync", source_text)
+        else:
+            self.log("WARN", f"{trigger_source}：自动同步当前时间未启动，请稍后手动 NTP 对时。")
+        if query_after:
+            QtCore.QTimer.singleShot(1400, self.query_runtime_state)
 
     def _abort_sync_write_if_stale(self, token: int) -> None:
         if token != self.sync_watchdog_token or not self.sync_in_progress:
@@ -3823,11 +3899,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._remember_mode_request(expected_mode, "auto")
         if self.is_connected:
             self.send_command(f"*SET:MODE {expected_mode}")
-        self.last_mode = expected_mode
-        self.runtime_state.mode = expected_mode
-        self._save_runtime_state()
-        self.ui.modeCombo.setCurrentText(expected_mode)
-        self._refresh_theme_from_mode()
+        self._set_mode_state(expected_mode)
         append_event_log(APP_DIR, "auto_mode", expected_mode)
         self.refresh_dashboard()
 
@@ -3870,7 +3942,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _collect_schedule_item(self, existing_id: str | None = None) -> ScheduleItem:
         title = self.scheduleTitleEdit.text().strip() or "未命名提醒"
-        board_label = self.scheduleBoardLabelEdit.text().strip() or normalize_board_token(title)
+        board_label = normalize_board_message(self.scheduleBoardLabelEdit.text().strip() or title)
         trigger_time = self.scheduleTimeEdit.time().toString("HH:mm:ss")
         schedule_type = "weekly" if self.scheduleTypeCombo.currentIndex() == 1 else "once"
         weekdays = []
@@ -3963,7 +4035,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.log("INFO", f"已删除提醒: {title}")
 
     def trigger_schedule(self, item: ScheduleItem) -> None:
-        token = normalize_board_token(item.board_label or item.title)
+        token = normalize_board_message(item.board_label or item.title)
         if self.is_connected:
             self.send_command(f"*SET:MSG {token}")
             if not (self.config.quiet_night_rings and self.last_mode == "NIGHT"):
@@ -4085,14 +4157,15 @@ class MainWindow(QtWidgets.QMainWindow):
             return False
         if not self._open_port(port_name):
             return False
-        self.query_runtime_state()
+        self._auto_sync_time_after_connect("串口连接成功", query_after=True)
         return True
 
     def connect_and_apply_port(self) -> None:
         if not self.connect_port():
             return
         if self.is_connected:
-            self.log("INFO", "连接完成，未自动下发设置、联网同步或运行联合测试。")
+            self.log("INFO", "连接完成：已自动写入当前城市/时区时间，未自动运行联测脚本。")
+            return
 
     def disconnect_port(self, log_message: bool = True) -> None:
         self.poll_timer.stop()
@@ -4120,6 +4193,10 @@ class MainWindow(QtWidgets.QMainWindow):
             self._local_query_notice("运行时状态")
             self.refresh_dashboard()
             return
+        if self.sync_in_progress:
+            QtCore.QTimer.singleShot(700, self.query_runtime_state)
+            return
+        self.pending_queries.clear()
         self.send_command("*GET:DATE", "DATE")
         self.send_command("*GET:TIME", "TIME")
         self.send_command("*GET:FORMAT", "FORMAT")
@@ -4139,7 +4216,7 @@ class MainWindow(QtWidgets.QMainWindow):
         elif query == "FORMAT":
             self.ui.formatCombo.setCurrentText(self.runtime_state.format)
         elif query == "MODE":
-            self.ui.modeCombo.setCurrentText(self.runtime_state.mode)
+            self._set_mode_state(self.runtime_state.mode)
         elif query == "ALARM":
             alarm_time = QtCore.QTime.fromString(self.runtime_state.alarm_time, "HH:mm:ss")
             if alarm_time.isValid():
@@ -4214,11 +4291,8 @@ class MainWindow(QtWidgets.QMainWindow):
             self._save_runtime_state()
             action = f"FORMAT -> {value}"
         elif upper.startswith("*SET:MODE "):
-            value = upper.removeprefix("*SET:MODE ").strip() or "DAY"
-            self.runtime_state.mode = value
-            self.last_mode = value
-            self.ui.modeCombo.setCurrentText(value)
-            self._save_runtime_state()
+            value = self._normalize_mode_value(upper.removeprefix("*SET:MODE ").strip(), "DAY")
+            self._set_mode_state(value)
             action = f"MODE -> {value}"
         elif upper.startswith("*SET:LED "):
             try:
@@ -4347,12 +4421,21 @@ class MainWindow(QtWidgets.QMainWindow):
         if raw.upper() == "S800 CLOCK READY":
             self.log("RX", raw)
             self.board_ready_seen = True
-            self._start_boot_mirror_playback()
+            self.pending_queries.clear()
+            self.read_buffer = ""
+            self.last_board_display_monotonic = 0.0
+            self._set_latest_event("板端启动，等待真实显示帧")
+            if not self.is_connected:
+                self._start_boot_mirror_playback()
             if (time.monotonic() - self.last_ready_sync_monotonic) > 2.5:
                 self.last_ready_sync_monotonic = time.monotonic()
                 self.startup_sync_pending = True
-                self.log("INFO", "检测到板端 RESET/启动，已显示 88888888 开机镜像；即将后台自动对时、刷新天气并同步模式。")
-                QtCore.QTimer.singleShot(150, self._run_startup_sync_after_ready)
+                QtCore.QTimer.singleShot(
+                    120,
+                    lambda: self._auto_sync_time_after_connect("板端启动", query_after=False),
+                )
+                self.log("INFO", "检测到板端 RESET/启动：数字孪生优先映射板端真实显示帧，后台自动写时、NTP 对时并刷新天气。")
+                QtCore.QTimer.singleShot(1200, self._run_startup_sync_after_ready)
             return
         parsed = parse_line(line)
         if not self._should_suppress_rx_log(parsed, line):
@@ -4381,6 +4464,7 @@ class MainWindow(QtWidgets.QMainWindow):
             except ValueError:
                 return
             self.boot_mirror_generation += 1
+            self.last_board_display_monotonic = time.monotonic()
             self.twin.set_display_frame(parsed.data, dp_mask)
             self.last_display_event = (parsed.data, dp_mask)
             self.latest_display_text = f"{parsed.data} / {parsed.extra[0]}"
@@ -4401,13 +4485,12 @@ class MainWindow(QtWidgets.QMainWindow):
             return
 
         if parsed.name == "MODE":
-            next_mode = parsed.data.strip() or "DAY"
+            if not self._is_valid_mode_value(parsed.data):
+                self.log("WARN", f"忽略无效 MODE 事件: {parsed.data or '<empty>'}")
+                return
+            next_mode = self._normalize_mode_value(parsed.data, self.last_mode)
             mode_origin = self._consume_mode_request(next_mode)
-            self.last_mode = next_mode
-            self.runtime_state.mode = next_mode
-            self._save_runtime_state()
-            self.status_mode.setText(self.last_mode)
-            self._refresh_theme_from_mode()
+            self._set_mode_state(next_mode)
             append_event_log(APP_DIR, "mode", self.last_mode)
             if self.config.auto_day_night and mode_origin != "auto":
                 expected_mode = self.last_mode_expected
@@ -4506,14 +4589,11 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.runtime_state.format = data
                 self._save_runtime_state()
         elif query == "MODE" and data:
-            self.status_mode.setText(data)
-            self.last_mode = data
             if data in {"DAY", "NIGHT"}:
-                self.ui.modeCombo.setCurrentText(data)
-                self.runtime_state.mode = data
-                self._save_runtime_state()
-                self._refresh_theme_from_mode()
+                self._set_mode_state(data)
                 self.refresh_dashboard()
+            else:
+                self.log("WARN", f"忽略无效 MODE 查询返回: {data}")
         elif query == "ALARM":
             self.last_alarm = data or "OFF"
             if data and data != "OFF":
