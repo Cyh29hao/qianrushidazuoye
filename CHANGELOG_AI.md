@@ -4,6 +4,67 @@
 
 ## 2026-06-09
 
+### v2.1 跑马灯/提醒状态机与自动测试收口
+
+#### 已完成修改
+- MCU 消息/提醒显示状态机增加硬超时保护：`*SET:MSG` 激活后记录开始时间，超过 `MESSAGE_MAX_ACTIVE_MS` 或文本异常会自动 `ClearMessageState()`、上报 `ERROR STATE` 并恢复正常时钟显示，避免跑马灯或日程提醒把全局显示状态卡死。
+- MCU 跑马灯规则收口：所有需要滚动的消息至少往返一次；较短滚动使用 3 段路径，长文本使用 2 段路径，保证会滚到另一端并回到起点；最后一帧通过 `MESSAGE_FINAL_HOLD_MS = 2000ms` 额外停留。
+- MCU 短消息/提醒显示期间独占显示滚动偏移，不再让日期/星期页面的滚动逻辑插进同一个 `g_scrollOffset`，修复提醒触发后偶发显示状态混乱。
+- PC 离线数字孪生的本地跑马灯规则同步改为至少往返一次，避免未连接串口时 PC 镜像和板端滚动方向/终点不一致。
+- PC 收到 `ERROR STATE` 时会记录“板端显示状态机超时，已自动清退临时显示并恢复时钟”，清理本地临时显示覆盖，并延迟查询一次板端状态。
+- 自动测试 `SET MODE NIGHT/DAY` 现在必须等到对应 `*EVT:MODE`，随后额外等待 1 秒让 PC UI 刷新；若没有 MODE 事件则 FAIL，不再只凭 `OK` 误判通过。串口测试预计耗时同步更新到约 18 秒。
+- 自动测试说明文字已改为当前测试项简介：PING、GET FORMAT/MODE、写日期时间、DAY/NIGHT、天气短显、铃声协议、USER2，并说明 TX/RX/OK/FAIL 输出方式。
+- 单次闹钟、日程提醒时间和日程日期默认值统一改为当前城市/时区时间 `+1 分钟`；23:59 等边界会自动跨到次日 00:00，方便实板调试。
+- 重新打包 v2.1 release：`build_release/SmartClockHost-v2.1/SmartClockHost.exe` 与 `build_release/SmartClockHost-v2.1.zip` 已更新。首次从中文路径打包失败，改用 `C:\smartclock_latest` junction 下的 venv 成功打包；旧 release 进程占用 DLL 后已结束进程并重新干净生成 zip。
+
+#### 关键文件
+- `mcu/src/main.c`
+- `pc_host/app.py`
+- `pc_host/run_extension_checks.py`
+- `PROJECT_CONTEXT.md`
+- `CHANGELOG_AI.md`
+
+#### 验证结果
+- `python -m py_compile pc_host/app.py pc_host/run_extension_checks.py pc_host/protocol.py pc_host/twin_widgets.py pc_host/extension_services.py pc_host/extension_store.py` 通过。
+- `pc_host/.venv/Scripts/python.exe pc_host/run_extension_checks.py --host-only` 通过。
+- PyQt offscreen 行为断言通过：23:59:30 默认值变为次日 00:00；PC 本地长文本滚动会到端点并回到起点；`ERROR STATE` 会清理本地临时显示覆盖。
+- 自动测试脚本行为断言通过：有 `*EVT:MODE` 时 `send_mode_expect()` 通过；只有 `OK` 无 MODE 事件时会抛出 FAIL。
+- PyInstaller v2.1 onedir 打包成功，release exe 启动 5 秒未退出；烟测产生的运行态文件已清理并重新压缩 zip。
+- `git diff --check` 通过，仅有 Windows 行尾提示。
+
+#### 未解决问题
+- MCU 已修改 `mcu/src/main.c`，仍必须用 Keil5 重新编译并烧录实板验证跑马灯、日程提醒触发、USER2 天气短显和 RESET/NTP 真实串口场景。
+- 本机没有完成 Keil5 编译；C 端最终以 Keil5 工程 `mcu/clock.uvprojx` 为准。
+
+### v2.1 串口/RST/NTP 与显示状态机稳定修复
+
+#### 已完成修改
+- 串口连接成功、硬件 READY/RESET、协议台 `*RST` 统一排队执行一次 NTP；连接与 READY 近距离重复时合并，避免多 NTP 抢串口。NTP 失败或 8 秒超时后，生命周期触发会使用当前城市/PC 时间 fallback 写入板端。
+- 手动协议台/RAW 发送命令时清空旧查询队列，并设置短暂串口安静窗口；自动 `GET`、`PING`、天气下发、NTP 写时都会避让，降低 P2/协议测试与后台任务插队导致的状态机卡住风险。
+- `*SET:TIME`、`*SET:DATE` 不再进入任何 NTP 触发路径；只有连接成功、READY/RESET、软 `*RST`、USER1、用户点击 NTP/一键天气对时会触发 NTP。
+- 昼夜模式改为双向同步：板端 USER1 长按上报 `*EVT:MODE DAY/NIGHT` 后直接更新 PC 主题；自动昼夜开启时检测到手动切换则关闭自动模式并只写日志。
+- USER2 日志和虚拟键行为收口：有缓存天气时虚拟 USER2 先下发 `*SET:WEATHER` 再触发短显，无天气时显示 `NO WX`。
+- 修复滚动消息下划线：MCU 端真实 `_` 继续显示七段底段；`*EVT:DISP` 用 `~` 表示真实下划线、`_` 表示空白位，PC 协议和数字孪生按新规则还原。
+- 清理系统设置多余“主题状态”行；窗口图标优先使用 `.ico`。
+
+#### 关键文件
+- `pc_host/app.py`
+- `pc_host/protocol.py`
+- `pc_host/twin_widgets.py`
+- `mcu/src/main.c`
+- `README.md`
+- `PROJECT_CONTEXT.md`
+- `CHANGELOG_AI.md`
+
+#### 验证结果
+- `python -m py_compile pc_host/app.py pc_host/protocol.py pc_host/twin_widgets.py pc_host/extension_services.py pc_host/run_extension_checks.py` 通过。
+- `git diff --check` 通过。
+- `pc_host/.venv/Scripts/python.exe` 行为烟测通过：协议台发送 `*SET:TIME ...` 不触发 NTP；发送 `*RST` 只登记软复位 NTP；`A~B_____` 可还原为 `A_B`；七段 `_` 编码为 `0x08`。
+
+#### 未解决问题
+- MCU 改了 `*EVT:DISP` 下划线转义，需要 Keil5 重新编译并烧录实板验证。
+- PC 端需要重新打包 v2.1 release，确保 exe 图标、串口/NTP 状态机和下划线显示进入发行包。
+
 ### v2.1 小逻辑桌面右侧栏防挤压回修
 
 #### 已完成修改

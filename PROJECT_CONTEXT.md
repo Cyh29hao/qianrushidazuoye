@@ -1,5 +1,26 @@
 # PROJECT_CONTEXT - 智能时钟联网系统
 
+## 2026-06-09 v2.1 跑马灯/提醒状态机与自动测试收口
+- MCU `mcu/src/main.c` 已给消息/提醒跑马灯状态机增加硬超时和统一清理入口：`*SET:MSG` 激活后会记录开始时间，超过 `MESSAGE_MAX_ACTIVE_MS` 或文本异常时自动清理临时显示、上报 `ERROR STATE` 并恢复正常时钟显示。
+- 跑马灯规则当前为：所有需要滚动的文本至少往返一次；短滚动走 3 段，长滚动走 2 段，保证会到另一端并回到起点；结束最后一帧额外停留 2 秒。短消息/日程提醒显示期间独占显示偏移，不再让日期/星期滚动逻辑混入。
+- PC 离线数字孪生的本地滚动规则已同步为至少往返一次；收到板端 `ERROR STATE` 时会清理本地临时显示覆盖、写日志并延迟查询板端状态。
+- 自动测试 `SET MODE NIGHT/DAY` 不再只凭 `OK` 通过，必须等到对应 `*EVT:MODE`，并额外等待 1 秒让 PC UI 刷新；若未收到 MODE 事件则 FAIL。串口自动测试预计耗时更新为约 18 秒。
+- 自动测试说明文字已更新为当前测试项简介：PING、GET FORMAT/MODE、写日期时间、DAY/NIGHT、天气短显、铃声协议、USER2，并说明 TX/RX/OK/FAIL 的输出方式。
+- 单次闹钟、日程提醒时间、日程日期默认值统一为当前城市/时区时间 `+1 分钟`；23:59 等边界会自动跨到次日 00:00，方便调试提醒触发。
+- v2.1 release 已重新打包并清理烟测运行态：`build_release/SmartClockHost-v2.1/SmartClockHost.exe`，压缩包为 `build_release/SmartClockHost-v2.1.zip`。`build_release/` 仍被 `.gitignore` 忽略，不提交到 Git。
+- 已验证：Python 语法检查通过、host-only 自动测试通过、PyQt offscreen 行为断言通过、自动测试 MODE 等待断言通过、release exe 启动 5 秒未退出、`git diff --check` 通过。
+- 仍需实板验证：Keil5 编译烧录后重点测 `*SET:MSG A_B_TEST`、长短跑马灯最后 2 秒停留、日程触发后是否恢复时钟、USER2 天气短显、RESET/连接串口后的 NTP 自动同步。
+
+## 2026-06-09 v2.1 串口/RST/NTP 与显示状态机稳定修复
+- 串口连接成功后不再只写 PC/city fallback 时间，而是排队执行一次 NTP 对时；NTP 失败或 8 秒超时时，才改用当前城市/PC 时间写入 S800 并记录日志。
+- 硬件 READY/RESET 与协议台 `*RST` 统一走生命周期 NTP 调度，短时间内重复 READY/连接会合并为一次，避免多 NTP 抢串口；`*SET:TIME`/`*SET:DATE` 只写时间，不会触发 NTP。
+- PC 串口自动任务加“手动协议优先窗口”：协议台/RAW 发送命令时会清旧查询队列并暂停自动 `GET`、`PING`、天气下发、NTP 写时，减少 P2/协议测试与后台任务插队造成的状态机卡住。
+- 昼夜模式改为双向控制：PC 按钮/自动昼夜仍可下发给板端，板端 USER1 长按产生的 `*EVT:MODE DAY/NIGHT` 也会直接更新 PC 主题和状态；若自动昼夜开启且用户手动切换，则关闭自动模式并只写日志。
+- USER2 口径收敛为天气短显：PC 日志会说明 USER2 显示的天气 token 或 `NO WX`；虚拟 USER2 在有缓存天气时会先补发 `*SET:WEATHER` 再触发 `*SET:KEY USER2`。
+- 七段码下划线兼容：MCU 实物继续用 `_` 显示底段；`*EVT:DISP` 中 `_` 保持表示空白位，真实下划线改用 `~` 上报，PC 协议解析和数字孪生会还原为七段底段。发送滚动消息如 `A_B_TEST` 不应再造成孪生显示空白或状态机异常。
+- 系统设置页已移除“主题状态: DAY/NIGHT”单独行，用户名下方直接进入“网络对时与天气”；窗口图标优先使用 `pc_host/assets/clock_logo.ico`，减少 release/任务栏默认占位图风险。
+- 本轮 PC 改动文件：`pc_host/app.py`、`pc_host/protocol.py`、`pc_host/twin_widgets.py`、`README.md`。MCU 改动文件：`mcu/src/main.c`。需要重新打包 PC 端；由于改了 MCU 显示事件协议，也需要 Keil5 重新编译烧录。
+
 ## 2026-06-09 v2.1 小逻辑桌面右侧栏防挤压回修
 - 最新 UI 回修针对用户真实机器上约 `1080x622` 的 Qt 逻辑窗口：此前左侧最小宽度、右侧固定宽度和右侧控件 `sizeHint` 总和过大，导致右侧数字孪生栏在真实缩放环境中被挤掉或裁切。
 - `pc_host/app.py` 现在在窗口 `show()`、`resizeEvent` 和 `_refine_layout()` 完成后都会调用 `_enforce_main_splitter_layout()`，按当前 `QSplitter` 实际宽度重新钳制左右尺寸；右侧栏按总宽自适应为约 `360-500px`，左侧保留最小 `360px` 并允许纵向滚动。

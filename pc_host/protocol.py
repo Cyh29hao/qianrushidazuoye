@@ -42,7 +42,7 @@ def reverse_visible_text(text: str) -> str:
 def token_to_text(token: str, dp_mask: int) -> str:
     chars: list[str] = []
     for index, raw in enumerate(token[:8].ljust(8, "_")):
-        ch = " " if raw == "_" else raw
+        ch = "_" if raw == "~" else (" " if raw == "_" else raw)
         dot_on = bool(dp_mask & (1 << index))
         if dot_on and ch == " ":
             chars.append(".")

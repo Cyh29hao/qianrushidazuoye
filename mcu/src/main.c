@@ -30,6 +30,7 @@
 #define MESSAGE_MIN_SHOW_MS        5000UL
 #define MESSAGE_SLOW_SHOW_MS       8000UL
 #define MESSAGE_FINAL_HOLD_MS      2000UL
+#define MESSAGE_MAX_ACTIVE_MS      12000UL
 #define SCROLL_SLOW_MS             1000UL
 #define SCROLL_FAST_MS             500UL
 #define BOOT_STEP_SHORT_MS         1000UL
@@ -212,6 +213,7 @@ static uint8_t VisibleTextToCells(const char *text, SegmentCell *cells,
 static uint32_t CurrentScrollIntervalMs(void);
 static uint8_t CurrentVisibleScrollLimit(void);
 static bool IsFiniteScrollActive(void);
+static void ClearMessageState(void);
 static uint8_t ScrollLegCount(uint8_t scrollLimit);
 static uint8_t ScrollMaxStep(uint8_t scrollLimit);
 static uint8_t ScrollOffsetForStep(uint8_t step, uint8_t scrollLimit);
@@ -324,6 +326,7 @@ static uint8_t g_blinkVisible;
 static uint8_t g_heartbeatBit;
 static uint8_t g_alarmBlinkBit;
 static char g_messageText[33];
+static uint32_t g_messageStartedMs;
 static uint32_t g_messageDeadlineMs;
 static uint8_t g_messageActive;
 static uint8_t g_messageScrollLimit;
@@ -632,11 +635,17 @@ static void Tick10ms(void)
         ExitEditMode(false);
     }
 
+    if ((g_messageActive != 0U) &&
+        ((g_messageText[0] == '\0') ||
+         ((uint32_t)(g_millis - g_messageStartedMs) >= MESSAGE_MAX_ACTIVE_MS))) {
+        ClearMessageState();
+        UART_WriteLine("ERROR STATE");
+        RefreshDisplayAndLeds(true);
+    }
+
     if ((g_messageActive != 0U) && (g_messageDeadlineMs != 0UL) &&
         (g_millis >= g_messageDeadlineMs)) {
-        g_messageActive = 0U;
-        g_messageDeadlineMs = 0UL;
-        g_messageEndArmed = 0U;
+        ClearMessageState();
         RefreshDisplayAndLeds(true);
     }
 
@@ -663,6 +672,12 @@ static void Tick10ms(void)
                 g_messageDeadlineMs = g_millis + CurrentScrollIntervalMs() +
                                       MESSAGE_FINAL_HOLD_MS;
             }
+        } else if (g_messageActive != 0U) {
+            /* A short message owns the display until its deadline. Do not let
+             * the date/weekday cyclic scroller advance the shared offset while
+             * a finite PC/schedule reminder is being shown.
+             */
+            g_scrollOffset = 0U;
         } else if (g_viewMode == VIEW_WEEKDAY) {
             uint8_t scrollLimit = CurrentVisibleScrollLimit();
             uint8_t maxStep = ScrollMaxStep(scrollLimit);
@@ -864,6 +879,7 @@ static void ResetRuntimeState(void)
     g_heartbeatBit = 1U;
     g_alarmBlinkBit = 1U;
     g_messageText[0] = '\0';
+    g_messageStartedMs = 0UL;
     g_messageActive = 0U;
     g_messageDeadlineMs = 0U;
     g_messageScrollLimit = 0U;
@@ -989,10 +1005,7 @@ static void ClearTransientDisplayState(void)
 {
     g_weatherShowUntilMs = 0UL;
     if (g_messageActive != 0U) {
-        g_messageActive = 0U;
-        g_messageDeadlineMs = 0UL;
-        g_messageScrollLimit = 0U;
-        g_messageEndArmed = 0U;
+        ClearMessageState();
     }
     g_scrollOffset = 0U;
     g_viewScrollCompleted = 0U;
@@ -1168,21 +1181,26 @@ static bool IsFiniteScrollActive(void)
     return (g_messageActive == 0U) && (g_viewMode == VIEW_WEEKDAY);
 }
 
+static void ClearMessageState(void)
+{
+    g_messageActive = 0U;
+    g_messageText[0] = '\0';
+    g_messageStartedMs = 0UL;
+    g_messageDeadlineMs = 0UL;
+    g_messageScrollLimit = 0U;
+    g_messageEndArmed = 0U;
+    g_scrollOffset = 0U;
+}
+
 static uint8_t ScrollLegCount(uint8_t scrollLimit)
 {
     if (scrollLimit == 0U) {
         return 0U;
     }
-    if (scrollLimit <= 1U) {
-        return 1U;
-    }
     if (scrollLimit <= 5U) {
         return 3U;
     }
-    if (scrollLimit <= 10U) {
-        return 2U;
-    }
-    return 1U;
+    return 2U;
 }
 
 static uint8_t ScrollMaxStep(uint8_t scrollLimit)
@@ -1539,8 +1557,13 @@ static void EmitDisplayEvent(void)
     uint8_t index;
 
     for (index = 0U; index < DISPLAY_WIDTH; index++) {
-        payload[index] = (g_currentFrame.chars[index] == ' ') ? '_' :
-                         g_currentFrame.chars[index];
+        if (g_currentFrame.chars[index] == ' ') {
+            payload[index] = '_';
+        } else if (g_currentFrame.chars[index] == '_') {
+            payload[index] = '~';
+        } else {
+            payload[index] = g_currentFrame.chars[index];
+        }
     }
     payload[DISPLAY_WIDTH] = '\0';
     snprintf(buffer, sizeof(buffer), "*EVT:DISP %s %02X",
@@ -1746,11 +1769,7 @@ static void HandleKeyPress(KeyCode key, bool emitEvent)
             g_weatherShowUntilMs = 0UL;
         }
         if (g_messageActive != 0U) {
-            g_messageActive = 0U;
-            g_messageDeadlineMs = 0UL;
-            g_messageScrollLimit = 0U;
-            g_messageEndArmed = 0U;
-            g_scrollOffset = 0U;
+            ClearMessageState();
         }
         break;
     case KEY_USER1:
@@ -2626,6 +2645,7 @@ static void HandleSetMessage(const char *params)
     }
     snprintf(g_messageText, sizeof(g_messageText), "%s", params);
     g_messageActive = 1U;
+    g_messageStartedMs = g_millis;
     g_scrollOffset = 0U;
     g_messageEndArmed = 0U;
     cellCount = VisibleTextToCells(g_messageText, tempCells, 32U);

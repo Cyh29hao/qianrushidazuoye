@@ -20,7 +20,7 @@ from protocol import (
 )
 
 ProgressCallback = Callable[[str], None]
-SERIAL_ESTIMATED_SECONDS = 16
+SERIAL_ESTIMATED_SECONDS = 18
 HOST_ONLY_ESTIMATED_SECONDS = 3
 SERIAL_COMMAND_GAP_S = 0.12
 SERIAL_HARD_TIMEOUT_S = 22.0
@@ -128,6 +128,39 @@ def send_expect_ok(
     return lines
 
 
+def send_mode_expect(
+    port: Any,
+    mode: str,
+    timeout_s: float = 2.0,
+    progress: ProgressCallback | None = None,
+) -> list[str]:
+    command = f"*SET:MODE {mode.upper()}"
+    lines = send_expect_ok(port, command, timeout_s=timeout_s, progress=progress)
+    mode_seen = any(
+        parse_line(line).kind == "event"
+        and parse_line(line).name == "MODE"
+        and parse_line(line).data.strip().upper() == mode.upper()
+        for line in lines
+    )
+    if not mode_seen:
+        _progress(progress, f"[INFO] 等待 MODE {mode.upper()} 事件和界面刷新...")
+        extra = read_lines(port, timeout_s=1.2)
+        for line in extra:
+            _progress(progress, f"[RX] {line}")
+        lines.extend(extra)
+        mode_seen = any(
+            parse_line(line).kind == "event"
+            and parse_line(line).name == "MODE"
+            and parse_line(line).data.strip().upper() == mode.upper()
+            for line in lines
+        )
+    if not mode_seen:
+        raise RuntimeError(f"MODE {mode.upper()} event not observed after {command}; lines={lines}")
+    _progress(progress, f"[INFO] MODE {mode.upper()} event observed; wait 1.0s for PC UI refresh")
+    time.sleep(1.0)
+    return lines
+
+
 def send_expect_kind(
     port: Any,
     command: str,
@@ -202,12 +235,12 @@ def execute_checks_on_open_port(
     )
     run(
         "SET MODE NIGHT",
-        lambda: send_expect_ok(port, "*SET:MODE NIGHT", timeout_s=2.0, progress=progress),
+        lambda: send_mode_expect(port, "NIGHT", timeout_s=2.0, progress=progress),
         "检查 DAY/NIGHT 指令解析和板端模式切换。",
     )
     run(
         "SET MODE DAY",
-        lambda: send_expect_ok(port, "*SET:MODE DAY", timeout_s=2.0, progress=progress),
+        lambda: send_mode_expect(port, "DAY", timeout_s=2.0, progress=progress),
         "检查 DAY/NIGHT 指令解析和板端模式恢复。",
     )
     run(

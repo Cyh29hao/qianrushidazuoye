@@ -23,6 +23,7 @@ QT_RUNTIME = configure_qt_runtime(APP_DIR)
 APP_VERSION = "v2.1"
 GITHUB_URL = "https://github.com/Cyh29hao"
 LOGO_PATH = BUNDLE_DIR / "assets" / "clock_logo.svg"
+ICON_PATH = BUNDLE_DIR / "assets" / "clock_logo.ico"
 LOCAL_MODE_LABEL = "不使用串口"
 
 import serial
@@ -216,8 +217,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.schedules: list[ScheduleItem] = load_schedules(APP_DIR)
         self.log_dir = APP_DIR / "logs"
         self.setWindowTitle(f"智能联网时钟系统 - PC 上位机 {APP_VERSION}")
-        if LOGO_PATH.exists():
-            self.setWindowIcon(QtGui.QIcon(str(LOGO_PATH)))
+        icon_path = ICON_PATH if ICON_PATH.exists() else LOGO_PATH
+        if icon_path.exists():
+            self.setWindowIcon(QtGui.QIcon(str(icon_path)))
 
         self.serial_port: serial.Serial | None = None
         self.local_mode_active = False
@@ -249,6 +251,18 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ntp_watchdog_token = 0
         self.weather_watchdog_token = 0
         self.weather_timeout_ntp_source = ""
+        self.ntp_fallback_on_fail = False
+        self.ntp_query_after = False
+        self.ntp_active_source = ""
+        self.sync_query_after_finish = False
+        self.pending_lifecycle_ntp_source = ""
+        self.pending_lifecycle_ntp_query_after = False
+        self.pending_lifecycle_ntp_fallback = False
+        self.last_lifecycle_ntp_monotonic = 0.0
+        self.auto_serial_quiet_until = 0.0
+        self.auto_serial_quiet_reason = ""
+        self.pending_soft_reset_sync = False
+        self.soft_reset_deadline_monotonic = 0.0
         self.runtime_shadow_base_iso = ""
         self.runtime_shadow_base_datetime: datetime | None = None
         self.runtime_shadow_base_monotonic = 0.0
@@ -646,7 +660,7 @@ class MainWindow(QtWidgets.QMainWindow):
             chars.append(ch)
         while len(chars) < 8:
             chars.append(" ")
-        token = "".join("_" if ch == " " else ch for ch in chars[:8])
+        token = "".join(chars[:8])
         return token, dp_mask & 0xFF
 
     def _visible_text_to_frame(self, visible: str) -> tuple[str, int]:
@@ -673,13 +687,9 @@ class MainWindow(QtWidgets.QMainWindow):
     def _scroll_leg_count(self, limit: int) -> int:
         if limit <= 0:
             return 0
-        if limit <= 1:
-            return 1
         if limit <= 5:
             return 3
-        if limit <= 10:
-            return 2
-        return 1
+        return 2
 
     def _scroll_max_step(self, limit: int) -> int:
         legs = self._scroll_leg_count(limit)
@@ -760,7 +770,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _current_local_display_frame(self) -> tuple[str, int]:
         if not self.runtime_state.display_on:
-            return "________", 0
+            return "        ", 0
         now_monotonic = time.monotonic()
         if self.local_display_override_until and now_monotonic > self.local_display_override_until:
             self.local_display_override_text = ""
@@ -828,12 +838,12 @@ class MainWindow(QtWidgets.QMainWindow):
         generation = self.boot_mirror_generation
         frames = [
             (0, "88888888", 0xFF, 0xFF),
-            (1000, "________", 0x00, 0x00),
+            (1000, "        ", 0x00, 0x00),
             (2000, "31910102", 0x00, 0xFF),
-            (3000, "________", 0x00, 0x00),
-            (4000, "CHENYH__", 0x00, 0xFF),
-            (5000, "________", 0x00, 0x00),
-            (6000, "V2_0____", 0x04, 0xFF),
+            (3000, "        ", 0x00, 0x00),
+            (4000, "CHENYH  ", 0x00, 0xFF),
+            (5000, "        ", 0x00, 0x00),
+            (6000, "V2 0    ", 0x04, 0xFF),
         ]
         for delay_ms, token, dp_mask, led_mask in frames:
             QtCore.QTimer.singleShot(
@@ -884,10 +894,15 @@ class MainWindow(QtWidgets.QMainWindow):
         self._set_mode_state(self.runtime_state.mode, save=False, update_combo=True, update_theme=False)
         self.last_alarm = self.runtime_state.alarm_time if self.runtime_state.alarm_enabled else "OFF"
         alarm_time = QtCore.QTime.fromString(self.runtime_state.alarm_time, "HH:mm:ss")
-        if alarm_time.isValid():
+        if self.runtime_state.alarm_enabled and alarm_time.isValid():
             self.ui.alarmTimeEdit.setTime(alarm_time)
             if hasattr(self, "scheduleAlarmTimeEdit"):
                 self.scheduleAlarmTimeEdit.setTime(alarm_time)
+        else:
+            target = self._default_near_future_datetime()
+            self.ui.alarmTimeEdit.setTime(QtCore.QTime(target.hour, target.minute, 0))
+            if hasattr(self, "scheduleAlarmTimeEdit"):
+                self.scheduleAlarmTimeEdit.setTime(QtCore.QTime(target.hour, target.minute, 0))
         board_time = self._get_runtime_datetime()
         self.ui.dateEdit.setDate(QtCore.QDate(board_time.year, board_time.month, board_time.day))
         self.ui.timeEdit.setTime(QtCore.QTime(board_time.hour, board_time.minute, board_time.second))
@@ -904,6 +919,23 @@ class MainWindow(QtWidgets.QMainWindow):
             utc_moment,
             fallback_offset_seconds=place.utc_offset_seconds,
         )
+
+    def _default_near_future_datetime(self) -> datetime:
+        return (
+            self._selected_zone_now()
+            .replace(tzinfo=None, second=0, microsecond=0)
+            + timedelta(minutes=1)
+        )
+
+    def _apply_default_schedule_datetime(self) -> None:
+        target = self._default_near_future_datetime()
+        qtime = QtCore.QTime(target.hour, target.minute, 0)
+        if hasattr(self, "scheduleTimeEdit"):
+            self.scheduleTimeEdit.setTime(qtime)
+        if hasattr(self, "scheduleAlarmTimeEdit"):
+            self.scheduleAlarmTimeEdit.setTime(qtime)
+        if hasattr(self, "scheduleDateEdit"):
+            self.scheduleDateEdit.setDate(QtCore.QDate(target.year, target.month, target.day))
 
     def _current_place_label(self, place: SavedPlace) -> str:
         current_text = timezone_now(
@@ -2245,17 +2277,11 @@ class MainWindow(QtWidgets.QMainWindow):
             ),
             self._make_settings_row("用户名", self.usernameEdit, self.usernameSaveButton),
         ]
-        if hasattr(self, "themeModeLabel"):
-            self.themeModeLabel.setParent(group)
-            self.themeModeLabel.setWordWrap(True)
-            rows.append(self.themeModeLabel)
         for row_index, row in enumerate(rows):
             layout.addWidget(row, row_index, 0)
             layout.setRowMinimumHeight(row_index, 44)
 
     def _refresh_theme_from_mode(self) -> None:
-        if hasattr(self, "themeModeLabel"):
-            self.themeModeLabel.setText(f"主题状态: {self.last_mode}")
         self._apply_theme()
 
     def _refine_layout_legacy(self) -> None:
@@ -2919,12 +2945,13 @@ class MainWindow(QtWidgets.QMainWindow):
         self.scheduleBoardLabelEdit.setPlaceholderText("最多 32 字，超 8 位滚动")
         self.scheduleTimeEdit = QtWidgets.QTimeEdit(schedule_group)
         self.scheduleTimeEdit.setDisplayFormat("HH:mm:ss")
-        self.scheduleTimeEdit.setTime(QtCore.QTime(8, 0, 0))
+        default_target = self._default_near_future_datetime()
+        self.scheduleTimeEdit.setTime(QtCore.QTime(default_target.hour, default_target.minute, 0))
         self.scheduleTypeCombo = QtWidgets.QComboBox(schedule_group)
         self.scheduleTypeCombo.addItems(["单次执行", "每周重复"])
         self.scheduleDateEdit = QtWidgets.QDateEdit(schedule_group)
         self.scheduleDateEdit.setCalendarPopup(True)
-        self.scheduleDateEdit.setDate(QtCore.QDate.currentDate())
+        self.scheduleDateEdit.setDate(QtCore.QDate(default_target.year, default_target.month, default_target.day))
         self.scheduleRingCombo = QtWidgets.QComboBox(schedule_group)
         self.scheduleRingCombo.addItems([label for _, label in self.ring_names])
         self.scheduleRingPreviewButton = QtWidgets.QPushButton("预览", schedule_group)
@@ -3124,14 +3151,14 @@ class MainWindow(QtWidgets.QMainWindow):
         self.testEstimateLabel.setProperty("class", "infoChip")
         self.testEstimateLabel.setStyleSheet("")
         self.testExplainLabel = QtWidgets.QLabel(
-            "覆盖 PING、SET/GET、日期时间写入、模式切换、天气协议、铃声协议与关键快捷键。",
+            "测试项目：PING 心跳、GET FORMAT/MODE、写入日期与时间、DAY/NIGHT 切换、天气短显、铃声协议、USER2 快捷键。",
             test_group,
         )
         self.testExplainLabel.setWordWrap(True)
         self.testExplainLabel.setProperty("class", "infoChip")
         self.testExplainLabel.setStyleSheet("")
         self.boardShortcutLabel = QtWidgets.QLabel(
-            "板载快捷：USER1 短按请求 PC 对时，长按切日夜；DISP 长按关显示并关 LED；EXT 用于退出/取消当前编辑或临时显示。",
+            "执行方式：每项都会显示 TX/RX 和 OK/FAIL；切换黑夜/白天会等待板端 MODE 事件和 PC 界面刷新，失败时给出排查方向。",
             test_group,
         )
         self.boardShortcutLabel.setWordWrap(True)
@@ -3157,9 +3184,10 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _prepare_widgets(self) -> None:
         now = datetime.now()
+        default_target = self._default_near_future_datetime()
         self.ui.dateEdit.setDate(QtCore.QDate(now.year, now.month, now.day))
         self.ui.timeEdit.setTime(QtCore.QTime(now.hour, now.minute, now.second))
-        self.ui.alarmTimeEdit.setTime(QtCore.QTime(7, 30, 0))
+        self.ui.alarmTimeEdit.setTime(QtCore.QTime(default_target.hour, default_target.minute, 0))
 
         self.ui.displayToggleCombo.addItems(["ON", "OFF"])
         self.ui.formatCombo.addItems(["LEFT", "RIGHT"])
@@ -3332,7 +3360,17 @@ class MainWindow(QtWidgets.QMainWindow):
         self.log("INFO", f"已随机混合大小写: {mixed}")
 
     def send_protocol_current_command(self) -> None:
-        self.send_command(self.ui.rawCommandEdit.text())
+        command = self.ui.rawCommandEdit.text().strip()
+        if not command:
+            return
+        self.pending_queries.clear()
+        self.last_ping_monotonic = None
+        self._mark_manual_serial_window(f"协议台: {command.split()[0]}", duration_s=2.0)
+        if command.upper() == "*RST":
+            self.pending_soft_reset_sync = True
+            self.soft_reset_deadline_monotonic = time.monotonic() + 5.0
+            self.log("INFO", "协议台发送 RST：等待板端复位响应，随后自动执行一次 NTP 对时。")
+        self.send_command(command)
 
     def _build_extension_settings_page(self) -> QtWidgets.QScrollArea:
         page, host, outer = self._create_scroll_page()
@@ -3341,9 +3379,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self.usernameEdit = QtWidgets.QLineEdit(self.ui.displayGroup)
         self.usernameEdit.setPlaceholderText("默认 用户")
         self.usernameSaveButton = QtWidgets.QPushButton("确认用户名", self.ui.displayGroup)
-        self.themeModeLabel = QtWidgets.QLabel("主题状态: DAY", self.ui.displayGroup)
-        self.themeModeLabel.setProperty("class", "infoChip")
-        self.themeModeLabel.setStyleSheet("")
         self._rebuild_system_settings_group()
         outer.addWidget(self.ui.displayGroup)
 
@@ -3464,12 +3499,13 @@ class MainWindow(QtWidgets.QMainWindow):
         self.scheduleBoardLabelEdit.setPlaceholderText("最多 32 字，超 8 位滚动")
         self.scheduleTimeEdit = QtWidgets.QTimeEdit(schedule_group)
         self.scheduleTimeEdit.setDisplayFormat("HH:mm:ss")
-        self.scheduleTimeEdit.setTime(QtCore.QTime(8, 0, 0))
+        default_target = self._default_near_future_datetime()
+        self.scheduleTimeEdit.setTime(QtCore.QTime(default_target.hour, default_target.minute, 0))
         self.scheduleTypeCombo = QtWidgets.QComboBox(schedule_group)
         self.scheduleTypeCombo.addItems(["单次日期", "每周重复"])
         self.scheduleDateEdit = QtWidgets.QDateEdit(schedule_group)
         self.scheduleDateEdit.setCalendarPopup(True)
-        self.scheduleDateEdit.setDate(QtCore.QDate.currentDate())
+        self.scheduleDateEdit.setDate(QtCore.QDate(default_target.year, default_target.month, default_target.day))
         self.scheduleRingCombo = QtWidgets.QComboBox(schedule_group)
         self.scheduleRingCombo.addItems([label for _, label in self.ring_names])
         self.scheduleVoiceEdit = QtWidgets.QLineEdit(schedule_group)
@@ -3891,12 +3927,19 @@ class MainWindow(QtWidgets.QMainWindow):
         if log_message:
             self.log("INFO", "扩展配置已保存。")
 
-    def _send_datetime_snapshot(self, moment: datetime, source_text: str) -> bool:
+    def _send_datetime_snapshot(
+        self,
+        moment: datetime,
+        source_text: str,
+        *,
+        query_after: bool = False,
+    ) -> bool:
         if self.sync_in_progress:
             return False
         self.sync_snapshot = moment.replace(microsecond=0)
         self._set_runtime_datetime(self.sync_snapshot)
         self.sync_in_progress = True
+        self.sync_query_after_finish = query_after
         self.sync_watchdog_token += 1
         sync_token = self.sync_watchdog_token
         self.ui.syncNowButton.setEnabled(False)
@@ -3936,7 +3979,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 QtCore.QTimer.singleShot(1200, self.query_runtime_state)
             return
         self.pending_queries.clear()
-        if self._send_datetime_snapshot(snapshot, source_text):
+        if self._send_datetime_snapshot(snapshot, source_text, query_after=query_after):
             self.log(
                 "INFO",
                 f"{trigger_source}，已自动向板端同步当前时间："
@@ -3953,10 +3996,12 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         self.sync_in_progress = False
         self.sync_snapshot = None
+        self.sync_query_after_finish = False
         self._restore_sync_buttons_if_idle()
         self.log("WARN", "对时写入超过 5 秒未收尾，已恢复界面；请检查串口响应和板端显示状态。")
         self.refresh_dashboard()
         self._maybe_run_pending_auto_test()
+        self._drain_pending_lifecycle_ntp()
 
     def request_user1_time_sync(self, trigger_source: str) -> None:
         if self.ntp_fetch_in_progress or self.sync_in_progress:
@@ -3973,14 +4018,145 @@ class MainWindow(QtWidgets.QMainWindow):
         except RuntimeError:
             pass
 
-    def sync_ntp_time(self, trigger_source: str = "按钮") -> None:
-        if self.ntp_fetch_in_progress or self.sync_in_progress:
-            self.log("WARN", f"{trigger_source} 请求对时，但当前已有对时流程正在进行。")
+    def _serial_auto_quiet_active(self) -> bool:
+        return time.monotonic() < self.auto_serial_quiet_until
+
+    def _serial_auto_quiet_delay_ms(self, padding_ms: int = 160) -> int:
+        remaining = max(0.0, self.auto_serial_quiet_until - time.monotonic())
+        return int(remaining * 1000) + padding_ms
+
+    def _mark_manual_serial_window(self, reason: str, duration_s: float = 1.8) -> None:
+        self.auto_serial_quiet_until = max(
+            self.auto_serial_quiet_until,
+            time.monotonic() + duration_s,
+        )
+        self.auto_serial_quiet_reason = reason
+
+    def _schedule_lifecycle_ntp(
+        self,
+        trigger_source: str,
+        *,
+        delay_ms: int = 0,
+        fallback_on_fail: bool = True,
+        query_after: bool = False,
+    ) -> None:
+        if not self.is_connected:
             return
+        if delay_ms > 0:
+            QtCore.QTimer.singleShot(
+                delay_ms,
+                lambda: self._schedule_lifecycle_ntp(
+                    trigger_source,
+                    fallback_on_fail=fallback_on_fail,
+                    query_after=query_after,
+                ),
+            )
+            return
+        if self._serial_auto_quiet_active():
+            QtCore.QTimer.singleShot(
+                self._serial_auto_quiet_delay_ms(),
+                lambda: self._schedule_lifecycle_ntp(
+                    trigger_source,
+                    fallback_on_fail=fallback_on_fail,
+                    query_after=query_after,
+                ),
+            )
+            return
+        if self.ntp_fetch_in_progress or self.sync_in_progress or self.weather_refresh_in_progress:
+            self.pending_lifecycle_ntp_source = trigger_source
+            self.pending_lifecycle_ntp_query_after = (
+                self.pending_lifecycle_ntp_query_after or query_after
+            )
+            self.pending_lifecycle_ntp_fallback = (
+                self.pending_lifecycle_ntp_fallback or fallback_on_fail
+            )
+            self.log("INFO", f"{trigger_source}：已有后台任务进行中，已合并为稍后一次 NTP 对时。")
+            QtCore.QTimer.singleShot(900, self._drain_pending_lifecycle_ntp)
+            return
+        if time.monotonic() - self.last_lifecycle_ntp_monotonic < 2.2:
+            self.log("INFO", f"{trigger_source}：已与刚刚的 NTP 对时合并，避免重复对时。")
+            if query_after:
+                QtCore.QTimer.singleShot(900, self.query_runtime_state)
+            return
+        if self.sync_ntp_time(
+            trigger_source=trigger_source,
+            fallback_on_fail=fallback_on_fail,
+            query_after=query_after,
+        ):
+            self.last_lifecycle_ntp_monotonic = time.monotonic()
+
+    def _drain_pending_lifecycle_ntp(self) -> None:
+        if not self.pending_lifecycle_ntp_source:
+            return
+        source = self.pending_lifecycle_ntp_source
+        query_after = self.pending_lifecycle_ntp_query_after
+        fallback = self.pending_lifecycle_ntp_fallback
+        self.pending_lifecycle_ntp_source = ""
+        self.pending_lifecycle_ntp_query_after = False
+        self.pending_lifecycle_ntp_fallback = False
+        self._schedule_lifecycle_ntp(
+            source,
+            fallback_on_fail=fallback,
+            query_after=query_after,
+        )
+
+    def _fallback_write_current_city_time(self, trigger_source: str, query_after: bool) -> None:
+        if not self.is_connected:
+            self._restore_sync_buttons_if_idle()
+            self.refresh_dashboard()
+            self._maybe_run_pending_auto_test()
+            return
+        self.log("WARN", f"{trigger_source}：NTP 不可用，改用当前城市/PC 时间写入板端。")
+        self._auto_sync_time_after_connect(
+            f"{trigger_source} NTP 失败 fallback",
+            query_after=query_after,
+        )
+
+    def sync_ntp_time(
+        self,
+        trigger_source: str = "按钮",
+        *,
+        fallback_on_fail: bool = False,
+        query_after: bool = False,
+    ) -> bool:
+        if self._serial_auto_quiet_active():
+            self.log(
+                "INFO",
+                f"{trigger_source}：等待手动串口指令完成后再执行 NTP，避免串口命令插队。",
+            )
+            QtCore.QTimer.singleShot(
+                self._serial_auto_quiet_delay_ms(),
+                lambda: self.sync_ntp_time(
+                    trigger_source=trigger_source,
+                    fallback_on_fail=fallback_on_fail,
+                    query_after=query_after,
+                ),
+            )
+            return False
+        if (
+            self.ntp_fetch_in_progress
+            or self.sync_in_progress
+            or self.weather_refresh_in_progress
+            or self.test_run_in_progress
+        ):
+            if self.weather_refresh_in_progress or self.test_run_in_progress:
+                self.pending_lifecycle_ntp_source = trigger_source
+                self.pending_lifecycle_ntp_query_after = (
+                    self.pending_lifecycle_ntp_query_after or query_after
+                )
+                self.pending_lifecycle_ntp_fallback = (
+                    self.pending_lifecycle_ntp_fallback or fallback_on_fail
+                )
+                QtCore.QTimer.singleShot(900, self._drain_pending_lifecycle_ntp)
+            self.log("WARN", f"{trigger_source} 请求对时，但当前已有对时流程正在进行。")
+            return False
         place = self._active_place()
         self.ntp_fetch_in_progress = True
         self.ntp_watchdog_token += 1
         ntp_token = self.ntp_watchdog_token
+        self.ntp_fallback_on_fail = fallback_on_fail
+        self.ntp_query_after = query_after
+        self.ntp_active_source = trigger_source
         self.ui.syncNowButton.setEnabled(False)
         if hasattr(self, "syncWeatherApplyButton"):
             self.syncWeatherApplyButton.setEnabled(False)
@@ -4000,31 +4176,50 @@ class MainWindow(QtWidgets.QMainWindow):
             8000,
             lambda token=ntp_token, source=trigger_source: self._abort_ntp_if_stale(token, source),
         )
+        return True
 
     def _abort_ntp_if_stale(self, token: int, trigger_source: str) -> None:
         if token != self.ntp_watchdog_token or not self.ntp_fetch_in_progress:
             return
+        fallback = self.ntp_fallback_on_fail
+        query_after = self.ntp_query_after
         self.ntp_fetch_in_progress = False
+        self.ntp_fallback_on_fail = False
+        self.ntp_query_after = False
+        self.ntp_active_source = ""
         self._restore_sync_buttons_if_idle()
         self.log("ERROR", f"NTP 对时超过 8 秒未返回，已取消等待（来源: {trigger_source}）。")
+        if fallback:
+            self._fallback_write_current_city_time(trigger_source, query_after)
+            return
         self.refresh_dashboard()
         self._maybe_run_pending_auto_test()
+        self._drain_pending_lifecycle_ntp()
 
     def _finish_ntp_sync(self, snapshot_utc, error, trigger_source: str, token: int) -> None:
         if token != self.ntp_watchdog_token:
             return
         if not self.ntp_fetch_in_progress and self.sync_snapshot is None:
             return
+        fallback = self.ntp_fallback_on_fail
+        query_after = self.ntp_query_after
         self.ntp_fetch_in_progress = False
+        self.ntp_fallback_on_fail = False
+        self.ntp_query_after = False
+        self.ntp_active_source = ""
         if error is not None or snapshot_utc is None:
             message = str(error) if error is not None else "NTP snapshot missing"
             self.log("ERROR", f"NTP 对时失败: {message}")
             if "启动" in trigger_source or "USER1" in trigger_source:
                 self.log("WARN", "板端启动后若仍停在默认时间，可视为本次 NTP 对时失败。")
             append_event_log(APP_DIR, "ntp_error", message)
+            if fallback:
+                self._fallback_write_current_city_time(trigger_source, query_after)
+                return
             self._restore_sync_buttons_if_idle()
             self.refresh_dashboard()
             self._maybe_run_pending_auto_test()
+            self._drain_pending_lifecycle_ntp()
             return
         place, zone_snapshot, offset_seconds = self._active_place_time_context(snapshot_utc)
         snapshot = zone_snapshot.replace(tzinfo=None)
@@ -4032,7 +4227,7 @@ class MainWindow(QtWidgets.QMainWindow):
             f"{snapshot.strftime('%Y-%m-%d %H:%M:%S')} @ {place.name} "
             f"{place.timezone} {format_utc_offset(offset_seconds)}"
         )
-        self._send_datetime_snapshot(snapshot, source_text)
+        self._send_datetime_snapshot(snapshot, source_text, query_after=query_after)
         append_event_log(APP_DIR, "ntp_sync", f"{trigger_source} -> {source_text}")
         if self.is_connected:
             self.log("INFO", f"NTP 对时成功并写入 S800（来源: {trigger_source}；时间口径: NTP UTC -> 城市时区）。")
@@ -4216,9 +4411,18 @@ class MainWindow(QtWidgets.QMainWindow):
             f"{self.weather_summary_text} | {self.cached_weather_text} | LED {self.cached_weather_led_mask:02X}",
         )
         if self.is_connected:
-            self.send_command(
-                build_set_weather_command(self.cached_weather_text, self.cached_weather_led_mask)
+            weather_command = build_set_weather_command(
+                self.cached_weather_text,
+                self.cached_weather_led_mask,
             )
+            if self._serial_auto_quiet_active():
+                self.log("INFO", "天气数据已更新；等待手动串口指令完成后再下发天气短显数据。")
+                QtCore.QTimer.singleShot(
+                    self._serial_auto_quiet_delay_ms(),
+                    lambda cmd=weather_command: self.send_command(cmd),
+                )
+            else:
+                self.send_command(weather_command)
         if log_trigger:
             _, zone_now, offset_seconds = self._active_place_time_context()
             time_context = (
@@ -4282,6 +4486,12 @@ class MainWindow(QtWidgets.QMainWindow):
             self.ui.modeCombo.currentText() if hasattr(self.ui, "modeCombo") else self.last_mode,
             self.last_mode,
         )
+        if self._serial_auto_quiet_active():
+            QtCore.QTimer.singleShot(
+                self._serial_auto_quiet_delay_ms(),
+                lambda: self._send_pc_mode_to_board(source_text),
+            )
+            return
         self._remember_mode_request(desired, "pc_resync")
         self.send_command(f"*SET:MODE {desired}")
         self.log("INFO", f"{source_text}：已按 PC 当前设置同步昼夜模式 {desired} 到板端。")
@@ -4295,9 +4505,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.scheduleTable.clearSelection()
         self.scheduleTitleEdit.clear()
         self.scheduleBoardLabelEdit.clear()
-        self.scheduleTimeEdit.setTime(QtCore.QTime(8, 0, 0))
         self.scheduleTypeCombo.setCurrentIndex(0)
-        self.scheduleDateEdit.setDate(QtCore.QDate.currentDate())
+        self._apply_default_schedule_datetime()
         self.scheduleRingCombo.setCurrentIndex(0)
         if hasattr(self, "scheduleVoiceEnabledCheck"):
             self.scheduleVoiceEnabledCheck.setChecked(False)
@@ -4548,14 +4757,19 @@ class MainWindow(QtWidgets.QMainWindow):
             return False
         if not self._open_port(port_name):
             return False
-        self._auto_sync_time_after_connect("串口连接成功", query_after=True)
+        self._schedule_lifecycle_ntp(
+            "串口连接成功",
+            delay_ms=180,
+            fallback_on_fail=True,
+            query_after=True,
+        )
         return True
 
     def connect_and_apply_port(self) -> None:
         if not self.connect_port():
             return
         if self.is_connected:
-            self.log("INFO", "连接完成：已自动写入当前城市/时区时间，未自动运行联测脚本。")
+            self.log("INFO", "连接完成：已自动启动一次 NTP 对时并写入板端，未自动运行联测脚本。")
             return
 
     def disconnect_port(self, log_message: bool = True) -> None:
@@ -4584,8 +4798,15 @@ class MainWindow(QtWidgets.QMainWindow):
             self._local_query_notice("运行时状态")
             self.refresh_dashboard()
             return
-        if self.sync_in_progress:
-            QtCore.QTimer.singleShot(700, self.query_runtime_state)
+        if (
+            self.sync_in_progress
+            or self.ntp_fetch_in_progress
+            or self.weather_refresh_in_progress
+            or self.test_run_in_progress
+            or self._serial_auto_quiet_active()
+        ):
+            delay_ms = self._serial_auto_quiet_delay_ms(180) if self._serial_auto_quiet_active() else 700
+            QtCore.QTimer.singleShot(delay_ms, self.query_runtime_state)
             return
         self.pending_queries.clear()
         self.send_command("*GET:DATE", "DATE")
@@ -4753,6 +4974,14 @@ class MainWindow(QtWidgets.QMainWindow):
     def send_ping(self) -> None:
         if not self.is_connected:
             return
+        if (
+            self.sync_in_progress
+            or self.ntp_fetch_in_progress
+            or self.weather_refresh_in_progress
+            or self.test_run_in_progress
+            or self._serial_auto_quiet_active()
+        ):
+            return
         self.last_ping_monotonic = time.perf_counter()
         self.send_command("*PING")
 
@@ -4807,6 +5036,27 @@ class MainWindow(QtWidgets.QMainWindow):
             if line:
                 self.handle_line(line)
 
+    def _complete_soft_reset_sync_if_pending(self, evidence: str) -> None:
+        if not self.pending_soft_reset_sync:
+            return
+        if time.monotonic() > self.soft_reset_deadline_monotonic:
+            self.pending_soft_reset_sync = False
+            self.soft_reset_deadline_monotonic = 0.0
+            self.log("WARN", "软 RST 等待板端响应超时，未自动启动本次 NTP。")
+            return
+        self.pending_soft_reset_sync = False
+        self.soft_reset_deadline_monotonic = 0.0
+        self.pending_queries.clear()
+        self.read_buffer = ""
+        self.log("INFO", f"检测到软 RST 已生效（{evidence}），开始排队执行一次 NTP 对时。")
+        QtCore.QTimer.singleShot(260, lambda: self._send_pc_mode_to_board("软 RST"))
+        self._schedule_lifecycle_ntp(
+            "软 RST",
+            delay_ms=420,
+            fallback_on_fail=True,
+            query_after=True,
+        )
+
     def handle_line(self, line: str) -> None:
         raw = line.strip()
         if raw.upper() == "S800 CLOCK READY":
@@ -4821,15 +5071,19 @@ class MainWindow(QtWidgets.QMainWindow):
             if (time.monotonic() - self.last_ready_sync_monotonic) > 2.5:
                 self.last_ready_sync_monotonic = time.monotonic()
                 self.startup_sync_pending = True
-                QtCore.QTimer.singleShot(
-                    120,
-                    lambda: self._auto_sync_time_after_connect("板端启动", query_after=False),
+                self.pending_soft_reset_sync = False
+                self.soft_reset_deadline_monotonic = 0.0
+                self._schedule_lifecycle_ntp(
+                    "板端启动",
+                    delay_ms=160,
+                    fallback_on_fail=True,
+                    query_after=False,
                 )
                 QtCore.QTimer.singleShot(
                     360,
                     lambda: self._send_pc_mode_to_board("板端启动"),
                 )
-                self.log("INFO", "检测到板端 RESET/启动：数字孪生优先映射板端真实显示帧，后台自动写时、NTP 对时并刷新天气。")
+                self.log("INFO", "检测到板端 RESET/启动：数字孪生优先映射板端真实显示帧，后台自动执行 NTP 对时并刷新天气。")
                 QtCore.QTimer.singleShot(1200, self._run_startup_sync_after_ready)
             return
         parsed = parse_line(line)
@@ -4844,6 +5098,12 @@ class MainWindow(QtWidgets.QMainWindow):
             self.last_ping_monotonic = None
             self._set_latest_event(f"PONG 延迟 {self.status_latency.text()}")
         elif parsed.kind == "ok":
+            if (
+                self.pending_soft_reset_sync
+                and self.last_tx_command.strip().upper() == "*RST"
+                and (time.perf_counter() - self.last_tx_monotonic) < 5.0
+            ):
+                self._complete_soft_reset_sync_if_pending("OK")
             self.handle_ok(parsed)
         elif parsed.kind == "error":
             if self._handle_protocol_error(parsed):
@@ -4858,9 +5118,11 @@ class MainWindow(QtWidgets.QMainWindow):
                 dp_mask = int(parsed.extra[0], 16)
             except ValueError:
                 return
+            self._complete_soft_reset_sync_if_pending("DISP")
             self.boot_mirror_generation += 1
             self.last_board_display_monotonic = time.monotonic()
-            self.twin.set_display_frame(parsed.data, dp_mask)
+            display_token = parsed.data.replace("_", " ").replace("~", "_")
+            self.twin.set_display_frame(display_token, dp_mask)
             self.last_display_event = (parsed.data, dp_mask)
             self.latest_display_text = f"{parsed.data} / {parsed.extra[0]}"
             self.latestDisplayLabel.setText(f"最新显示: {self.latest_display_text}")
@@ -4883,10 +5145,9 @@ class MainWindow(QtWidgets.QMainWindow):
             if not self._is_valid_mode_value(parsed.data):
                 self.log("WARN", f"忽略无效 MODE 事件: {parsed.data or '<empty>'}")
                 return
+            self._complete_soft_reset_sync_if_pending("MODE")
             next_mode = self._normalize_mode_value(parsed.data, self.last_mode)
             mode_origin = self._consume_mode_request(next_mode)
-            if not mode_origin and self._resync_mode_to_board_if_conflict(next_mode, "板端事件"):
-                return
             self._set_mode_state(next_mode)
             append_event_log(APP_DIR, "mode", self.last_mode)
             if self.config.auto_day_night and mode_origin != "auto":
@@ -4919,8 +5180,11 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.request_user1_time_sync("USER1")
                 return
             if key == "USER2":
-                self.log("INFO", "USER2 按键：板端显示天气短显；若无天气数据则显示 NO WX。")
-                self._set_latest_event("USER2 -> 天气短显")
+                weather_text = (self.cached_weather_text or self.runtime_state.weather_token or "").replace("_", " ").strip()
+                if not weather_text:
+                    weather_text = "NO WX"
+                self.log("INFO", f"USER2 按键：板端正在显示天气短显 {weather_text}，约 5 秒后回到时钟。")
+                self._set_latest_event(f"USER2 -> 天气短显 {weather_text}")
                 self.refresh_dashboard()
                 return
             self.refresh_dashboard()
@@ -4953,9 +5217,13 @@ class MainWindow(QtWidgets.QMainWindow):
         if not self.startup_sync_pending:
             return
         self.startup_sync_pending = False
-        self.sync_weather_and_apply(
+        self.log("INFO", "板端启动后台流程：NTP 已单独排队，天气刷新只更新天气数据，不再额外触发第二次 NTP。")
+        self.refresh_weather_and_push(
+            log_trigger=True,
+            city_text=self.cityEdit.text().strip() if hasattr(self, "cityEdit") else "",
+            resolve_city=True,
             trigger_source="板端启动",
-            run_tests=False,
+            run_ntp_after_resolve=False,
         )
 
     def handle_ok(self, parsed: ParsedLine) -> None:
@@ -4992,8 +5260,6 @@ class MainWindow(QtWidgets.QMainWindow):
                 self._save_runtime_state()
         elif query == "MODE" and data:
             if data in {"DAY", "NIGHT"}:
-                if self._resync_mode_to_board_if_conflict(data, "查询返回"):
-                    return
                 self._set_mode_state(data)
                 self.refresh_dashboard()
             else:
@@ -5071,11 +5337,16 @@ class MainWindow(QtWidgets.QMainWindow):
         QtCore.QTimer.singleShot(260, self._finish_sync_host_time)
 
     def _finish_sync_host_time(self) -> None:
+        query_after = self.sync_query_after_finish
         self.sync_in_progress = False
         self.sync_snapshot = None
+        self.sync_query_after_finish = False
         self._restore_sync_buttons_if_idle()
         self.refresh_dashboard()
+        if query_after:
+            QtCore.QTimer.singleShot(500, self.query_runtime_state)
         self._maybe_run_pending_auto_test()
+        self._drain_pending_lifecycle_ntp()
 
     def apply_display_state(self) -> None:
         next_value = "OFF" if self.ui.displayToggleCombo.currentText() == "ON" else "ON"
@@ -5135,11 +5406,31 @@ class MainWindow(QtWidgets.QMainWindow):
             self.request_user1_time_sync("虚拟 USER1")
             return
         if key == "USER2":
-            self.log("INFO", "虚拟 USER2：请求板端/本地显示天气短显。")
+            weather_text = (self.cached_weather_text or self.runtime_state.weather_token or "").strip()
+            if self.is_connected and weather_text:
+                command = build_set_weather_command(
+                    weather_text,
+                    self.cached_weather_led_mask or self.runtime_state.weather_led_mask,
+                )
+                self.log("INFO", "虚拟 USER2：先同步当前天气短显数据，再请求板端显示。")
+                self.send_command(command)
+                QtCore.QTimer.singleShot(140, lambda: self.send_command("*SET:KEY USER2"))
+                return
+            self.log("INFO", "虚拟 USER2：请求板端/本地显示天气短显；无天气数据时显示 NO WX。")
         self.send_command(f"*SET:KEY {key_name}")
 
     def send_raw_command(self) -> None:
-        self.send_command(self.ui.rawCommandEdit.text())
+        command = self.ui.rawCommandEdit.text().strip()
+        if not command:
+            return
+        self.pending_queries.clear()
+        self.last_ping_monotonic = None
+        self._mark_manual_serial_window(f"RAW: {command.split()[0]}", duration_s=2.0)
+        if command.upper() == "*RST":
+            self.pending_soft_reset_sync = True
+            self.soft_reset_deadline_monotonic = time.monotonic() + 5.0
+            self.log("INFO", "RAW 发送 RST：等待板端复位响应，随后自动执行一次 NTP 对时。")
+        self.send_command(command)
 
     def apply_schedule_alarm(self) -> None:
         time_value = self.scheduleAlarmTimeEdit.time()
@@ -5298,6 +5589,18 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _handle_protocol_error(self, parsed: ParsedLine) -> bool:
         error_text = (parsed.data or parsed.name or "").strip().upper()
+        if error_text == "STATE":
+            self.local_display_override_text = ""
+            self.local_display_override_started = 0.0
+            self.local_display_override_until = 0.0
+            self.local_display_override_led_mask = None
+            message = "板端显示状态机超时，已自动清退临时显示并恢复时钟。"
+            append_event_log(APP_DIR, "state_recover", message)
+            self.log("WARN", message)
+            if self.is_connected:
+                QtCore.QTimer.singleShot(300, self.query_runtime_state)
+            self.refresh_dashboard()
+            return True
         if error_text != "PARAM":
             return False
         if (

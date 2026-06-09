@@ -51,7 +51,7 @@ def encode_char(value: str) -> int:
 class SevenSegmentDisplayWidget(QtWidgets.QWidget):
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
-        self._text = "________"
+        self._text = "        "
         self._dp_mask = 0
         self.setMinimumHeight(62)
         self.setMaximumHeight(78)
@@ -67,7 +67,7 @@ class SevenSegmentDisplayWidget(QtWidgets.QWidget):
         return QtCore.QSize(320, 62)
 
     def set_frame(self, token: str, dp_mask: int) -> None:
-        self._text = token[:8].ljust(8, "_")
+        self._text = token[:8].ljust(8, " ")
         self._dp_mask = dp_mask & 0xFF
         self.update()
 
@@ -93,7 +93,7 @@ class SevenSegmentDisplayWidget(QtWidgets.QWidget):
             self._draw_digit(
                 painter,
                 digit_rect,
-                encode_char(" " if ch == "_" else ch),
+                encode_char(ch),
                 bool(self._dp_mask & (1 << index)),
                 on_color,
                 off_color,
@@ -273,7 +273,7 @@ class DigitalTwinWidget(QtWidgets.QWidget):
         self.key_button_by_name: dict[str, QtWidgets.QPushButton] = {}
         self.key_button_base_style = "padding: 2px 4px;"
         key_tips = {
-            "USER2": "USER2: 非编辑状态显示天气短显；编辑状态作为 SUB 减一键",
+            "USER2": "USER2: 非编辑状态显示当前天气短显或 NO WX；编辑状态作为 SUB 减一键",
             "EXT": "SW8 / EXT: 退出编辑、取消天气短显或滚动消息",
             "FORMAT": "SW7 / FORMAT: 切换 LEFT/RIGHT 数码管显示方向",
             "SPEED": "SW6 / SPEED: 切换走马灯快/慢速度",
