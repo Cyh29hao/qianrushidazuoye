@@ -255,6 +255,8 @@ static void BuildDottedDateYear(const DateTime *value, char *out,
 static void BuildWeekdayName(const DateTime *value, char *out, uint8_t outSize);
 static void BuildDottedAlarm(const AlarmState *value, char *out,
                               uint8_t outSize);
+static bool HasVisibleText(const char *text);
+static void ClearTransientDisplayState(void);
 
 static void HandleSetDate(const char *params);
 static void HandleSetTime(const char *params);
@@ -942,6 +944,31 @@ static void BuildDottedAlarm(const AlarmState *value, char *out,
              (unsigned)value->second);
 }
 
+static bool HasVisibleText(const char *text)
+{
+    while (*text != '\0') {
+        if ((*text != ' ') && (*text != '_') && (*text != '\t')) {
+            return true;
+        }
+        text++;
+    }
+    return false;
+}
+
+static void ClearTransientDisplayState(void)
+{
+    g_weatherShowUntilMs = 0UL;
+    if (g_messageActive != 0U) {
+        g_messageActive = 0U;
+        g_messageDeadlineMs = 0UL;
+        g_messageScrollLimit = 0U;
+        g_messageEndArmed = 0U;
+    }
+    g_scrollOffset = 0U;
+    g_viewScrollCompleted = 0U;
+    g_nextScrollMs = g_millis + CurrentScrollIntervalMs();
+}
+
 static void BuildVisibleText(char *out, uint8_t outSize)
 {
     if (g_bootPhase == BOOT_ALL_ON) {
@@ -986,7 +1013,8 @@ static void BuildVisibleText(char *out, uint8_t outSize)
         return;
     }
 
-    if ((g_weatherShowUntilMs > g_millis) && (g_weatherText[0] != '\0')) {
+    if ((g_weatherShowUntilMs > g_millis) &&
+        (HasVisibleText(g_weatherText) != false)) {
         snprintf(out, outSize, "%s", g_weatherText);
         return;
     }
@@ -1703,9 +1731,11 @@ static void HandleKeyPress(KeyCode key, bool emitEvent)
             DecrementEditField();
             return;
         }
-        if (g_weatherText[0] != '\0') {
-            g_weatherShowUntilMs = g_millis + WEATHER_SHOW_MS;
+        if (HasVisibleText(g_weatherText) == false) {
+            snprintf(g_weatherText, sizeof(g_weatherText), "NO WX");
+            g_weatherLedMask = 0U;
         }
+        g_weatherShowUntilMs = g_millis + WEATHER_SHOW_MS;
         break;
     default:
         break;
@@ -2280,6 +2310,7 @@ static void HandleSetDate(const char *params)
     g_now.year = nextValue.year;
     g_now.month = nextValue.month;
     g_now.day = nextValue.day;
+    ClearTransientDisplayState();
     if (g_viewMode == VIEW_WEEKDAY) {
         g_scrollOffset = 0U;
         g_viewScrollCompleted = 0U;
@@ -2343,6 +2374,7 @@ static void HandleSetTime(const char *params)
     g_now.hour = nextValue.hour;
     g_now.minute = nextValue.minute;
     g_now.second = nextValue.second;
+    ClearTransientDisplayState();
     RefreshDisplayAndLeds(true);
     UART_ReplyOk(NULL);
 }
@@ -2572,8 +2604,13 @@ static void HandleSetWeather(const char *params)
         return;
     }
 
+    if (HasVisibleText(nextWeather) == false) {
+        snprintf(nextWeather, sizeof(nextWeather), "NO WX");
+    }
     snprintf(g_weatherText, sizeof(g_weatherText), "%s", nextWeather);
     g_weatherLedMask = nextLedMask;
+    g_weatherShowUntilMs = 0UL;
+    RefreshDisplayAndLeds(true);
     UART_ReplyOk(NULL);
 }
 

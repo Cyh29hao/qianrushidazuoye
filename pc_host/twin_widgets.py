@@ -61,10 +61,10 @@ class SevenSegmentDisplayWidget(QtWidgets.QWidget):
         )
 
     def sizeHint(self) -> QtCore.QSize:
-        return QtCore.QSize(920, 108)
+        return QtCore.QSize(820, 108)
 
     def minimumSizeHint(self) -> QtCore.QSize:
-        return QtCore.QSize(640, 92)
+        return QtCore.QSize(460, 92)
 
     def set_frame(self, token: str, dp_mask: int) -> None:
         self._text = token[:8].ljust(8, "_")
@@ -186,10 +186,10 @@ class LedBarWidget(QtWidgets.QWidget):
         self.setMaximumHeight(38)
 
     def sizeHint(self) -> QtCore.QSize:
-        return QtCore.QSize(920, 34)
+        return QtCore.QSize(820, 34)
 
     def minimumSizeHint(self) -> QtCore.QSize:
-        return QtCore.QSize(640, 30)
+        return QtCore.QSize(460, 30)
 
     def set_led_byte(self, value: int) -> None:
         self._value = value & 0xFF
@@ -284,13 +284,16 @@ class DigitalTwinWidget(QtWidgets.QWidget):
         ]
         for key_name, label, row, column in keys:
             button = QtWidgets.QPushButton(label)
+            button.setObjectName("twinKeyButton")
             if key_name == "USER1":
                 button.setToolTip("短按请求 PC 对时；板端长按切换 DAY/NIGHT")
-            button.setMinimumHeight(26)
-            button.setMaximumHeight(30)
+            if key_name == "USER2":
+                button.setToolTip("USER2: 非编辑状态显示天气短显；编辑状态作为 SUB 减一键")
+            button.setMinimumHeight(42)
+            button.setMaximumHeight(48)
             button.setStyleSheet(self.key_button_base_style)
             font = button.font()
-            font.setPointSize(6)
+            font.setPointSize(9)
             font.setBold(True)
             button.setFont(font)
             button.clicked.connect(
@@ -324,10 +327,10 @@ class DigitalTwinWidget(QtWidgets.QWidget):
             + layout.spacing() * 3
             + 4
         )
-        return QtCore.QSize(980, total_height)
+        return QtCore.QSize(860, total_height)
 
     def minimumSizeHint(self) -> QtCore.QSize:
-        return QtCore.QSize(760, self.sizeHint().height())
+        return QtCore.QSize(520, self.sizeHint().height())
 
     def set_display_frame(self, token: str, dp_mask: int) -> None:
         self.display.set_frame(token, dp_mask)

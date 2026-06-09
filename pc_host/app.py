@@ -7,7 +7,7 @@ import sys
 import threading
 import time
 from collections import deque
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from bootstrap_qt import configure_qt_runtime
@@ -145,8 +145,8 @@ class CollapsibleNavWidget(QtWidgets.QWidget):
 
 
 class MainWindow(QtWidgets.QMainWindow):
-    weather_refresh_finished = QtCore.pyqtSignal(object, object, bool)
-    ntp_sync_finished = QtCore.pyqtSignal(object, object, str)
+    weather_refresh_finished = QtCore.pyqtSignal(object, object, bool, int)
+    ntp_sync_finished = QtCore.pyqtSignal(object, object, str, int)
     test_point_finished = QtCore.pyqtSignal(str)
     test_run_finished = QtCore.pyqtSignal(str, bool)
 
@@ -188,6 +188,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.sync_in_progress = False
         self.ntp_fetch_in_progress = False
         self.sync_snapshot: datetime | None = None
+        self.sync_watchdog_token = 0
+        self.ntp_watchdog_token = 0
+        self.weather_watchdog_token = 0
         self.runtime_shadow_base_iso = ""
         self.runtime_shadow_base_datetime: datetime | None = None
         self.runtime_shadow_base_monotonic = 0.0
@@ -270,7 +273,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.log("INFO", "PC 上位机已启动，等待连接 S800。")
 
     def _build_statusbar(self) -> None:
-        self.status_project = QtWidgets.QLabel("智能联网时钟系统")
+        self.status_project = QtWidgets.QLabel("智能时钟")
         self.status_project.setContentsMargins(4, 0, 8, 0)
         self.status_project_icon = QtWidgets.QLabel()
         if LOGO_PATH.exists():
@@ -281,26 +284,48 @@ class MainWindow(QtWidgets.QMainWindow):
                 QtCore.Qt.SmoothTransformation,
             )
             self.status_project_icon.setPixmap(pixmap)
-        self.status_connection = QtWidgets.QLabel("连接: 未连接")
-        self.status_mode = QtWidgets.QLabel("MODE: DAY")
-        self.status_location = QtWidgets.QLabel("LOCATION: 上海")
-        self.status_local_time = QtWidgets.QLabel("本地时间: --:--:--")
-        self.status_latency = QtWidgets.QLabel("延迟: -- ms")
+        self.status_connection = QtWidgets.QLabel("未连接")
+        self.status_mode = QtWidgets.QLabel("DAY")
+        self.status_location = QtWidgets.QLabel("上海")
+        self.status_local_time = QtWidgets.QLabel("--:--:--")
+        self.status_latency = QtWidgets.QLabel("-- ms")
         self.status_version = QtWidgets.QLabel(APP_VERSION)
-        self.status_developer = QtWidgets.QLabel("开发者: Cyh29hao")
+        self.status_developer = QtWidgets.QLabel("Cyh29hao")
         self.status_clear_button = QtWidgets.QToolButton(self)
-        self.status_clear_button.setText("清空日志")
+        self.status_clear_button.setObjectName("statusActionButton")
+        self.status_clear_button.setText("清空")
         self.status_export_button = QtWidgets.QToolButton(self)
-        self.status_export_button.setText("导出日志")
+        self.status_export_button.setObjectName("statusActionButton")
+        self.status_export_button.setText("导出")
         self.status_github_button = QtWidgets.QToolButton(self)
+        self.status_github_button.setObjectName("statusActionButton")
         self.status_github_button.setText("GitHub")
         self.status_github_button.clicked.connect(
             lambda: QtGui.QDesktopServices.openUrl(QtCore.QUrl(GITHUB_URL))
         )
         self.status_clear_button.clicked.connect(self.ui.logTextEdit.clear)
         self.status_export_button.clicked.connect(self.export_log)
+        for label in (
+            self.status_project,
+            self.status_connection,
+            self.status_mode,
+            self.status_location,
+            self.status_local_time,
+            self.status_latency,
+            self.status_version,
+            self.status_developer,
+        ):
+            label.setMinimumWidth(0)
+            label.setSizePolicy(QtWidgets.QSizePolicy.Maximum, QtWidgets.QSizePolicy.Fixed)
+        for button in (
+            self.status_clear_button,
+            self.status_export_button,
+            self.status_github_button,
+        ):
+            button.setMinimumWidth(64)
+            button.setMaximumWidth(86)
         self.ui.statusbar.addWidget(self.status_project_icon)
-        self.ui.statusbar.addWidget(self.status_project, 1)
+        self.ui.statusbar.addWidget(self.status_project)
         self.ui.statusbar.addPermanentWidget(self.status_connection)
         self.ui.statusbar.addPermanentWidget(self.status_mode)
         self.ui.statusbar.addPermanentWidget(self.status_location)
@@ -422,7 +447,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.runtime_shadow_base_iso = self.runtime_state.board_datetime_iso
         self.runtime_shadow_base_datetime = clean
         self.runtime_shadow_base_monotonic = time.monotonic()
-        self.runtime_state.shadow_saved_at_utc_iso = datetime.utcnow().replace(
+        self.runtime_state.shadow_saved_at_utc_iso = datetime.now(timezone.utc).replace(
             microsecond=0
         ).isoformat(sep=" ")
         self._save_runtime_state()
@@ -448,9 +473,13 @@ class MainWindow(QtWidgets.QMainWindow):
                     except ValueError:
                         return board_time
                     else:
+                        if saved_at.tzinfo is None:
+                            saved_at = saved_at.replace(tzinfo=timezone.utc)
+                        else:
+                            saved_at = saved_at.astimezone(timezone.utc)
                         elapsed = max(
                             0,
-                            int((datetime.utcnow() - saved_at).total_seconds()),
+                            int((datetime.now(timezone.utc) - saved_at).total_seconds()),
                         )
                         current = board_time + timedelta(seconds=elapsed)
                         self.runtime_shadow_base_iso = raw
@@ -725,7 +754,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ui.ledHexEdit.setText(f"{self.runtime_state.led_mask:02X}")
         self.ui.messageEdit.setText(self.runtime_state.message_text)
         self._refresh_local_twin_frame()
-        self.status_mode.setText(f"MODE: {self.runtime_state.mode}")
+        self.status_mode.setText(self.runtime_state.mode)
         self._refresh_theme_from_mode()
         self._refresh_single_alarm_ui()
 
@@ -919,8 +948,21 @@ class MainWindow(QtWidgets.QMainWindow):
             palette.setColor(role, fg)
         return palette
 
+    def _asset_qss_url(self, name: str) -> str:
+        return QtCore.QUrl.fromLocalFile(str(BUNDLE_DIR / "assets" / name)).toString()
+
     def _apply_theme(self) -> None:
         night = self.config.theme_follow_mode and self.last_mode == "NIGHT"
+        arrow_url = self._asset_qss_url(
+            "combo_arrow_night.xpm" if night else "combo_arrow_day.xpm"
+        )
+        check_url = self._asset_qss_url("checkbox_check.xpm")
+        spin_up_url = self._asset_qss_url(
+            "spin_up_night.xpm" if night else "spin_up_day.xpm"
+        )
+        spin_down_url = self._asset_qss_url(
+            "spin_down_night.xpm" if night else "spin_down_day.xpm"
+        )
         palette = {
             "background": "#f4efe7",
             "text": "#16324f",
@@ -941,6 +983,8 @@ class MainWindow(QtWidgets.QMainWindow):
             "scrollbar_bg": "#ebe4da",
             "scrollbar_handle": "#b7cadb",
             "scrollbar_handle_hover": "#96b5cf",
+            "splitter_handle": "#d7d0c6",
+            "splitter_handle_hover": "#b7cadb",
         }
         if night:
             palette.update(
@@ -964,6 +1008,8 @@ class MainWindow(QtWidgets.QMainWindow):
                     "scrollbar_bg": "#18212b",
                     "scrollbar_handle": "#516477",
                     "scrollbar_handle_hover": "#667b90",
+                    "splitter_handle": "#445365",
+                    "splitter_handle_hover": "#516477",
                 }
             )
         self.setStyleSheet(
@@ -994,6 +1040,16 @@ class MainWindow(QtWidgets.QMainWindow):
                 padding: 0 8px 2px 8px;
                 background: {palette['background']};
                 color: {palette['title']};
+            }}
+            QGroupBox#twinGroup {{
+                margin-top: 0px;
+            }}
+            QGroupBox#twinGroup::title {{
+                height: 0px;
+                padding: 0px;
+                margin: 0px;
+                color: transparent;
+                background: transparent;
             }}
             QPushButton, QToolButton {{
                 background: {palette['button']};
@@ -1034,12 +1090,9 @@ class MainWindow(QtWidgets.QMainWindow):
                 width: 28px;
             }}
             QComboBox::down-arrow, QDateEdit::down-arrow, QTimeEdit::down-arrow {{
-                image: none;
-                width: 0px;
-                height: 0px;
-                border-left: 5px solid transparent;
-                border-right: 5px solid transparent;
-                border-top: 6px solid {palette['text']};
+                image: url("{arrow_url}");
+                width: 12px;
+                height: 12px;
                 margin-right: 8px;
             }}
             QComboBox QAbstractItemView {{
@@ -1063,32 +1116,32 @@ class MainWindow(QtWidgets.QMainWindow):
                 border-bottom-right-radius: 8px;
             }}
             QAbstractSpinBox::up-arrow {{
-                image: none;
-                width: 0px;
-                height: 0px;
-                border-left: 4px solid transparent;
-                border-right: 4px solid transparent;
-                border-bottom: 5px solid {palette['text']};
+                image: url("{spin_up_url}");
+                width: 10px;
+                height: 10px;
             }}
             QAbstractSpinBox::down-arrow {{
-                image: none;
-                width: 0px;
-                height: 0px;
-                border-left: 4px solid transparent;
-                border-right: 4px solid transparent;
-                border-top: 5px solid {palette['text']};
+                image: url("{spin_down_url}");
+                width: 10px;
+                height: 10px;
             }}
             QComboBox[stateField="true"] {{
-                padding-right: 8px;
+                padding-right: 28px;
             }}
             QComboBox[stateField="true"]::drop-down {{
-                width: 0px;
-                border: none;
+                background: {palette['input_bg']};
+                border-left: 1px solid {palette['input_border']};
+                border-top-right-radius: 8px;
+                border-bottom-right-radius: 8px;
+                subcontrol-origin: border;
+                subcontrol-position: top right;
+                width: 28px;
             }}
             QComboBox[stateField="true"]::down-arrow {{
-                image: none;
-                width: 0px;
-                height: 0px;
+                image: url("{arrow_url}");
+                width: 12px;
+                height: 12px;
+                margin-right: 8px;
             }}
             QLineEdit, QComboBox, QDateEdit, QTimeEdit, QSpinBox {{
                 min-height: 32px;
@@ -1150,6 +1203,24 @@ class MainWindow(QtWidgets.QMainWindow):
             }}
             QScrollArea > QWidget > QWidget {{
                 background: {palette['background']};
+            }}
+            QSplitter {{
+                background: {palette['background']};
+            }}
+            QSplitter::handle {{
+                background: {palette['splitter_handle']};
+                border: none;
+            }}
+            QSplitter::handle:horizontal {{
+                width: 6px;
+                margin: 0px 2px;
+            }}
+            QSplitter::handle:vertical {{
+                height: 6px;
+                margin: 2px 0px;
+            }}
+            QSplitter::handle:hover {{
+                background: {palette['splitter_handle_hover']};
             }}
             QScrollBar:vertical {{
                 background: {palette['scrollbar_bg']};
@@ -1216,6 +1287,41 @@ class MainWindow(QtWidgets.QMainWindow):
             QCheckBox {{
                 spacing: 6px;
                 font-size: 11px;
+            }}
+            QCheckBox::indicator {{
+                width: 14px;
+                height: 14px;
+                border: 1px solid {palette['input_border']};
+                border-radius: 3px;
+                background: {palette['input_bg']};
+            }}
+            QCheckBox::indicator:checked {{
+                image: url("{check_url}");
+                background: {palette['button']};
+                border: 1px solid {palette['button_hover']};
+            }}
+            QCheckBox::indicator:disabled {{
+                background: {palette['button_disabled']};
+                border: 1px solid {palette['group_border']};
+            }}
+            QCheckBox::indicator:checked:disabled {{
+                image: url("{check_url}");
+            }}
+            QPushButton#twinKeyButton {{
+                background: {palette['button']};
+                color: white;
+                border: none;
+                border-radius: 7px;
+                padding: 4px 6px;
+                min-height: 40px;
+                font-size: 10px;
+                font-weight: 700;
+            }}
+            QPushButton#twinKeyButton:hover {{
+                background: {palette['button_hover']};
+            }}
+            QPushButton#twinKeyButton:pressed {{
+                background: {palette['button_pressed']};
             }}
             QPushButton#accordionHeader {{
                 background: {palette['button']};
@@ -1294,6 +1400,16 @@ class MainWindow(QtWidgets.QMainWindow):
         self._apply_dynamic_theme_overrides(night, palette)
 
     def _apply_dynamic_theme_overrides(self, night: bool, palette: dict[str, str]) -> None:
+        arrow_url = self._asset_qss_url(
+            "combo_arrow_night.xpm" if night else "combo_arrow_day.xpm"
+        )
+        check_url = self._asset_qss_url("checkbox_check.xpm")
+        spin_up_url = self._asset_qss_url(
+            "spin_up_night.xpm" if night else "spin_up_day.xpm"
+        )
+        spin_down_url = self._asset_qss_url(
+            "spin_down_night.xpm" if night else "spin_down_day.xpm"
+        )
         scrollbar_style = (
             f"QScrollBar:vertical {{"
             f"background: {palette['scrollbar_bg']};"
@@ -1340,13 +1456,41 @@ class MainWindow(QtWidgets.QMainWindow):
             f"background: transparent;"
             f"}}"
         )
-        list_style = (
+        item_view_style = (
+            f"QAbstractItemView, QListView, QListWidget, QTableWidget, QTableView {{"
             f"background: {palette['input_bg']};"
             f"color: {palette['text']};"
             f"border: 1px solid {palette['input_border']};"
             f"border-radius: 8px;"
             f"selection-background-color: {palette['button']};"
             f"selection-color: white;"
+            f"outline: none;"
+            f"}}"
+            f"QAbstractItemView::item, QListWidget::item, QTableWidget::item {{"
+            f"background: transparent;"
+            f"color: {palette['text']};"
+            f"}}"
+            f"QAbstractItemView::item:selected, QListWidget::item:selected, QTableWidget::item:selected {{"
+            f"background: {palette['button']};"
+            f"color: white;"
+            f"}}"
+            f"{scrollbar_style}"
+        )
+        item_view_viewport_style = (
+            f"background: {palette['input_bg']};"
+            f"color: {palette['text']};"
+            f"border: none;"
+        )
+        text_edit_style = (
+            f"QTextEdit {{"
+            f"background: {palette['input_bg']};"
+            f"color: {palette['text']};"
+            f"border: 1px solid {palette['input_border']};"
+            f"border-radius: 8px;"
+            f"padding: 6px 8px;"
+            f"selection-background-color: {palette['button']};"
+            f"selection-color: white;"
+            f"}}"
             f"{scrollbar_style}"
         )
         field_style = (
@@ -1381,23 +1525,11 @@ class MainWindow(QtWidgets.QMainWindow):
             f"width: 28px;"
             f"}}"
             f"QComboBox::down-arrow {{"
-            f"image: none;"
-            f"width: 0px;"
-            f"height: 0px;"
-            f"border-left: 5px solid transparent;"
-            f"border-right: 5px solid transparent;"
-            f"border-top: 6px solid {palette['text']};"
+            f"image: url(\"{arrow_url}\");"
+            f"width: 12px;"
+            f"height: 12px;"
             f"margin-right: 8px;"
             f"}}"
-            f"QComboBox QAbstractItemView {{"
-            f"background: {palette['input_bg']};"
-            f"color: {palette['text']};"
-            f"border: 1px solid {palette['input_border']};"
-            f"selection-background-color: {palette['button']};"
-            f"selection-color: white;"
-            f"outline: none;"
-            f"}}"
-            f"{scrollbar_style}"
         )
         state_combo_style = (
             f"QComboBox {{"
@@ -1405,17 +1537,23 @@ class MainWindow(QtWidgets.QMainWindow):
             f"color: {palette['text']};"
             f"border: 1px solid {palette['input_border']};"
             f"border-radius: 8px;"
-            f"padding: 6px 10px;"
+            f"padding: 6px 34px 6px 10px;"
             f"min-height: 32px;"
             f"}}"
-            f"QComboBox::drop-down {{ width: 0px; border: none; }}"
-            f"QComboBox::down-arrow {{ image: none; width: 0px; height: 0px; }}"
-            f"QComboBox QAbstractItemView {{"
+            f"QComboBox::drop-down {{"
             f"background: {palette['input_bg']};"
-            f"color: {palette['text']};"
-            f"selection-background-color: {palette['button']};"
-            f"selection-color: white;"
-            f"outline: none;"
+            f"border-left: 1px solid {palette['input_border']};"
+            f"border-top-right-radius: 8px;"
+            f"border-bottom-right-radius: 8px;"
+            f"subcontrol-origin: border;"
+            f"subcontrol-position: top right;"
+            f"width: 28px;"
+            f"}}"
+            f"QComboBox::down-arrow {{"
+            f"image: url(\"{arrow_url}\");"
+            f"width: 12px;"
+            f"height: 12px;"
+            f"margin-right: 8px;"
             f"}}"
         )
         spin_style = (
@@ -1437,12 +1575,9 @@ class MainWindow(QtWidgets.QMainWindow):
             f"width: 28px;"
             f"}}"
             f"QDateEdit::down-arrow, QTimeEdit::down-arrow {{"
-            f"image: none;"
-            f"width: 0px;"
-            f"height: 0px;"
-            f"border-left: 5px solid transparent;"
-            f"border-right: 5px solid transparent;"
-            f"border-top: 6px solid {palette['text']};"
+            f"image: url(\"{arrow_url}\");"
+            f"width: 12px;"
+            f"height: 12px;"
             f"margin-right: 8px;"
             f"}}"
             f"QAbstractSpinBox::up-button, QAbstractSpinBox::down-button {{"
@@ -1454,22 +1589,15 @@ class MainWindow(QtWidgets.QMainWindow):
             f"QAbstractSpinBox::up-button {{ border-top-right-radius: 8px; }}"
             f"QAbstractSpinBox::down-button {{ border-bottom-right-radius: 8px; }}"
             f"QAbstractSpinBox::up-arrow {{"
-            f"image: none;"
-            f"width: 0px;"
-            f"height: 0px;"
-            f"border-left: 4px solid transparent;"
-            f"border-right: 4px solid transparent;"
-            f"border-bottom: 5px solid {palette['text']};"
+            f"image: url(\"{spin_up_url}\");"
+            f"width: 10px;"
+            f"height: 10px;"
             f"}}"
             f"QAbstractSpinBox::down-arrow {{"
-            f"image: none;"
-            f"width: 0px;"
-            f"height: 0px;"
-            f"border-left: 4px solid transparent;"
-            f"border-right: 4px solid transparent;"
-            f"border-top: 5px solid {palette['text']};"
+            f"image: url(\"{spin_down_url}\");"
+            f"width: 10px;"
+            f"height: 10px;"
             f"}}"
-            f"{scrollbar_style}"
         )
         header_style = (
             f"background: {palette['chip_bg']};"
@@ -1477,7 +1605,7 @@ class MainWindow(QtWidgets.QMainWindow):
             f"border: 1px solid {palette['input_border']};"
         )
         page_style = f"background: {palette['background']}; color: {palette['text']};"
-        viewport_style = f"background: {palette['input_bg']}; color: {palette['text']};"
+        viewport_style = f"background: {palette['background']}; color: {palette['text']};"
         scroll_page_style = (
             f"QScrollArea {{ background: {palette['background']}; border: none; }}"
             f"QScrollArea > QWidget > QWidget {{ background: {palette['background']}; }}"
@@ -1562,12 +1690,16 @@ class MainWindow(QtWidgets.QMainWindow):
             f"background: {palette['input_bg']};"
             f"}}"
             f"QCheckBox::indicator:checked {{"
+            f"image: url(\"{check_url}\");"
             f"background: {palette['button']};"
             f"border: 1px solid {palette['button_hover']};"
             f"}}"
             f"QCheckBox::indicator:disabled {{"
             f"background: {palette['button_disabled']};"
             f"border: 1px solid {palette['group_border']};"
+            f"}}"
+            f"QCheckBox::indicator:checked:disabled {{"
+            f"image: url(\"{check_url}\");"
             f"}}"
         )
         status_bar_style = (
@@ -1595,7 +1727,7 @@ class MainWindow(QtWidgets.QMainWindow):
             area.viewport().setStyleSheet(page_style)
         for button_type in (QtWidgets.QPushButton, QtWidgets.QToolButton):
             for button in self.findChildren(button_type):
-                if button.objectName() in {"accordionHeader", "accordionOptionButton"}:
+                if button.objectName() in {"accordionHeader", "accordionOptionButton", "twinKeyButton"}:
                     continue
                 button.setStyleSheet(make_button_style(button_type.__name__))
                 button.setCursor(QtGui.QCursor(QtCore.Qt.PointingHandCursor))
@@ -1610,8 +1742,8 @@ class MainWindow(QtWidgets.QMainWindow):
                     field_line_style
                 )
             if widget.view() is not None:
-                widget.view().setStyleSheet(list_style)
-                widget.view().viewport().setStyleSheet(viewport_style)
+                widget.view().setStyleSheet(item_view_style)
+                widget.view().viewport().setStyleSheet(item_view_viewport_style)
         for widget_type in (QtWidgets.QDateEdit, QtWidgets.QTimeEdit, QtWidgets.QSpinBox):
             for widget in self.findChildren(widget_type):
                 widget.setStyleSheet(spin_style)
@@ -1635,9 +1767,12 @@ class MainWindow(QtWidgets.QMainWindow):
         ):
             if widget is None:
                 continue
-            widget.setStyleSheet(list_style)
+            if isinstance(widget, QtWidgets.QTextEdit):
+                widget.setStyleSheet(text_edit_style)
+            else:
+                widget.setStyleSheet(item_view_style)
             if hasattr(widget, "viewport") and widget.viewport() is not None:
-                widget.viewport().setStyleSheet(viewport_style)
+                widget.viewport().setStyleSheet(item_view_viewport_style)
         for checkbox in self.findChildren(QtWidgets.QCheckBox):
             checkbox.setStyleSheet(checkbox_style)
         if hasattr(self, "scheduleTable"):
@@ -1868,8 +2003,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ui.portHintLabel.setText("115200 8N1，自动扫描 COM，显示延迟和事件。")
 
     def _refine_layout(self) -> None:
-        self.resize(1500, 900)
-        self.setMinimumSize(1280, 760)
+        screen = QtWidgets.QApplication.primaryScreen()
+        available = screen.availableGeometry() if screen is not None else QtCore.QRect(0, 0, 1440, 900)
+        target_width = min(1500, max(1180, int(available.width() * 0.94)))
+        target_height = min(900, max(680, int(available.height() * 0.92)))
+        self.resize(target_width, target_height)
+        self.setMinimumSize(1080, 720)
         self.ui.horizontalLayout.setContentsMargins(14, 14, 14, 14)
         self.ui.horizontalLayout.setSpacing(14)
 
@@ -1892,7 +2031,7 @@ class MainWindow(QtWidgets.QMainWindow):
         def make_tab_page(*groups: QtWidgets.QGroupBox) -> QtWidgets.QScrollArea:
             page = QtWidgets.QScrollArea(self.ui.centralwidget)
             page.setWidgetResizable(True)
-            page.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
+            page.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
             page.setFrameShape(QtWidgets.QFrame.NoFrame)
 
             host = QtWidgets.QWidget()
@@ -1910,9 +2049,10 @@ class MainWindow(QtWidgets.QMainWindow):
             return page
 
         left_panel = QtWidgets.QWidget(self.ui.centralwidget)
-        left_panel.setFixedWidth(600)
+        left_panel.setMinimumWidth(500)
+        left_panel.setMaximumWidth(680)
         left_panel.setSizePolicy(
-            QtWidgets.QSizePolicy.Fixed,
+            QtWidgets.QSizePolicy.Preferred,
             QtWidgets.QSizePolicy.Expanding,
         )
         left_layout = QtWidgets.QVBoxLayout(left_panel)
@@ -1927,29 +2067,31 @@ class MainWindow(QtWidgets.QMainWindow):
         left_layout.addWidget(self.leftSections)
 
         right_panel = QtWidgets.QWidget(self.ui.centralwidget)
-        right_panel.setMinimumWidth(0)
+        right_panel.setMinimumWidth(500)
         right_panel.setSizePolicy(
             QtWidgets.QSizePolicy.Expanding,
             QtWidgets.QSizePolicy.Expanding,
         )
         right_layout = QtWidgets.QVBoxLayout(right_panel)
         right_layout.setContentsMargins(0, 0, 0, 0)
-        right_layout.setSpacing(14)
+        right_layout.setSpacing(10)
         right_layout.addWidget(self.ui.twinGroup, 0, QtCore.Qt.AlignTop)
         right_layout.addWidget(self.ui.logGroup, 1)
 
         self.ui.connectionGroup.setMinimumHeight(132)
-        self.ui.clockGroup.setMinimumHeight(214)
+        self.ui.clockGroup.setMinimumHeight(184)
         self.ui.displayGroup.setMinimumHeight(368)
         self.ui.demoGroup.setMinimumHeight(238)
 
-        screen = QtWidgets.QApplication.primaryScreen()
-        available_height = (
-            screen.availableGeometry().height() if screen is not None else 900
-        )
+        available_height = max(target_height, available.height())
+        min_log_height = 260 if available_height >= 760 else 220
         required_twin_height = max(
-            self.twin.sizeHint().height() + 46,
-            int(available_height * 0.27),
+            self.twin.sizeHint().height() + 28,
+            int(available_height * 0.28),
+        )
+        required_twin_height = min(
+            required_twin_height,
+            max(self.twin.minimumSizeHint().height() + 28, available_height - min_log_height - 80),
         )
         self.ui.twinGroup.setTitle("")
         self.ui.twinGroup.setFixedHeight(required_twin_height)
@@ -1960,11 +2102,20 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.ui.logGroup.setSizePolicy(
             QtWidgets.QSizePolicy.Expanding,
-            QtWidgets.QSizePolicy.Fixed,
+            QtWidgets.QSizePolicy.Expanding,
         )
+        self.ui.logGroup.setMinimumHeight(min_log_height)
 
-        self.ui.horizontalLayout.addWidget(left_panel)
-        self.ui.horizontalLayout.addWidget(right_panel, 1)
+        self.mainSplitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal, self.ui.centralwidget)
+        self.mainSplitter.setChildrenCollapsible(False)
+        self.mainSplitter.setHandleWidth(6)
+        self.mainSplitter.addWidget(left_panel)
+        self.mainSplitter.addWidget(right_panel)
+        self.mainSplitter.setStretchFactor(0, 0)
+        self.mainSplitter.setStretchFactor(1, 1)
+        left_size = min(640, max(520, int(target_width * 0.46)))
+        self.mainSplitter.setSizes([left_size, max(500, target_width - left_size)])
+        self.ui.horizontalLayout.addWidget(self.mainSplitter)
 
         log_layout = self.ui.logGroup.layout()
         if log_layout is not None and not hasattr(self, "latestDisplayLabel"):
@@ -2030,26 +2181,32 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ui.horizontalLayout_2.setStretch(0, 6)
         self.ui.horizontalLayout_2.setStretch(1, 3)
         self.ui.horizontalLayout_2.setStretch(2, 3)
-        log_line_height = QtGui.QFontMetrics(self.ui.logTextEdit.font()).lineSpacing()
-        log_text_height = log_line_height * 9 + 32
-        self.ui.logTextEdit.setFixedHeight(log_text_height)
+        self.ui.logTextEdit.setMinimumHeight(190 if available_height >= 760 else 160)
+        self.ui.logTextEdit.setSizePolicy(
+            QtWidgets.QSizePolicy.Expanding,
+            QtWidgets.QSizePolicy.Expanding,
+        )
+        self.ui.logTextEdit.setLineWrapMode(QtWidgets.QTextEdit.WidgetWidth)
+        self.ui.logTextEdit.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
+        self.ui.logTextEdit.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
         self.ui.logTextEdit.document().setMaximumBlockCount(self.max_log_blocks)
         self.ui.clearLogButton.setMinimumHeight(28)
         self.ui.exportLogButton.setMinimumHeight(28)
         self.ui.horizontalLayout_6.setSpacing(10)
         self.ui.horizontalLayout_6.setStretch(0, 1)
         self.ui.horizontalLayout_6.setStretch(1, 1)
-        summary_height = (
-            self.logSummaryWidget.sizeHint().height()
-            if hasattr(self, "logSummaryWidget")
-            else 92
-        )
-        self.ui.logGroup.setFixedHeight(summary_height + log_text_height + 56)
+        self.ui.logGroup.setMaximumHeight(16777215)
 
         for button in self.findChildren(QtWidgets.QPushButton):
             button.setCursor(QtGui.QCursor(QtCore.Qt.PointingHandCursor))
+            if button.objectName() == "twinKeyButton":
+                button.setMinimumHeight(42)
+                button.setMaximumHeight(48)
+                continue
             button.setMinimumHeight(36)
             button.setMinimumWidth(104)
+        for button in getattr(self.twin, "key_buttons", []):
+            button.setMinimumWidth(0)
 
         for combo in self.findChildren(QtWidgets.QComboBox):
             self._install_wheel_guard(combo)
@@ -2079,10 +2236,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ui.gridLayout.setColumnStretch(2, 0)
         self.ui.gridLayout.setColumnStretch(3, 0)
         self.ui.gridLayout.setHorizontalSpacing(12)
-        self.ui.gridLayout.setVerticalSpacing(12)
+        self.ui.gridLayout.setVerticalSpacing(10)
         self.ui.gridLayout.setContentsMargins(12, 28, 12, 12)
-        for row in range(4):
-            self.ui.gridLayout.setRowMinimumHeight(row, 44)
+        self.ui.gridLayout.setRowMinimumHeight(0, 44)
+        self.ui.gridLayout.setRowMinimumHeight(1, 44)
+        self.ui.gridLayout.setRowMinimumHeight(2, 0)
+        self.ui.gridLayout.setRowMinimumHeight(3, 44)
         self.ui.gridLayout_2.setColumnMinimumWidth(0, 86)
         self.ui.gridLayout_2.setColumnMinimumWidth(2, 116)
         self.ui.gridLayout_2.setColumnMinimumWidth(3, 104)
@@ -2091,10 +2250,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ui.gridLayout_2.setColumnStretch(2, 0)
         self.ui.gridLayout_2.setColumnStretch(3, 0)
         self.ui.gridLayout_2.setHorizontalSpacing(12)
-        self.ui.gridLayout_2.setVerticalSpacing(12)
-        self.ui.gridLayout_2.setContentsMargins(12, 28, 12, 12)
+        self.ui.gridLayout_2.setVerticalSpacing(18)
+        self.ui.gridLayout_2.setContentsMargins(14, 32, 14, 16)
         for row in range(7):
-            self.ui.gridLayout_2.setRowMinimumHeight(row, 44)
+            self.ui.gridLayout_2.setRowMinimumHeight(row, 52)
         self.ui.verticalLayout_2.setSpacing(10)
         self.ui.verticalLayout_2.setContentsMargins(12, 28, 12, 12)
         self.ui.verticalLayout_3.setSpacing(8)
@@ -2120,7 +2279,7 @@ class MainWindow(QtWidgets.QMainWindow):
         page = QtWidgets.QScrollArea(self.ui.centralwidget)
         page.setObjectName("sectionScrollPage")
         page.setWidgetResizable(True)
-        page.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
+        page.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
         page.setFrameShape(QtWidgets.QFrame.NoFrame)
         page.viewport().setObjectName("sectionScrollViewport")
         host = QtWidgets.QWidget(page)
@@ -2406,7 +2565,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.boardShortcutLabel.setStyleSheet("")
         self.testOutputText = QtWidgets.QTextEdit(test_group)
         self.testOutputText.setReadOnly(True)
-        self.testOutputText.setMinimumHeight(160)
+        self.testOutputText.setMinimumHeight(190)
+        self.testOutputText.setLineWrapMode(QtWidgets.QTextEdit.WidgetWidth)
+        self.testOutputText.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
+        self.testOutputText.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
         self.testOutputText.setPlaceholderText("测试输出会显示在这里。")
         test_layout.addWidget(self.runChecksButton)
         test_layout.addWidget(self.autoRunTestsCheck)
@@ -2465,7 +2627,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def _build_extension_settings_page(self) -> QtWidgets.QScrollArea:
         page = QtWidgets.QScrollArea(self.ui.centralwidget)
         page.setWidgetResizable(True)
-        page.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
+        page.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
         page.setFrameShape(QtWidgets.QFrame.NoFrame)
 
         host = QtWidgets.QWidget(page)
@@ -2837,10 +2999,10 @@ class MainWindow(QtWidgets.QMainWindow):
         if hasattr(self, "greetingLabel"):
             self.greetingLabel.setText(self._greeting_text(now))
         self._refresh_single_alarm_ui()
-        self.status_connection.setText(f"连接: {connection_text}")
-        self.status_mode.setText(f"MODE: {self.last_mode}")
-        self.status_location.setText(f"LOCATION: {place.name}")
-        self.status_local_time.setText(f"本地时间: {datetime.now().strftime('%H:%M:%S')}")
+        self.status_connection.setText(connection_text)
+        self.status_mode.setText(self.last_mode)
+        self.status_location.setText(place.name)
+        self.status_local_time.setText(datetime.now().strftime("%H:%M:%S"))
         dashboard_event_list = getattr(self, "dashboardEventList", None)
         if dashboard_event_list is not None:
             dashboard_event_list.clear()
@@ -2933,7 +3095,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def extension_tick(self) -> None:
         now = datetime.now()
         zone_now = self._selected_zone_now().replace(tzinfo=None)
-        self.status_local_time.setText(f"本地时间: {now.strftime('%H:%M:%S')}")
+        self.status_local_time.setText(now.strftime("%H:%M:%S"))
         self._refresh_network_time_label()
         if not self.is_connected:
             self._refresh_local_twin_frame()
@@ -3050,6 +3212,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.sync_snapshot = moment.replace(microsecond=0)
         self._set_runtime_datetime(self.sync_snapshot)
         self.sync_in_progress = True
+        self.sync_watchdog_token += 1
+        sync_token = self.sync_watchdog_token
         self.ui.syncNowButton.setEnabled(False)
         if hasattr(self, "syncWeatherApplyButton"):
             self.syncWeatherApplyButton.setEnabled(False)
@@ -3060,11 +3224,25 @@ class MainWindow(QtWidgets.QMainWindow):
             QtCore.QTime(self.sync_snapshot.hour, self.sync_snapshot.minute, self.sync_snapshot.second)
         )
         self.send_command(build_set_date_command(self.sync_snapshot))
-        QtCore.QTimer.singleShot(220, self._sync_host_time_step2)
+        QtCore.QTimer.singleShot(320, self._sync_host_time_step2)
         self.last_ntp_sync_text = source_text
         self.last_selected_zone_time = self.sync_snapshot.strftime("%Y-%m-%d %H:%M:%S")
         if hasattr(self, "ntpStatusLabel"):
             self.ntpStatusLabel.setText(f"最近 NTP: {source_text}")
+        QtCore.QTimer.singleShot(
+            5000,
+            lambda token=sync_token: self._abort_sync_write_if_stale(token),
+        )
+
+    def _abort_sync_write_if_stale(self, token: int) -> None:
+        if token != self.sync_watchdog_token or not self.sync_in_progress:
+            return
+        self.sync_in_progress = False
+        self.sync_snapshot = None
+        self._restore_sync_buttons_if_idle()
+        self.log("WARN", "对时写入超过 5 秒未收尾，已恢复界面；请检查串口响应和板端显示状态。")
+        self.refresh_dashboard()
+        self._maybe_run_pending_auto_test()
 
     def request_user1_time_sync(self, trigger_source: str) -> None:
         if self.ntp_fetch_in_progress or self.sync_in_progress:
@@ -3075,12 +3253,20 @@ class MainWindow(QtWidgets.QMainWindow):
         self._set_latest_event(f"{trigger_source} 请求 NTP 对时")
         self.sync_ntp_time(trigger_source=trigger_source)
 
+    def _emit_signal_safe(self, signal_name: str, *args) -> None:
+        try:
+            getattr(self, signal_name).emit(*args)
+        except RuntimeError:
+            pass
+
     def sync_ntp_time(self, trigger_source: str = "按钮") -> None:
         if self.ntp_fetch_in_progress or self.sync_in_progress:
             self.log("WARN", f"{trigger_source} 请求对时，但当前已有对时流程正在进行。")
             return
         place = self._active_place()
         self.ntp_fetch_in_progress = True
+        self.ntp_watchdog_token += 1
+        ntp_token = self.ntp_watchdog_token
         self.ui.syncNowButton.setEnabled(False)
         if hasattr(self, "syncWeatherApplyButton"):
             self.syncWeatherApplyButton.setEnabled(False)
@@ -3093,11 +3279,28 @@ class MainWindow(QtWidgets.QMainWindow):
                 snapshot_utc = fetch_ntp_time(self.config.ntp_host)
             except Exception as exc:  # noqa: BLE001
                 error = exc
-            self.ntp_sync_finished.emit(snapshot_utc, error, trigger_source)
+            self._emit_signal_safe("ntp_sync_finished", snapshot_utc, error, trigger_source, ntp_token)
 
         threading.Thread(target=worker, daemon=True).start()
+        QtCore.QTimer.singleShot(
+            8000,
+            lambda token=ntp_token, source=trigger_source: self._abort_ntp_if_stale(token, source),
+        )
 
-    def _finish_ntp_sync(self, snapshot_utc, error, trigger_source: str) -> None:
+    def _abort_ntp_if_stale(self, token: int, trigger_source: str) -> None:
+        if token != self.ntp_watchdog_token or not self.ntp_fetch_in_progress:
+            return
+        self.ntp_fetch_in_progress = False
+        self._restore_sync_buttons_if_idle()
+        self.log("ERROR", f"NTP 对时超过 8 秒未返回，已取消等待（来源: {trigger_source}）。")
+        self.refresh_dashboard()
+        self._maybe_run_pending_auto_test()
+
+    def _finish_ntp_sync(self, snapshot_utc, error, trigger_source: str, token: int) -> None:
+        if token != self.ntp_watchdog_token:
+            return
+        if not self.ntp_fetch_in_progress and self.sync_snapshot is None:
+            return
         self.ntp_fetch_in_progress = False
         if error is not None or snapshot_utc is None:
             message = str(error) if error is not None else "NTP snapshot missing"
@@ -3107,6 +3310,7 @@ class MainWindow(QtWidgets.QMainWindow):
             append_event_log(APP_DIR, "ntp_error", message)
             self._restore_sync_buttons_if_idle()
             self.refresh_dashboard()
+            self._maybe_run_pending_auto_test()
             return
         place, zone_snapshot, offset_seconds = self._active_place_time_context(snapshot_utc)
         snapshot = zone_snapshot.replace(tzinfo=None)
@@ -3133,6 +3337,14 @@ class MainWindow(QtWidgets.QMainWindow):
             self.syncWeatherApplyButton.setEnabled(True)
             self.syncWeatherApplyButton.setText("一键对时、刷新天气并应用")
 
+    def _maybe_run_pending_auto_test(self) -> None:
+        if not self.pending_auto_test_after_apply:
+            return
+        if self.ntp_fetch_in_progress or self.sync_in_progress or self.weather_refresh_in_progress:
+            return
+        self.pending_auto_test_after_apply = False
+        QtCore.QTimer.singleShot(500, self.run_automated_checks)
+
     def sync_weather_and_apply(
         self,
         trigger_source: str = "按钮",
@@ -3155,6 +3367,8 @@ class MainWindow(QtWidgets.QMainWindow):
         if self.weather_refresh_in_progress:
             return
         self.weather_refresh_in_progress = True
+        self.weather_watchdog_token += 1
+        weather_token = self.weather_watchdog_token
         place = self._active_place()
         city_name = place.name
         latitude = place.latitude
@@ -3173,14 +3387,31 @@ class MainWindow(QtWidgets.QMainWindow):
                 )
             except Exception as exc:  # noqa: BLE001
                 error = exc
-            self.weather_refresh_finished.emit(snapshot, error, log_trigger)
+            self._emit_signal_safe("weather_refresh_finished", snapshot, error, log_trigger, weather_token)
 
         threading.Thread(target=worker, daemon=True).start()
+        QtCore.QTimer.singleShot(
+            14000,
+            lambda token=weather_token: self._abort_weather_if_stale(token),
+        )
 
-    def _finish_weather_refresh(self, snapshot, error, log_trigger: bool) -> None:
+    def _abort_weather_if_stale(self, token: int) -> None:
+        if token != self.weather_watchdog_token or not self.weather_refresh_in_progress:
+            return
+        self.weather_refresh_in_progress = False
+        self.pending_auto_test_after_apply = False
+        self._restore_sync_buttons_if_idle()
+        self.log("ERROR", "天气刷新超过 14 秒未返回，已取消等待；请检查网络、代理或天气接口。")
+        append_event_log(APP_DIR, "weather_timeout", "14s")
+        self.refresh_dashboard()
+
+    def _finish_weather_refresh(self, snapshot, error, log_trigger: bool, token: int) -> None:
+        if token != self.weather_watchdog_token:
+            return
         self.weather_refresh_in_progress = False
         self._restore_sync_buttons_if_idle()
         if error is not None:
+            self.pending_auto_test_after_apply = False
             self.last_weather_refresh_at = datetime.now()
             if log_trigger:
                 self.log("ERROR", f"天气刷新失败: {error}")
@@ -3188,6 +3419,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.refresh_dashboard()
             return
         if snapshot is None:
+            self.pending_auto_test_after_apply = False
             return
 
         self.last_weather_refresh_at = datetime.now()
@@ -3230,9 +3462,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.log("WARN", f"!!! 已刷新上位机本地天气配置，未下发板端：{self.weather_summary_text} | {time_context}")
         if self.config.auto_day_night:
             self.apply_auto_day_night(self._selected_zone_now().replace(tzinfo=None), force_apply=True)
-        if self.pending_auto_test_after_apply:
-            self.pending_auto_test_after_apply = False
-            QtCore.QTimer.singleShot(500, self.run_automated_checks)
+        self._maybe_run_pending_auto_test()
 
     def apply_auto_day_night(self, now: datetime, force_apply: bool = False) -> None:
         if self.last_weather_snapshot is None:
@@ -3486,7 +3716,7 @@ class MainWindow(QtWidgets.QMainWindow):
             return False
 
         self.local_mode_active = False
-        self.status_connection.setText(f"连接: {port_name}")
+        self.status_connection.setText(port_name)
         self.poll_timer.start()
         self.ping_timer.start()
         self.board_ready_seen = False
@@ -3502,8 +3732,8 @@ class MainWindow(QtWidgets.QMainWindow):
         if port_name == LOCAL_MODE_LABEL:
             self.disconnect_port(log_message=False)
             self.local_mode_active = True
-            self.status_connection.setText("连接: 本地模式")
-            self.status_latency.setText("延迟: -- ms")
+            self.status_connection.setText("本地模式")
+            self.status_latency.setText("-- ms")
             self._apply_runtime_state_to_ui()
             self.refresh_dashboard()
             self.log("INFO", "已进入本地模式，数字孪生会按影子板端状态持续显示，操作只更新上位机本地配置与模拟状态。")
@@ -3535,8 +3765,8 @@ class MainWindow(QtWidgets.QMainWindow):
                 pass
         self.serial_port = None
         self.local_mode_active = False
-        self.status_connection.setText("连接: 未连接")
-        self.status_latency.setText("延迟: -- ms")
+        self.status_connection.setText("未连接")
+        self.status_latency.setText("-- ms")
         self.latestDisplayLabel.setText(f"最新显示: {self.latest_display_text}")
         if log_message:
             self.log("INFO", "串口已断开。")
@@ -3680,13 +3910,16 @@ class MainWindow(QtWidgets.QMainWindow):
             if key == "USER1":
                 self.request_user1_time_sync("本地 USER1")
                 return
-            elif key == "USER2" and self.runtime_state.weather_token:
+            elif key == "USER2":
+                weather_text = (self.runtime_state.weather_token or "").replace("_", " ").strip()
+                if not weather_text:
+                    weather_text = "NO WX"
                 self._set_local_display_override(
-                    self.runtime_state.weather_token.replace("_", " "),
+                    weather_text,
                     5.0,
-                    self.runtime_state.weather_led_mask,
+                    self.runtime_state.weather_led_mask if self.runtime_state.weather_token else 0,
                 )
-                action = f"虚拟按键 USER2 -> {self.runtime_state.weather_token}"
+                action = f"虚拟按键 USER2 -> {weather_text}"
             elif key == "FORMAT":
                 self.runtime_state.format = "RIGHT" if self.runtime_state.format == "LEFT" else "LEFT"
                 self.ui.formatCombo.setCurrentText(self.runtime_state.format)
@@ -3787,9 +4020,9 @@ class MainWindow(QtWidgets.QMainWindow):
         elif parsed.kind == "pong":
             if self.last_ping_monotonic is not None:
                 latency_ms = (time.perf_counter() - self.last_ping_monotonic) * 1000.0
-                self.status_latency.setText(f"延迟: {latency_ms:.1f} ms")
+                self.status_latency.setText(f"{latency_ms:.1f} ms")
             self.last_ping_monotonic = None
-            self._set_latest_event(f"PONG 延迟 {self.status_latency.text().replace('延迟: ', '')}")
+            self._set_latest_event(f"PONG 延迟 {self.status_latency.text()}")
         elif parsed.kind == "ok":
             self.handle_ok(parsed)
         elif parsed.kind == "error":
@@ -3831,7 +4064,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.last_mode = next_mode
             self.runtime_state.mode = next_mode
             self._save_runtime_state()
-            self.status_mode.setText(f"MODE: {self.last_mode}")
+            self.status_mode.setText(self.last_mode)
             self._refresh_theme_from_mode()
             append_event_log(APP_DIR, "mode", self.last_mode)
             if self.config.auto_day_night and mode_origin != "auto":
@@ -3931,7 +4164,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.runtime_state.format = data
                 self._save_runtime_state()
         elif query == "MODE" and data:
-            self.status_mode.setText(f"MODE: {data}")
+            self.status_mode.setText(data)
             self.last_mode = data
             if data in {"DAY", "NIGHT"}:
                 self.ui.modeCombo.setCurrentText(data)
@@ -4009,13 +4242,14 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.log("INFO", "已完成对时并写入 S800。")
             else:
                 self.log("WARN", "!!! 已完成上位机本地时间更新，当前未下发板端。")
-        QtCore.QTimer.singleShot(220, self._finish_sync_host_time)
+        QtCore.QTimer.singleShot(260, self._finish_sync_host_time)
 
     def _finish_sync_host_time(self) -> None:
         self.sync_in_progress = False
         self.sync_snapshot = None
         self._restore_sync_buttons_if_idle()
         self.refresh_dashboard()
+        self._maybe_run_pending_auto_test()
 
     def apply_display_state(self) -> None:
         next_value = "OFF" if self.ui.displayToggleCombo.currentText() == "ON" else "ON"
@@ -4092,6 +4326,11 @@ class MainWindow(QtWidgets.QMainWindow):
     def run_automated_checks(self) -> None:
         if self.test_run_in_progress:
             return
+        if self.ntp_fetch_in_progress or self.sync_in_progress or self.weather_refresh_in_progress:
+            self.log("WARN", "对时或天气刷新仍在进行，自动测试稍后再运行，避免抢占串口。")
+            self.pending_auto_test_after_apply = True
+            self._maybe_run_pending_auto_test()
+            return
         port_name = self.ui.portCombo.currentText().strip()
         host_only = self._is_local_mode_selected() or self._is_local_mode_active()
         if not port_name and not self.is_connected and not host_only:
@@ -4119,7 +4358,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         def worker() -> None:
             try:
-                progress = self.test_point_finished.emit
+                progress = lambda line: self._emit_signal_safe("test_point_finished", line)
                 if self.is_connected and self.serial_port is not None:
                     ok, output = execute_checks_on_open_port(self.serial_port, progress=progress)
                 elif host_only:
@@ -4129,7 +4368,7 @@ class MainWindow(QtWidgets.QMainWindow):
             except Exception as exc:  # noqa: BLE001
                 output = f"FAIL\n{exc}"
                 ok = False
-            self.test_run_finished.emit(output.strip(), ok)
+            self._emit_signal_safe("test_run_finished", output.strip(), ok)
 
         threading.Thread(target=worker, daemon=True).start()
 

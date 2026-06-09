@@ -162,3 +162,30 @@
 3. 再做上位机小 UI/交互收口：日程按钮显隐、文案、日志高度、无串口模式日志语义；继续保持黑夜模式无白底、按钮统一蓝色。
 4. 每轮改完至少运行 Python 编译检查和 host-only 检查；涉及 UI 时做离屏启动/截图检查；涉及 MCU 时做 Keil 或可替代语法/构建验证。
 5. 用户明确同意上传 GitHub 时，先给出上传文件清单和操作计划；确认后再执行，并同步更新 `PROJECT_CONTEXT.md` 与 `CHANGELOG_AI.md`。
+
+## 2026-06-09 最新修复状态
+
+本轮目标是修复 PC 上位机 UI 可读性、下拉框/勾选框样式、数字孪生镜像布局，以及对时/自动测试偶发卡死问题。当前已完成如下状态：
+
+- 当前项目目录仍为 `D:\桌面\大二下\大二下 嵌入式系统与接口技术\ARM\真正的最新版`，Git 分支为 `gemini-ui-improvements`，远程仓库为 `https://github.com/Cyh29hao/qianrushidazuoye`。
+- PC 主窗口采用左右 `QSplitter` 明确分栏；右侧数字孪生镜像位于右侧顶部，日志区在其下方扩展，几何烟测显示不会覆盖左侧主页、系统设置或自动测试页面。
+- 日志区启用可扩展高度、按宽度换行和滚动条；自动测试输出框同样启用换行和滚动，避免长行被裁掉。
+- 下拉框/日期时间编辑器/spinbox 箭头改用 `pc_host/assets/*.xpm` 文本图标；checkbox 勾选改用 XPM 白色勾，避免 Qt QSS 三角形在 Windows 缩放下显示成黑色小方块。
+- NTP 对时增加 token 过滤和 8 秒超时；串口日期/时间写入增加 5 秒超时；天气刷新增加 14 秒超时。超时后恢复按钮、写日志，不再让 UI 或自动测试流程悬挂。
+- 一键对时/刷新天气后的自动测试只在 NTP、串口写入和天气刷新全部空闲后启动；手动点击自动测试时，如果对时/天气仍在进行，会等待后续空闲，避免抢占同一个串口。
+- 自动测试脚本 `pc_host/run_extension_checks.py` 增加 stale input 清理、每条串口命令 timeout、串口 hard timeout 和命令间隔，失败会记录 FAIL/排查提示，不再无限等待。
+- PC 本地/离线 USER2 没有有效天气 token 时显示 `NO WX`；MCU 端 USER2 非编辑状态显示天气短显，天气为空时也显示 `NO WX`，编辑状态仍作为 SUB 减一键。
+- MCU 收到 `SET DATE`/`SET TIME` 时会清理天气/消息临时显示，收到 `SET WEATHER` 时校验空天气、清除天气短显计时并刷新显示，降低对时/天气更新后数码管卡在临时状态的风险。
+
+本轮已验证：
+
+- Python 语法检查通过：`pc_host/app.py`、`pc_host/twin_widgets.py`、`pc_host/run_extension_checks.py`、`pc_host/protocol.py`、`pc_host/extension_services.py`、`pc_host/extension_store.py`。
+- `pc_host/run_extension_checks.py --host-only` 通过。
+- PyQt offscreen 烟测通过：启动主窗口、切换 DAY/NIGHT、展开下拉框、切换页面，控制台未出现 `Could not parse stylesheet`；但 offscreen 截图可能不渲染中文，最终视觉仍以 Windows 真实窗口为准。
+- `git diff --check` 无空白错误，仅有 Windows 行尾提示。
+
+仍需后续人工/硬件验证：
+
+- 因 `mcu/src/main.c` 已修改，需要 Keil5 打开 `mcu/clock.uvprojx` 重新编译、烧录 S800 实板。
+- 实板重点测：RESET 后一键对时/天气、USER2 天气短显/无天气 `NO WX`、自动测试串口步骤、数码管对时后是否回到正常时间显示。
+- PC 如果交付 `.exe`，需要重新打包，否则直接运行源码版即可。

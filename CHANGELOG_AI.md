@@ -4,6 +4,37 @@
 
 ## 2026-06-09
 
+### 本轮 UI 布局与对时稳定性修复
+
+#### 已完成修改
+- PC 主窗口保持左右 `QSplitter` 明确分栏；右侧数字孪生镜像固定在右侧顶部，日志区在其下方扩展，不再覆盖左侧主页、系统设置或自动测试页面。
+- 日志区改为可扩展高度，启用按控件宽度换行和滚动条，避免被数字孪生或底部状态栏遮挡。
+- 数字孪生按键高度、字号和整体 size hint 已收紧；第二行按键不再被日志面板裁切，USER2 tooltip 明确说明“非编辑状态显示天气短显，编辑状态作为 SUB 减一键”。
+- 下拉框、日期/时间编辑器、spinbox 箭头改用 Qt 稳定支持的 XPM 图标；checkbox 勾选状态改用 XPM 白色勾，避免黑色小方块和“只有框没有勾”的问题。
+- NTP 对时增加 token 过滤与 8 秒 watchdog；时间写入增加 5 秒 watchdog；天气刷新增加 14 秒 watchdog，超时后恢复 UI 并写日志。
+- 一键对时/刷新天气后的自动测试只会在 NTP、串口写入和天气刷新全部空闲后启动，避免自动测试抢占同一个串口导致偶发失败。
+- 自动测试串口脚本增加 stale input 清理、每条命令 timeout、串口总 hard timeout 和命令间隔，失败时返回 FAIL 而不是无限等待。
+- PC 离线/本地 USER2 如果没有有效天气 token，会显示 `NO WX` 而不是空白短显。
+- MCU `USER2` 非编辑状态显示天气短显；无有效天气时显示 `NO WX`。MCU 收到 `SET DATE`/`SET TIME` 时会清理天气/消息临时显示，收到 `SET WEATHER` 时校验空天气并刷新显示，减少对时后数码管卡在临时状态的风险。
+
+#### 关键文件
+- `pc_host/app.py`
+- `pc_host/twin_widgets.py`
+- `pc_host/run_extension_checks.py`
+- `pc_host/assets/*.xpm`
+- `mcu/src/main.c`
+
+#### 验证结果
+- `pc_host\.venv\Scripts\python.exe -m py_compile pc_host\app.py pc_host\twin_widgets.py pc_host\run_extension_checks.py pc_host\protocol.py pc_host\extension_services.py pc_host\extension_store.py` 通过。
+- `pc_host\.venv\Scripts\python.exe pc_host\run_extension_checks.py --host-only` 通过。
+- PyQt offscreen 烟测通过：创建主窗口、切换 DAY/NIGHT、展开下拉框、切换页面后未出现 `Could not parse stylesheet`；几何检查显示右侧数字孪生和日志区未覆盖左侧。
+- `git diff --check` 无空白错误，仅有 Windows 行尾提示。
+
+#### 未解决问题
+- MCU 已改 `mcu/src/main.c`，需要用 Keil5 打开 `mcu/clock.uvprojx` 重新编译、烧录实板验证。
+- 本机离屏截图受 Qt offscreen 字体渲染限制，中文文字可能不显示；最终 UI 可读性仍建议在 Windows 真实窗口下复核。
+- PC 若提交或展示 `.exe`，需要重新打包以包含本轮 UI 和稳定性修复。
+
 ### 已完成修改
 
 - 修复 PC 黑夜模式 UI：补齐状态栏/页脚、滚动条、下拉框弹出列表、复选框、信息条、表格、日志区和页面背景的深色主题规则。
