@@ -57,6 +57,7 @@
 - 技术栈：`Python 3.12 + PyQt5 + pyserial`
 - GUI 入口：`pc_host/app.py`
 - 推荐启动入口：`pc_host/launch_pc_host.ps1`
+- 当前上位机版本：`v2.1`
 - Qt 运行时自检：`pc_host/diagnose_qt_runtime.py`
 
 ## 快速开始
@@ -158,10 +159,10 @@ python -m pip install -r requirements.txt
 打包版启动：
 
 ```text
-build_release/SmartClockHost/SmartClockHost.exe
+build_release/SmartClockHost-v2.1/SmartClockHost.exe
 ```
 
-打包版为 PyInstaller onedir 形式，普通用户双击 `SmartClockHost.exe` 即可启动，不需要额外安装 Python。
+打包版为 PyInstaller onedir 形式，普通用户双击 `SmartClockHost.exe` 即可启动，不需要额外安装 Python。若同时提供压缩包，文件名通常为 `build_release/SmartClockHost-v2.1.zip`。
 
 ### 4. 串口连接步骤
 

@@ -19,7 +19,7 @@ APP_DIR = (
 )
 BUNDLE_DIR = Path(getattr(sys, "_MEIPASS", APP_DIR))
 QT_RUNTIME = configure_qt_runtime(APP_DIR)
-APP_VERSION = "v2.0"
+APP_VERSION = "v2.1"
 GITHUB_URL = "https://github.com/Cyh29hao"
 LOGO_PATH = BUNDLE_DIR / "assets" / "clock_logo.svg"
 LOCAL_MODE_LABEL = "不使用串口"
@@ -79,6 +79,59 @@ from run_extension_checks import (
 )
 from twin_widgets import DigitalTwinWidget
 from ui_main import Ui_MainWindow
+
+
+class SmartClockArrowStyle(QtWidgets.QProxyStyle):
+    """Draw stable combo/drop-down arrows without relying on image assets."""
+
+    def drawPrimitive(self, element, option, painter, widget=None):  # noqa: N802 - Qt API
+        if element == QtWidgets.QStyle.PE_IndicatorArrowDown and option is not None:
+            rect = option.rect
+            if rect.isValid():
+                enabled = bool(option.state & QtWidgets.QStyle.State_Enabled)
+                color_group = (
+                    QtGui.QPalette.Active if enabled else QtGui.QPalette.Disabled
+                )
+                color = option.palette.color(color_group, QtGui.QPalette.Text)
+                if not enabled:
+                    color.setAlpha(140)
+
+                painter.save()
+                painter.setRenderHint(QtGui.QPainter.Antialiasing)
+                pen_width = max(2.0, min(rect.width(), rect.height()) * 0.13)
+                painter.setPen(
+                    QtGui.QPen(
+                        color,
+                        pen_width,
+                        QtCore.Qt.SolidLine,
+                        QtCore.Qt.RoundCap,
+                        QtCore.Qt.RoundJoin,
+                    )
+                )
+                center = rect.center()
+                half = max(4.0, min(rect.width(), rect.height()) * 0.24)
+                y_top = center.y() - half * 0.30
+                y_bottom = center.y() + half * 0.42
+                points = QtGui.QPolygonF(
+                    [
+                        QtCore.QPointF(center.x() - half, y_top),
+                        QtCore.QPointF(center.x(), y_bottom),
+                        QtCore.QPointF(center.x() + half, y_top),
+                    ]
+                )
+                painter.drawPolyline(points)
+                painter.restore()
+                return
+        super().drawPrimitive(element, option, painter, widget)
+
+
+def install_stable_arrow_style() -> None:
+    app = QtWidgets.QApplication.instance()
+    if app is None or hasattr(app, "_smart_clock_arrow_style"):
+        return
+    style = SmartClockArrowStyle(app.style())
+    app._smart_clock_arrow_style = style
+    app.setStyle(style)
 
 
 class CollapsibleNavWidget(QtWidgets.QWidget):
@@ -152,6 +205,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def __init__(self) -> None:
         super().__init__()
+        install_stable_arrow_style()
         self.ui = Ui_MainWindow()
         self.ui.setupUi(self)
         ensure_storage(APP_DIR)
@@ -346,19 +400,6 @@ class MainWindow(QtWidgets.QMainWindow):
                 return True
             if isinstance(watched, QtWidgets.QAbstractSpinBox):
                 return True
-        locked_boxes = {
-            getattr(self.ui, "displayToggleCombo", None),
-            getattr(self.ui, "formatCombo", None),
-            getattr(self.ui, "modeCombo", None),
-        }
-        if watched in locked_boxes and event.type() in {
-            QtCore.QEvent.MouseButtonPress,
-            QtCore.QEvent.MouseButtonDblClick,
-            QtCore.QEvent.Wheel,
-            QtCore.QEvent.KeyPress,
-            QtCore.QEvent.KeyRelease,
-        }:
-            return True
         return super().eventFilter(watched, event)
 
     def _active_place(self) -> SavedPlace:
@@ -949,7 +990,7 @@ class MainWindow(QtWidgets.QMainWindow):
         return palette
 
     def _asset_qss_url(self, name: str) -> str:
-        return QtCore.QUrl.fromLocalFile(str(BUNDLE_DIR / "assets" / name)).toString()
+        return str(BUNDLE_DIR / "assets" / name).replace("\\", "/")
 
     def _apply_theme(self) -> None:
         night = self.config.theme_follow_mode and self.last_mode == "NIGHT"
@@ -1078,7 +1119,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 padding: 6px 8px;
             }}
             QComboBox, QDateEdit, QTimeEdit {{
-                padding-right: 28px;
+                padding-right: 34px;
             }}
             QComboBox::drop-down, QDateEdit::drop-down, QTimeEdit::drop-down {{
                 background: {palette['input_bg']};
@@ -1087,13 +1128,15 @@ class MainWindow(QtWidgets.QMainWindow):
                 border-bottom-right-radius: 8px;
                 subcontrol-origin: border;
                 subcontrol-position: top right;
-                width: 28px;
+                width: 34px;
             }}
             QComboBox::down-arrow, QDateEdit::down-arrow, QTimeEdit::down-arrow {{
                 image: url("{arrow_url}");
-                width: 12px;
-                height: 12px;
-                margin-right: 8px;
+                width: 16px;
+                height: 16px;
+                margin-right: 9px;
+                border: none;
+                background: transparent;
             }}
             QComboBox QAbstractItemView {{
                 background: {palette['input_bg']};
@@ -1126,7 +1169,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 height: 10px;
             }}
             QComboBox[stateField="true"] {{
-                padding-right: 28px;
+                padding-right: 34px;
             }}
             QComboBox[stateField="true"]::drop-down {{
                 background: {palette['input_bg']};
@@ -1135,13 +1178,15 @@ class MainWindow(QtWidgets.QMainWindow):
                 border-bottom-right-radius: 8px;
                 subcontrol-origin: border;
                 subcontrol-position: top right;
-                width: 28px;
+                width: 34px;
             }}
             QComboBox[stateField="true"]::down-arrow {{
                 image: url("{arrow_url}");
-                width: 12px;
-                height: 12px;
-                margin-right: 8px;
+                width: 16px;
+                height: 16px;
+                margin-right: 9px;
+                border: none;
+                background: transparent;
             }}
             QLineEdit, QComboBox, QDateEdit, QTimeEdit, QSpinBox {{
                 min-height: 32px;
@@ -1512,7 +1557,7 @@ class MainWindow(QtWidgets.QMainWindow):
             f"color: {palette['text']};"
             f"border: 1px solid {palette['input_border']};"
             f"border-radius: 8px;"
-            f"padding: 6px 34px 6px 10px;"
+            f"padding: 6px 40px 6px 10px;"
             f"min-height: 32px;"
             f"}}"
             f"QComboBox::drop-down {{"
@@ -1522,13 +1567,15 @@ class MainWindow(QtWidgets.QMainWindow):
             f"border-bottom-right-radius: 8px;"
             f"subcontrol-origin: border;"
             f"subcontrol-position: top right;"
-            f"width: 28px;"
+            f"width: 34px;"
             f"}}"
             f"QComboBox::down-arrow {{"
             f"image: url(\"{arrow_url}\");"
-            f"width: 12px;"
-            f"height: 12px;"
-            f"margin-right: 8px;"
+            f"width: 16px;"
+            f"height: 16px;"
+            f"margin-right: 9px;"
+            f"border: none;"
+            f"background: transparent;"
             f"}}"
         )
         state_combo_style = (
@@ -1537,7 +1584,7 @@ class MainWindow(QtWidgets.QMainWindow):
             f"color: {palette['text']};"
             f"border: 1px solid {palette['input_border']};"
             f"border-radius: 8px;"
-            f"padding: 6px 34px 6px 10px;"
+            f"padding: 6px 40px 6px 10px;"
             f"min-height: 32px;"
             f"}}"
             f"QComboBox::drop-down {{"
@@ -1547,13 +1594,15 @@ class MainWindow(QtWidgets.QMainWindow):
             f"border-bottom-right-radius: 8px;"
             f"subcontrol-origin: border;"
             f"subcontrol-position: top right;"
-            f"width: 28px;"
+            f"width: 34px;"
             f"}}"
             f"QComboBox::down-arrow {{"
             f"image: url(\"{arrow_url}\");"
-            f"width: 12px;"
-            f"height: 12px;"
-            f"margin-right: 8px;"
+            f"width: 16px;"
+            f"height: 16px;"
+            f"margin-right: 9px;"
+            f"border: none;"
+            f"background: transparent;"
             f"}}"
         )
         spin_style = (
@@ -1562,7 +1611,7 @@ class MainWindow(QtWidgets.QMainWindow):
             f"color: {palette['text']};"
             f"border: 1px solid {palette['input_border']};"
             f"border-radius: 8px;"
-            f"padding: 6px 34px 6px 10px;"
+            f"padding: 6px 40px 6px 10px;"
             f"min-height: 32px;"
             f"}}"
             f"QDateEdit::drop-down, QTimeEdit::drop-down {{"
@@ -1572,13 +1621,15 @@ class MainWindow(QtWidgets.QMainWindow):
             f"border-bottom-right-radius: 8px;"
             f"subcontrol-origin: border;"
             f"subcontrol-position: top right;"
-            f"width: 28px;"
+            f"width: 34px;"
             f"}}"
             f"QDateEdit::down-arrow, QTimeEdit::down-arrow {{"
             f"image: url(\"{arrow_url}\");"
-            f"width: 12px;"
-            f"height: 12px;"
-            f"margin-right: 8px;"
+            f"width: 16px;"
+            f"height: 16px;"
+            f"margin-right: 9px;"
+            f"border: none;"
+            f"background: transparent;"
             f"}}"
             f"QAbstractSpinBox::up-button, QAbstractSpinBox::down-button {{"
             f"background: {palette['input_bg']};"
@@ -1737,10 +1788,17 @@ class MainWindow(QtWidgets.QMainWindow):
             widget.setStyleSheet(
                 state_combo_style if widget.property("stateField") else combo_style
             )
-            if widget is getattr(self.ui, "portCombo", None) and widget.lineEdit() is not None:
-                widget.lineEdit().setStyleSheet(
-                    field_line_style
-                )
+            line_edit = widget.lineEdit()
+            if line_edit is not None:
+                line_edit.setStyleSheet(field_line_style)
+                if widget.property("stateField"):
+                    line_edit.setAlignment(QtCore.Qt.AlignCenter)
+                    line_edit.setReadOnly(True)
+                elif widget is getattr(self.ui, "portCombo", None):
+                    line_edit.setAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
+                else:
+                    line_edit.setAlignment(QtCore.Qt.AlignCenter)
+                    line_edit.setReadOnly(True)
             if widget.view() is not None:
                 widget.view().setStyleSheet(item_view_style)
                 widget.view().viewport().setStyleSheet(item_view_viewport_style)
@@ -1841,6 +1899,147 @@ class MainWindow(QtWidgets.QMainWindow):
                         )
             elif isinstance(layout, QtWidgets.QVBoxLayout):
                 layout.setSpacing(max(layout.spacing(), 10))
+
+    def _make_settings_row(
+        self,
+        label_text: str,
+        field: QtWidgets.QWidget,
+        action: QtWidgets.QWidget | None = None,
+        *,
+        field_min_width: int = 170,
+        action_width: int = 128,
+    ) -> QtWidgets.QWidget:
+        row = QtWidgets.QWidget(self.ui.displayGroup)
+        row.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
+        layout = QtWidgets.QHBoxLayout(row)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
+
+        label = QtWidgets.QLabel(label_text, row)
+        label.setMinimumWidth(96)
+        label.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed)
+        label.setAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
+        layout.addWidget(label)
+
+        field.setParent(row)
+        field.setMinimumWidth(field_min_width)
+        field.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
+        layout.addWidget(field, 1)
+
+        if action is not None:
+            action.setParent(row)
+            action.setMinimumWidth(action_width)
+            action.setMaximumWidth(max(action_width, 150))
+            action.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed)
+            layout.addWidget(action)
+        return row
+
+    def _configure_centered_combo(self, combo: QtWidgets.QComboBox) -> None:
+        combo.setEditable(True)
+        combo.setInsertPolicy(QtWidgets.QComboBox.NoInsert)
+        line_edit = combo.lineEdit()
+        if line_edit is not None:
+            line_edit.setReadOnly(True)
+            line_edit.setAlignment(QtCore.Qt.AlignCenter)
+            line_edit.setClearButtonEnabled(False)
+        combo.setMinimumContentsLength(8)
+        combo.setSizeAdjustPolicy(QtWidgets.QComboBox.AdjustToMinimumContentsLengthWithIcon)
+
+    def _configure_regular_combo(self, combo: QtWidgets.QComboBox) -> None:
+        if combo is getattr(self.ui, "portCombo", None):
+            return
+        self._configure_centered_combo(combo)
+        combo.setMinimumContentsLength(max(combo.minimumContentsLength(), 6))
+
+    def _style_form_grid(
+        self,
+        layout: QtWidgets.QGridLayout,
+        *,
+        label_width: int = 90,
+        row_height: int = 48,
+        top_margin: int = 32,
+        side_margin: int = 16,
+        bottom_margin: int = 14,
+    ) -> None:
+        layout.setContentsMargins(side_margin, top_margin, side_margin, bottom_margin)
+        layout.setHorizontalSpacing(12)
+        layout.setVerticalSpacing(12)
+        layout.setColumnStretch(0, 0)
+        layout.setColumnStretch(1, 1)
+        if layout.columnCount() > 2:
+            layout.setColumnStretch(2, 0)
+
+        for row in range(layout.rowCount()):
+            layout.setRowMinimumHeight(row, row_height)
+
+        for index in range(layout.count()):
+            item = layout.itemAt(index)
+            widget = item.widget() if item is not None else None
+            if widget is None:
+                continue
+            row, column, _row_span, _column_span = layout.getItemPosition(index)
+            del row
+            if column == 0 and isinstance(widget, QtWidgets.QLabel):
+                widget.setMinimumWidth(label_width)
+                widget.setAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
+            elif isinstance(
+                widget,
+                (
+                    QtWidgets.QLineEdit,
+                    QtWidgets.QComboBox,
+                    QtWidgets.QDateEdit,
+                    QtWidgets.QTimeEdit,
+                    QtWidgets.QSpinBox,
+                ),
+            ):
+                widget.setMinimumHeight(38)
+                widget.setSizePolicy(
+                    QtWidgets.QSizePolicy.Expanding,
+                    QtWidgets.QSizePolicy.Fixed,
+                )
+
+    def _rebuild_system_settings_group(self) -> None:
+        group = self.ui.displayGroup
+        layout = self.ui.gridLayout_2
+        while layout.count():
+            layout.takeAt(0)
+        layout.setContentsMargins(18, 34, 18, 18)
+        layout.setHorizontalSpacing(0)
+        layout.setVerticalSpacing(12)
+        layout.setColumnStretch(0, 1)
+
+        self.ui.applyModeButton.setText("日夜切换")
+        self.ui.sendLedButton.setText("设置 LED")
+        self.ui.sendMessageButton.setText("发送 MSG")
+        self.usernameSaveButton.setText("确认用户名")
+
+        for combo in (self.ui.displayToggleCombo, self.ui.formatCombo, self.ui.modeCombo):
+            self._configure_centered_combo(combo)
+        for widget in (self.ui.beepSpinBox, self.ui.ledHexEdit, self.usernameEdit):
+            widget.setAlignment(QtCore.Qt.AlignCenter)
+        self.ui.messageEdit.setAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
+        self.ui.ledHexEdit.setClearButtonEnabled(False)
+
+        rows = [
+            self._make_settings_row("显示开关", self.ui.displayToggleCombo, self.ui.applyDisplayButton),
+            self._make_settings_row("FORMAT", self.ui.formatCombo, self.ui.applyFormatButton),
+            self._make_settings_row("MODE", self.ui.modeCombo, self.ui.applyModeButton),
+            self._make_settings_row("蜂鸣(ms)", self.ui.beepSpinBox, self.ui.sendBeepButton),
+            self._make_settings_row("LED 掩码", self.ui.ledHexEdit, self.ui.sendLedButton),
+            self._make_settings_row(
+                "滚动消息",
+                self.ui.messageEdit,
+                self.ui.sendMessageButton,
+                field_min_width=170,
+                action_width=128,
+            ),
+            self._make_settings_row("用户名", self.usernameEdit, self.usernameSaveButton),
+        ]
+        for row_index, row in enumerate(rows):
+            layout.addWidget(row, row_index, 0)
+            layout.setRowMinimumHeight(row_index, 52)
+        layout.addWidget(self.voiceEnabledCheck, len(rows), 0)
+        layout.setRowMinimumHeight(len(rows), 44)
 
     def _refresh_theme_from_mode(self) -> None:
         if hasattr(self, "themeModeLabel"):
@@ -1996,7 +2195,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ui.syncNowButton.setText("一键对时并写入")
         self.ui.applyDisplayButton.setText("切换并应用")
         self.ui.applyFormatButton.setText("切换并应用")
-        self.ui.applyModeButton.setText("DAY/NIGHT 切换")
+        self.ui.applyModeButton.setText("日夜切换")
         self.ui.sendLedButton.setText("设置 LED")
         self.ui.sendPresetButton.setText("发送预设")
         self.ui.mixedCaseDemoButton.setText("混合大小写")
@@ -2049,10 +2248,10 @@ class MainWindow(QtWidgets.QMainWindow):
             return page
 
         left_panel = QtWidgets.QWidget(self.ui.centralwidget)
-        left_panel.setMinimumWidth(500)
-        left_panel.setMaximumWidth(680)
+        left_panel.setMinimumWidth(600)
+        left_panel.setMaximumWidth(780)
         left_panel.setSizePolicy(
-            QtWidgets.QSizePolicy.Preferred,
+            QtWidgets.QSizePolicy.Expanding,
             QtWidgets.QSizePolicy.Expanding,
         )
         left_layout = QtWidgets.QVBoxLayout(left_panel)
@@ -2067,7 +2266,7 @@ class MainWindow(QtWidgets.QMainWindow):
         left_layout.addWidget(self.leftSections)
 
         right_panel = QtWidgets.QWidget(self.ui.centralwidget)
-        right_panel.setMinimumWidth(500)
+        right_panel.setMinimumWidth(470)
         right_panel.setSizePolicy(
             QtWidgets.QSizePolicy.Expanding,
             QtWidgets.QSizePolicy.Expanding,
@@ -2086,8 +2285,8 @@ class MainWindow(QtWidgets.QMainWindow):
         available_height = max(target_height, available.height())
         min_log_height = 260 if available_height >= 760 else 220
         required_twin_height = max(
-            self.twin.sizeHint().height() + 28,
-            int(available_height * 0.28),
+            self.twin.sizeHint().height() + 36,
+            int(available_height * 0.30),
         )
         required_twin_height = min(
             required_twin_height,
@@ -2111,10 +2310,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.mainSplitter.setHandleWidth(6)
         self.mainSplitter.addWidget(left_panel)
         self.mainSplitter.addWidget(right_panel)
-        self.mainSplitter.setStretchFactor(0, 0)
+        self.mainSplitter.setStretchFactor(0, 1)
         self.mainSplitter.setStretchFactor(1, 1)
-        left_size = min(640, max(520, int(target_width * 0.46)))
-        self.mainSplitter.setSizes([left_size, max(500, target_width - left_size)])
+        left_size = min(760, max(620, int(target_width * 0.52)))
+        self.mainSplitter.setSizes([left_size, max(470, target_width - left_size)])
         self.ui.horizontalLayout.addWidget(self.mainSplitter)
 
         log_layout = self.ui.logGroup.layout()
@@ -2204,16 +2403,17 @@ class MainWindow(QtWidgets.QMainWindow):
                 button.setMaximumHeight(48)
                 continue
             button.setMinimumHeight(36)
-            button.setMinimumWidth(104)
+            button.setMinimumWidth(max(button.minimumWidth(), 104))
         for button in getattr(self.twin, "key_buttons", []):
             button.setMinimumWidth(0)
 
         for combo in self.findChildren(QtWidgets.QComboBox):
             self._install_wheel_guard(combo)
+            self._configure_regular_combo(combo)
             combo.setSizeAdjustPolicy(
                 QtWidgets.QComboBox.AdjustToMinimumContentsLengthWithIcon
             )
-            combo.setMinimumContentsLength(6)
+            combo.setMinimumContentsLength(max(combo.minimumContentsLength(), 6))
         self.ui.portCombo.setMinimumContentsLength(12)
         self.ui.portCombo.setMinimumWidth(180)
         self.ui.portCombo.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
@@ -2228,20 +2428,20 @@ class MainWindow(QtWidgets.QMainWindow):
             if line_edit is not None:
                 line_edit.setClearButtonEnabled(False)
 
-        self.ui.gridLayout.setColumnMinimumWidth(0, 86)
-        self.ui.gridLayout.setColumnMinimumWidth(2, 114)
-        self.ui.gridLayout.setColumnMinimumWidth(3, 86)
+        self.ui.gridLayout.setColumnMinimumWidth(0, 92)
+        self.ui.gridLayout.setColumnMinimumWidth(2, 112)
+        self.ui.gridLayout.setColumnMinimumWidth(3, 84)
         self.ui.gridLayout.setColumnStretch(0, 0)
         self.ui.gridLayout.setColumnStretch(1, 4)
         self.ui.gridLayout.setColumnStretch(2, 0)
         self.ui.gridLayout.setColumnStretch(3, 0)
         self.ui.gridLayout.setHorizontalSpacing(12)
-        self.ui.gridLayout.setVerticalSpacing(10)
-        self.ui.gridLayout.setContentsMargins(12, 28, 12, 12)
-        self.ui.gridLayout.setRowMinimumHeight(0, 44)
-        self.ui.gridLayout.setRowMinimumHeight(1, 44)
+        self.ui.gridLayout.setVerticalSpacing(12)
+        self.ui.gridLayout.setContentsMargins(16, 32, 16, 14)
+        self.ui.gridLayout.setRowMinimumHeight(0, 48)
+        self.ui.gridLayout.setRowMinimumHeight(1, 48)
         self.ui.gridLayout.setRowMinimumHeight(2, 0)
-        self.ui.gridLayout.setRowMinimumHeight(3, 44)
+        self.ui.gridLayout.setRowMinimumHeight(3, 48)
         self.ui.gridLayout_2.setColumnMinimumWidth(0, 86)
         self.ui.gridLayout_2.setColumnMinimumWidth(2, 116)
         self.ui.gridLayout_2.setColumnMinimumWidth(3, 104)
@@ -2267,7 +2467,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ui.syncNowButton.setText("一键对时并写入")
         self.ui.applyDisplayButton.setText("切换并应用")
         self.ui.applyFormatButton.setText("切换并应用")
-        self.ui.applyModeButton.setText("DAY/NIGHT 切换")
+        self.ui.applyModeButton.setText("日夜切换")
         self.ui.sendLedButton.setText("设置 LED")
         self.ui.sendPresetButton.setText("发送预设")
         self.ui.mixedCaseDemoButton.setText("混合大小写")
@@ -2279,7 +2479,7 @@ class MainWindow(QtWidgets.QMainWindow):
         page = QtWidgets.QScrollArea(self.ui.centralwidget)
         page.setObjectName("sectionScrollPage")
         page.setWidgetResizable(True)
-        page.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
+        page.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
         page.setFrameShape(QtWidgets.QFrame.NoFrame)
         page.viewport().setObjectName("sectionScrollViewport")
         host = QtWidgets.QWidget(page)
@@ -2351,6 +2551,7 @@ class MainWindow(QtWidgets.QMainWindow):
         layout.addWidget(self.scheduleAlarmStatusLabel, 1, 0, 1, 3)
         layout.addWidget(button_row, 2, 1, 1, 2)
         layout.addWidget(self.scheduleAlarmHintLabel, 3, 0, 1, 3)
+        self._style_form_grid(layout, label_width=92, row_height=48)
         return group
 
     def _build_schedule_management_group(self, parent: QtWidgets.QWidget) -> QtWidgets.QGroupBox:
@@ -2441,6 +2642,7 @@ class MainWindow(QtWidgets.QMainWindow):
         form.addWidget(button_row, 8, 1)
         form.addWidget(self.scheduleDeleteButton, 9, 1)
         schedule_layout.addLayout(form)
+        self._style_form_grid(form, label_width=92, row_height=48)
         return schedule_group
 
     def _build_dashboard_card(
@@ -2465,6 +2667,7 @@ class MainWindow(QtWidgets.QMainWindow):
         sub_label.setProperty("dashboardSub", True)
         for label in (title_label, value_label, sub_label):
             label.setWordWrap(True)
+            label.setAlignment(QtCore.Qt.AlignCenter)
             label.setStyleSheet("")
         value_label.setMinimumHeight(28)
 
@@ -2536,8 +2739,8 @@ class MainWindow(QtWidgets.QMainWindow):
 
         test_group = QtWidgets.QGroupBox("自动化测试", host)
         test_layout = QtWidgets.QVBoxLayout(test_group)
-        test_layout.setContentsMargins(12, 22, 12, 12)
-        test_layout.setSpacing(10)
+        test_layout.setContentsMargins(16, 32, 16, 14)
+        test_layout.setSpacing(12)
         self.runChecksButton = QtWidgets.QPushButton("一键运行联合测试", test_group)
         self.autoRunTestsCheck = QtWidgets.QCheckBox("启动后自动执行一次自动化测试", test_group)
         self.testStatusLabel = QtWidgets.QLabel("状态: 未运行", test_group)
@@ -2565,7 +2768,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.boardShortcutLabel.setStyleSheet("")
         self.testOutputText = QtWidgets.QTextEdit(test_group)
         self.testOutputText.setReadOnly(True)
-        self.testOutputText.setMinimumHeight(190)
+        self.testOutputText.setMinimumHeight(220)
         self.testOutputText.setLineWrapMode(QtWidgets.QTextEdit.WidgetWidth)
         self.testOutputText.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
         self.testOutputText.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
@@ -2625,25 +2828,17 @@ class MainWindow(QtWidgets.QMainWindow):
         self._apply_runtime_state_to_ui()
 
     def _build_extension_settings_page(self) -> QtWidgets.QScrollArea:
-        page = QtWidgets.QScrollArea(self.ui.centralwidget)
-        page.setWidgetResizable(True)
-        page.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
-        page.setFrameShape(QtWidgets.QFrame.NoFrame)
-
-        host = QtWidgets.QWidget(page)
-        outer = QtWidgets.QVBoxLayout(host)
-        outer.setContentsMargins(6, 10, 6, 10)
-        outer.setSpacing(14)
+        page, host, outer = self._create_scroll_page()
 
         self.ui.displayGroup.setTitle("系统设置")
         self.voiceEnabledCheck = QtWidgets.QCheckBox("启用语音播报", self.ui.displayGroup)
-        self.ui.verticalLayout_3.addWidget(self.voiceEnabledCheck)
         self.usernameEdit = QtWidgets.QLineEdit(self.ui.displayGroup)
         self.usernameEdit.setPlaceholderText("默认 用户")
         self.usernameSaveButton = QtWidgets.QPushButton("确认用户名", self.ui.displayGroup)
         self.ui.gridLayout_2.addWidget(QtWidgets.QLabel("用户名", self.ui.displayGroup), 6, 0)
         self.ui.gridLayout_2.addWidget(self.usernameEdit, 6, 1)
         self.ui.gridLayout_2.addWidget(self.usernameSaveButton, 6, 2)
+        self._rebuild_system_settings_group()
         outer.addWidget(self.ui.displayGroup)
 
         network_group = QtWidgets.QGroupBox("网络对时与天气", host)
@@ -2696,6 +2891,7 @@ class MainWindow(QtWidgets.QMainWindow):
         network_layout.addWidget(self.networkTimeLabel, 5, 1)
         network_layout.addWidget(self.weatherInfoLabel, 6, 1)
         network_layout.addWidget(self.sunriseSunsetLabel, 7, 1)
+        self._style_form_grid(network_layout, label_width=82, row_height=46)
 
         ring_group = QtWidgets.QGroupBox("扩展提醒与铃声", host)
         ring_layout = QtWidgets.QGridLayout(ring_group)
@@ -2721,11 +2917,11 @@ class MainWindow(QtWidgets.QMainWindow):
         ring_layout.addWidget(self.quietNightCheck, 2, 1)
         ring_layout.addWidget(self.themeModeLabel, 3, 1)
         ring_layout.addWidget(self.ntpStatusLabel, 4, 1)
+        self._style_form_grid(ring_layout, label_width=82, row_height=46)
 
         outer.addWidget(network_group)
         outer.addWidget(ring_group)
         outer.addStretch(1)
-        page.setWidget(host)
         return page
 
     def _build_schedule_dashboard_page(self) -> QtWidgets.QScrollArea:

@@ -232,7 +232,7 @@ class DigitalTwinWidget(QtWidgets.QWidget):
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
         outer = QtWidgets.QVBoxLayout(self)
-        outer.setSpacing(2)
+        outer.setSpacing(6)
         outer.setContentsMargins(0, 0, 0, 0)
 
         header_layout = QtWidgets.QHBoxLayout()
@@ -265,7 +265,7 @@ class DigitalTwinWidget(QtWidgets.QWidget):
         self.grid = QtWidgets.QGridLayout()
         self.grid.setContentsMargins(0, 0, 0, 0)
         self.grid.setHorizontalSpacing(8)
-        self.grid.setVerticalSpacing(1)
+        self.grid.setVerticalSpacing(8)
 
         self.key_buttons: list[QtWidgets.QPushButton] = []
         self.key_button_by_name: dict[str, QtWidgets.QPushButton] = {}
@@ -327,10 +327,10 @@ class DigitalTwinWidget(QtWidgets.QWidget):
             + layout.spacing() * 3
             + 4
         )
-        return QtCore.QSize(860, total_height)
+        return QtCore.QSize(760, total_height)
 
     def minimumSizeHint(self) -> QtCore.QSize:
-        return QtCore.QSize(520, self.sizeHint().height())
+        return QtCore.QSize(460, self.sizeHint().height())
 
     def set_display_frame(self, token: str, dp_mask: int) -> None:
         self.display.set_frame(token, dp_mask)

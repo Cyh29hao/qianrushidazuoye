@@ -44,7 +44,7 @@ class AppConfig:
     saved_places: list[SavedPlace] = field(default_factory=_default_saved_places)
     active_place_index: int = 0
     auto_run_tests_on_start: bool = True
-    app_version: str = "2.0"
+    app_version: str = "2.1"
 
 
 @dataclass

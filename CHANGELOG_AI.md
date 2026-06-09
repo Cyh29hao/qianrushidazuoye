@@ -4,6 +4,40 @@
 
 ## 2026-06-09
 
+### v2.1 UI 收口与发布准备
+
+#### 已完成修改
+- PC 端版本号更新为 `v2.1`，默认配置 `app_version` 同步更新为 `2.1`。
+- 主窗口 `QSplitter` 分栏重新调权：左侧主内容优先保留 600px 以上宽度，右侧数字孪生降低最小宽度并增加按键行距，避免右侧面板挤压或遮挡主页、系统设置、自动测试页面。
+- 系统设置行布局改为统一标签/字段/按钮三段式，缩短按钮宽度并保留字段弹性伸展；网络对时、铃声、单次闹钟、日程、自动测试等同类页面统一边距、行高、标签宽度和控件间距。
+- 关闭各主页面横向滚动，改为依赖弹性布局，避免出现“控件没有右边界”“需要横向拖动才看全”的展示问题。
+- 主要下拉框改为只读可点击且文本居中；串口下拉框保留可手动输入 `COM5`。
+- 下拉箭头资源改为实色背景 XPM，并加粗为实心下三角，避免透明背景在部分 Qt/Windows 平台显示为黑色小方块。
+- 主页数据看板卡片文本改为居中排版，继续保持卡片式展示。
+
+#### 关键文件
+- `pc_host/app.py`
+- `pc_host/twin_widgets.py`
+- `pc_host/extension_store.py`
+- `pc_host/config.json`
+- `pc_host/assets/combo_arrow_day.xpm`
+- `pc_host/assets/combo_arrow_night.xpm`
+- `PROJECT_CONTEXT.md`
+- `CHANGELOG_AI.md`
+
+#### 验证结果
+- `pc_host\.venv\Scripts\python.exe -m py_compile pc_host\app.py pc_host\twin_widgets.py pc_host\run_extension_checks.py pc_host\protocol.py pc_host\extension_services.py pc_host\extension_store.py` 通过。
+- `pc_host\.venv\Scripts\python.exe pc_host\run_extension_checks.py --host-only` 通过。
+- PyQt offscreen 烟测通过：1280x720 下系统设置页和自动测试页无横向滚动；分栏约 `655/591`；主要下拉框为居中、只读、可点击状态；白天/黑夜模式箭头均可见。
+- PyInstaller onedir 打包成功：`build_release/SmartClockHost-v2.1/SmartClockHost.exe`；压缩包 `build_release/SmartClockHost-v2.1.zip` 已生成，大小约 40 MB。
+- 打包版 exe 烟测通过：启动 5 秒未退出，随后手动结束进程；烟测产生的运行状态/日志已从 release 目录清理并重新压缩。
+- `git diff --check` 无空白错误，仅有 Windows 行尾提示。
+
+#### 未解决问题
+- Qt offscreen 截图仍可能不显示中文文字，最终展示效果需要在 Windows 真实窗口下复核。
+- 打包产物在 `build_release/` 下，按 `.gitignore` 不纳入 Git 跟踪；如需发 GitHub Release，可上传 zip 作为附件。
+- MCU 本轮未新增改动，但此前 MCU 改动仍需 Keil5 重新编译、烧录实板验证。
+
 ### 本轮 UI 布局与对时稳定性修复
 
 #### 已完成修改

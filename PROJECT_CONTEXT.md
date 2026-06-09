@@ -1,6 +1,6 @@
 # PROJECT_CONTEXT - 智能时钟联网系统
 
-最后更新：2026-06-09
+最后更新：2026-06-09（v2.1 UI/release 收口）
 
 本文件给新的 AI 对话快速接手使用，只记录当前最终状态、目录结构、要求、已实现功能、已知问题和下一步计划。不要把聊天记录、推理过程或临时争论写进来。后续以最新代码和本文件为准；旧任务文档可能已经过时，需要复核当前实现。
 
@@ -21,6 +21,8 @@
   - `docs/dialogue_with_codex.md` 和 `docs/summary_dialogue_with_codex.md` 是 Gemini/历史对话材料，已忽略；不要把它们当作正式报告。
   - `PROJECT_CONTEXT.md`、`AGENTS.md`、`AGENT.md`、`CHANGELOG_AI.md`、`docs/大作业要求/` 是接手/规则/变更记录/课程资料，准备纳入 GitHub 上传候选。
   - 2026-06-09 UI 收口：PC 黑夜模式已补齐状态栏/页脚、滚动条、下拉框弹出列表、复选框、日志区、信息条和表格的深色主题；按钮保持统一蓝色主按钮；主页数据看板保持 6 张卡片布局；串口状态保留在“串口连接”模块。
+  - 2026-06-09 v2.1 收口：`APP_VERSION` 与 `pc_host/config.json` 已更新到 2.1；左侧主内容和右侧数字孪生使用更稳定的 `QSplitter` 分栏比例，左侧主内容优先保留 600px 以上宽度，右侧数字孪生降低最小宽度并增加按键行距；系统设置、网络对时、铃声、闹钟、日程、自动测试等页面统一行高/边距，横向滚动已关闭，避免控件拥挤、缺右边界或被右侧面板遮挡。
+  - v2.1 下拉框修复：主要 `QComboBox` 改为只读可点击、当前文本居中；串口下拉框仍可手动输入 `COM5`；下拉箭头改为实色背景 XPM，避免透明背景在部分 Qt/Windows 环境中显示为黑色小方块。
   - OTA 已从当前 PC 界面和最终说明文档中移除；历史聊天归档中可能仍出现 OTA 旧讨论，但不作为当前功能。
 
 ## 目录结构
@@ -176,16 +178,19 @@
 - 自动测试脚本 `pc_host/run_extension_checks.py` 增加 stale input 清理、每条串口命令 timeout、串口 hard timeout 和命令间隔，失败会记录 FAIL/排查提示，不再无限等待。
 - PC 本地/离线 USER2 没有有效天气 token 时显示 `NO WX`；MCU 端 USER2 非编辑状态显示天气短显，天气为空时也显示 `NO WX`，编辑状态仍作为 SUB 减一键。
 - MCU 收到 `SET DATE`/`SET TIME` 时会清理天气/消息临时显示，收到 `SET WEATHER` 时校验空天气、清除天气短显计时并刷新显示，降低对时/天气更新后数码管卡在临时状态的风险。
+- v2.1 UI/release 收口：左侧主内容宽度优先、右侧数字孪生降低最小宽度并增加按键行距；主要表单统一行高/边距；主页面关闭横向滚动；主要下拉框文本居中且可点击；串口下拉框仍可手动输入；下拉箭头改为实色 XPM 下三角，避免黑色小方块。
+- v2.1 打包产物已生成：`build_release/SmartClockHost-v2.1/SmartClockHost.exe`，压缩包为 `build_release/SmartClockHost-v2.1.zip`。`build_release/` 默认不提交到 Git。
 
 本轮已验证：
 
 - Python 语法检查通过：`pc_host/app.py`、`pc_host/twin_widgets.py`、`pc_host/run_extension_checks.py`、`pc_host/protocol.py`、`pc_host/extension_services.py`、`pc_host/extension_store.py`。
 - `pc_host/run_extension_checks.py --host-only` 通过。
 - PyQt offscreen 烟测通过：启动主窗口、切换 DAY/NIGHT、展开下拉框、切换页面，控制台未出现 `Could not parse stylesheet`；但 offscreen 截图可能不渲染中文，最终视觉仍以 Windows 真实窗口为准。
+- v2.1 打包版 exe 烟测通过：启动 5 秒未退出；烟测日志/运行状态已清理后重新压缩 release zip。
 - `git diff --check` 无空白错误，仅有 Windows 行尾提示。
 
 仍需后续人工/硬件验证：
 
 - 因 `mcu/src/main.c` 已修改，需要 Keil5 打开 `mcu/clock.uvprojx` 重新编译、烧录 S800 实板。
 - 实板重点测：RESET 后一键对时/天气、USER2 天气短显/无天气 `NO WX`、自动测试串口步骤、数码管对时后是否回到正常时间显示。
-- PC 如果交付 `.exe`，需要重新打包，否则直接运行源码版即可。
+- 已有 v2.1 `.exe` 包，但提交材料或演示前仍建议在 Windows 真实窗口下手动双击验证一次白天/黑夜、串口下拉、系统设置和自动测试页面。
