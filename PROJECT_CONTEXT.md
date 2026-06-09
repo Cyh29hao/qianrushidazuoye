@@ -1,5 +1,18 @@
 # PROJECT_CONTEXT - 智能时钟联网系统
 
+## 2026-06-09 v2.1 极端并发与 RESET/NTP 稳定收口
+- PC `pc_host/app.py` 已将 NTP 写板端改为串行握手：先发送 `*SET:DATE`，收到 `OK` 后再发送 `*SET:TIME`；若 `SET DATE` 偶发 `ERROR PARAM`，会用无前导零格式重试一次，失败则退出本次写入并恢复 UI，不再卡住。
+- 串口发送路径增加轻量互斥和保护：自动测试/对时写入占用串口时，普通按钮、协议台、天气下发不会插队；`SET MODE` 在对时写入期间会延后，避免 MODE 的 `OK` 被误当 DATE/TIME 的 `OK`。
+- RESET/连接后的短时间内以 PC 昼夜模式为准：若板端启动回传模式与 PC 不一致，PC 会延后/回写 `*SET:MODE`，不会让板端默认 DAY/NIGHT 污染 PC 自动昼夜状态。
+- v2.1 安装包默认配置 `pc_host/config.json` 已把 `auto_day_night` 设为 `true`；自动化测试会保存并恢复该开关，不会因为 DAY/NIGHT 测试关闭自动昼夜。
+- 自动测试拆为 `快速联合测试` 与 `全面联合测试`：快速覆盖 PING/GET/DATE/TIME/另一昼夜再切回/天气/铃声/USER2；全面追加跑马灯下划线、DISP/SPEED/FORMAT/EXT、`ERROR LEN/SYNTAX/PARAM/RANGE`，并在串口项通过后异步触发一次城市/天气/NTP 一键流程。
+- MCU `mcu/src/main.c` 开机动画期间屏蔽物理按键和虚拟 `*SET:KEY` 动作；开机版本显示已改为 `V2.1`；`*SET:MSG` 会先退出编辑态、清天气短显和旧消息，再启动新的有限跑马灯，降低提醒/跑马灯卡住概率。
+- USER1 连续短按/长按已做双端防抖：MCU 长按切模式约 900ms 内只执行一次，短按 NTP 事件 4 秒内合并；PC 收到 USER1 连续 NTP 请求也会合并，避免对时风暴。PC 还增加串口健康 watchdog：TX 后持续无 RX 会先清等待态并发送 `EXT/PING`，仍无响应再软 `RST`，防止 UI 长时间被串口等待拖死。
+- MCU I2C 读写忙等已加保护上限；若外设总线短暂异常，读键会退化为“无按键”，LED 写失败会跳过本次写入，而不是永久卡住主循环。
+- 日程表支持点击表格内部空白处清除选中并回到新建表单；右侧数字孪生组高度收紧，去掉底部多余空白。
+- USER2 行为再次收口：虚拟 USER2 无天气也会先下发 `NO WX` 天气 token 并写日志；实体 USER2 事件日志会说明显示内容。
+- v2.1 release 已重新打包：`build_release/SmartClockHost-v2.1/SmartClockHost.exe` 与 `build_release/SmartClockHost-v2.1.zip`；打包版 exe offscreen 启动 6 秒保持运行，烟测运行态已清理后重新压缩。`build_release/` 仍不提交 Git。MCU 仍需要 Keil5 重新编译烧录后实板验证。
+
 ## 2026-06-09 v2.1 跑马灯/提醒状态机与自动测试收口
 - MCU `mcu/src/main.c` 已给消息/提醒跑马灯状态机增加硬超时和统一清理入口：`*SET:MSG` 激活后会记录开始时间，超过 `MESSAGE_MAX_ACTIVE_MS` 或文本异常时自动清理临时显示、上报 `ERROR STATE` 并恢复正常时钟显示。
 - 跑马灯规则当前为：所有需要滚动的文本至少往返一次；短滚动走 3 段，长滚动走 2 段，保证会到另一端并回到起点；结束最后一帧额外停留 2 秒。短消息/日程提醒显示期间独占显示偏移，不再让日期/星期滚动逻辑混入。

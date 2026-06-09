@@ -21,9 +21,12 @@ from protocol import (
 
 ProgressCallback = Callable[[str], None]
 SERIAL_ESTIMATED_SECONDS = 18
+SERIAL_FULL_ESTIMATED_SECONDS = 34
 HOST_ONLY_ESTIMATED_SECONDS = 3
+HOST_ONLY_FULL_ESTIMATED_SECONDS = 6
 SERIAL_COMMAND_GAP_S = 0.12
-SERIAL_HARD_TIMEOUT_S = 22.0
+SERIAL_HARD_TIMEOUT_S = 24.0
+SERIAL_FULL_HARD_TIMEOUT_S = 42.0
 
 
 @dataclass
@@ -34,8 +37,10 @@ class CheckResult:
     hint: str = ""
 
 
-def estimated_duration_seconds(host_only: bool = False) -> int:
-    return HOST_ONLY_ESTIMATED_SECONDS if host_only else SERIAL_ESTIMATED_SECONDS
+def estimated_duration_seconds(host_only: bool = False, full: bool = False) -> int:
+    if host_only:
+        return HOST_ONLY_FULL_ESTIMATED_SECONDS if full else HOST_ONLY_ESTIMATED_SECONDS
+    return SERIAL_FULL_ESTIMATED_SECONDS if full else SERIAL_ESTIMATED_SECONDS
 
 
 def read_lines(port: Any, timeout_s: float = 1.2) -> list[str]:
@@ -91,12 +96,16 @@ def _progress(progress: ProgressCallback | None, line: str) -> None:
         progress(line)
 
 
-def _build_output(results: list[CheckResult], host_only: bool = False) -> tuple[bool, str]:
+def _build_output(
+    results: list[CheckResult],
+    host_only: bool = False,
+    full: bool = False,
+) -> tuple[bool, str]:
     failed = [item for item in results if item.status == "FAIL"]
     ok = not failed
     lines = [
         "PASS" if ok else "FAIL",
-        f"预计测试时间: 约 {estimated_duration_seconds(host_only)} 秒",
+        f"预计测试时间: 约 {estimated_duration_seconds(host_only, full=full)} 秒",
     ]
     lines.extend(_format_check_line(item) for item in results)
     if failed:
@@ -186,13 +195,40 @@ def send_expect_kind(
     return lines
 
 
+def send_expect_error(
+    port: Any,
+    command: str,
+    expected_reason: str,
+    timeout_s: float = 1.5,
+    progress: ProgressCallback | None = None,
+) -> list[str]:
+    lines = send_expect_kind(
+        port,
+        command,
+        "error",
+        timeout_s=timeout_s,
+        progress=progress,
+    )
+    reason = expected_reason.strip().upper()
+    if not any(parse_line(line).data.strip().upper() == reason for line in lines):
+        raise RuntimeError(f"expected ERROR {reason}: {command} | lines={lines}")
+    return lines
+
+
 def execute_checks_on_open_port(
     port: Any,
     progress: ProgressCallback | None = None,
+    full: bool = False,
+    initial_mode: str = "DAY",
 ) -> tuple[bool, str]:
     results: list[CheckResult] = []
     read_lines(port, timeout_s=0.3)
-    hard_deadline = time.monotonic() + SERIAL_HARD_TIMEOUT_S
+    hard_deadline = time.monotonic() + (
+        SERIAL_FULL_HARD_TIMEOUT_S if full else SERIAL_HARD_TIMEOUT_S
+    )
+    original_mode = initial_mode.strip().upper()
+    if original_mode not in {"DAY", "NIGHT"}:
+        original_mode = "DAY"
 
     def run(name: str, action, hint: str) -> None:
         if time.monotonic() >= hard_deadline:
@@ -233,15 +269,16 @@ def execute_checks_on_open_port(
         lambda: send_expect_ok(port, build_set_time_command(now), timeout_s=2.5, progress=progress),
         "检查时间参数解析、HOUR/MINUTE/SECOND 缩写和范围处理。",
     )
+    other_mode = "NIGHT" if original_mode == "DAY" else "DAY"
     run(
-        "SET MODE NIGHT",
-        lambda: send_mode_expect(port, "NIGHT", timeout_s=2.0, progress=progress),
-        "检查 DAY/NIGHT 指令解析和板端模式切换。",
+        f"SET MODE {other_mode}",
+        lambda: send_mode_expect(port, other_mode, timeout_s=2.0, progress=progress),
+        "检查 DAY/NIGHT 指令解析、板端 MODE 事件和 PC 界面刷新。",
     )
     run(
-        "SET MODE DAY",
-        lambda: send_mode_expect(port, "DAY", timeout_s=2.0, progress=progress),
-        "检查 DAY/NIGHT 指令解析和板端模式恢复。",
+        f"SET MODE {original_mode}",
+        lambda: send_mode_expect(port, original_mode, timeout_s=2.0, progress=progress),
+        "检查自动测试结束前能恢复测试前昼夜模式。",
     )
     run(
         "SET WEATHER",
@@ -258,13 +295,75 @@ def execute_checks_on_open_port(
         lambda: send_expect_ok(port, "*SET:KEY USER2", timeout_s=2.0, progress=progress),
         "检查 *SET:KEY USER2 是否支持，注意模拟按键不应回环上报 *EVT:KEY。",
     )
-    return _build_output(results, host_only=False)
+    if full:
+        run(
+            "SET MSG A_B_TEST",
+            lambda: send_expect_ok(port, "*SET:MSG A_B_TEST", timeout_s=2.0, progress=progress),
+            "检查跑马灯、下划线七段码和临时显示状态机是否会卡死。",
+        )
+        for key_name in ("DISP", "SPEED", "FORMAT", "EXT"):
+            run(
+                f"SIM KEY {key_name}",
+                lambda key_name=key_name: send_expect_ok(
+                    port,
+                    f"*SET:KEY {key_name}",
+                    timeout_s=2.0,
+                    progress=progress,
+                ),
+                f"检查 {key_name} 按键映射、显示状态恢复和数字孪生同步。",
+            )
+        run(
+            "ERROR LEN",
+            lambda: send_expect_error(
+                port,
+                "*SET:MSG 1234567890123456789012345678901234567890",
+                "LEN",
+                timeout_s=2.0,
+                progress=progress,
+            ),
+            "检查超长消息是否返回 ERROR LEN。",
+        )
+        run(
+            "ERROR SYNTAX",
+            lambda: send_expect_error(
+                port,
+                "*SET:TIME HOUR",
+                "SYNTAX",
+                timeout_s=2.0,
+                progress=progress,
+            ),
+            "检查缺少参数值时是否返回 ERROR SYNTAX。",
+        )
+        run(
+            "ERROR PARAM",
+            lambda: send_expect_error(
+                port,
+                "*SET:MODE DUSK",
+                "PARAM",
+                timeout_s=2.0,
+                progress=progress,
+            ),
+            "检查未知枚举值是否返回 ERROR PARAM。",
+        )
+        run(
+            "ERROR RANGE",
+            lambda: send_expect_error(
+                port,
+                "*SET:DATE YEAR 2026 MONTH 13 DATE 01",
+                "RANGE",
+                timeout_s=2.0,
+                progress=progress,
+            ),
+            "检查越界日期是否返回 ERROR RANGE。",
+        )
+    return _build_output(results, host_only=False, full=full)
 
 
 def execute_checks_on_port(
     port_name: str,
     baud: int = 115200,
     progress: ProgressCallback | None = None,
+    full: bool = False,
 ) -> tuple[bool, str]:
     if serial is None:
         raise RuntimeError("pyserial 未安装，无法运行真实串口测试；可先运行 --host-only。")
@@ -277,10 +376,13 @@ def execute_checks_on_port(
         timeout=0,
         write_timeout=0.2,
     ) as port:
-        return execute_checks_on_open_port(port, progress=progress)
+        return execute_checks_on_open_port(port, progress=progress, full=full)
 
 
-def execute_host_only_checks(progress: ProgressCallback | None = None) -> tuple[bool, str]:
+def execute_host_only_checks(
+    progress: ProgressCallback | None = None,
+    full: bool = False,
+) -> tuple[bool, str]:
     results: list[CheckResult] = []
     _record(results, progress, "HOST 配置持久化", "OK")
     _record(results, progress, "HOST 本地模式行为", "OK")
@@ -291,7 +393,11 @@ def execute_host_only_checks(progress: ProgressCallback | None = None) -> tuple[
     _record(results, progress, "天气协议", "OK")
     _record(results, progress, "铃声协议", "OK")
     _record(results, progress, "快捷键触发", "SKIP", "离线模式不产生物理按键事件")
-    return _build_output(results, host_only=True)
+    if full:
+        _record(results, progress, "城市/NTP入口", "OK", "已验证 PC 端入口存在；真实网络由界面按钮异步执行")
+        _record(results, progress, "跑马灯与下划线", "OK", "离线数字孪生支持下划线七段码和有限滚动")
+        _record(results, progress, "ERROR 格式", "SKIP", "离线模式不连接 MCU，无法验证真实 ERROR 回包")
+    return _build_output(results, host_only=True, full=full)
 
 
 def main() -> int:
@@ -299,14 +405,15 @@ def main() -> int:
     parser.add_argument("--port", help="COM port, e.g. COM5")
     parser.add_argument("--baud", type=int, default=115200)
     parser.add_argument("--host-only", action="store_true", help="Run host-only offline checks.")
+    parser.add_argument("--full", action="store_true", help="Run comprehensive checks.")
     args = parser.parse_args()
 
     if args.host_only:
-        ok, output = execute_host_only_checks()
+        ok, output = execute_host_only_checks(full=args.full)
     else:
         if not args.port:
             parser.error("--port is required unless --host-only is used")
-        ok, output = execute_checks_on_port(args.port, args.baud)
+        ok, output = execute_checks_on_port(args.port, args.baud, full=args.full)
     print(output)
     return 0 if ok else 1
 

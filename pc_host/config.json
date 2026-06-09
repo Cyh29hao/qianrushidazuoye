@@ -4,7 +4,7 @@
   "longitude": 121.4737,
   "timezone": "Asia/Shanghai",
   "user_name": "YUNHAICHEN",
-  "auto_day_night": false,
+  "auto_day_night": true,
   "theme_follow_mode": true,
   "voice_enabled": true,
   "quiet_night_rings": true,

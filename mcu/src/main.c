@@ -43,7 +43,11 @@
 #define MANUAL_LED_SHOW_MS         1000UL
 #define WEATHER_SHOW_MS            5000UL
 #define USER1_LONG_PRESS_TICKS     80U
+#define USER1_SHORT_COOLDOWN_MS    4000UL
+#define USER1_MODE_COOLDOWN_MS     900UL
+#define USER1_RELEASE_GUARD_MS     350UL
 #define DISP_LONG_PRESS_TICKS      80U
+#define I2C_WAIT_GUARD_LOOPS       50000UL
 #define TIME_BACKUP_SAVE_MS        10000UL
 #define TIME_BACKUP_EEPROM_ADDR    0x0000UL
 #define TIME_BACKUP_MAGIC          0x53434C4BU
@@ -184,6 +188,7 @@ static void GPIO_Init(void);
 static void I2C0_Init(void);
 static void UART0_Init(void);
 static void I2C0_Settle(void);
+static bool I2C0_WaitMasterReady(bool busBusy);
 static uint8_t I2C0_WriteByte(uint8_t devAddr, uint8_t regAddr,
                               uint8_t writeData);
 static uint8_t I2C0_ReadByte(uint8_t devAddr, uint8_t regAddr);
@@ -341,6 +346,8 @@ static uint8_t g_stableKeys[KEY_COUNT];
 static uint8_t g_debounceCounts[KEY_COUNT];
 static uint16_t g_holdTicks[KEY_COUNT];
 static uint8_t g_longPressDone[KEY_COUNT];
+static uint32_t g_lastUser1ShortMs;
+static uint32_t g_lastUser1ModeMs;
 static DisplayFrame g_currentFrame;
 static DisplayFrame g_previousFrame;
 static uint8_t g_currentSegments[DISPLAY_WIDTH];
@@ -495,24 +502,46 @@ static void I2C0_Settle(void)
     SysCtlDelay((g_sysClock / 3000000U) + 2U);
 }
 
+static bool I2C0_WaitMasterReady(bool busBusy)
+{
+    uint32_t guard = I2C_WAIT_GUARD_LOOPS;
+    if (busBusy != false) {
+        while (I2CMasterBusBusy(I2C0_BASE)) {
+            if (guard-- == 0UL) {
+                return false;
+            }
+        }
+        return true;
+    }
+    while (I2CMasterBusy(I2C0_BASE)) {
+        if (guard-- == 0UL) {
+            return false;
+        }
+    }
+    return true;
+}
+
 static uint8_t I2C0_WriteByte(uint8_t devAddr, uint8_t regAddr,
                               uint8_t writeData)
 {
     uint8_t result;
 
-    while (I2CMasterBusy(I2C0_BASE)) {
+    if (I2C0_WaitMasterReady(false) == false) {
+        return 0xFFU;
     }
     I2CMasterSlaveAddrSet(I2C0_BASE, devAddr, false);
     I2CMasterDataPut(I2C0_BASE, regAddr);
     I2CMasterControl(I2C0_BASE, I2C_MASTER_CMD_BURST_SEND_START);
-    while (I2CMasterBusy(I2C0_BASE)) {
+    if (I2C0_WaitMasterReady(false) == false) {
+        return 0xFFU;
     }
     result = (uint8_t)I2CMasterErr(I2C0_BASE);
     I2C0_Settle();
 
     I2CMasterDataPut(I2C0_BASE, writeData);
     I2CMasterControl(I2C0_BASE, I2C_MASTER_CMD_BURST_SEND_FINISH);
-    while (I2CMasterBusy(I2C0_BASE)) {
+    if (I2C0_WaitMasterReady(false) == false) {
+        return 0xFFU;
     }
     result |= (uint8_t)I2CMasterErr(I2C0_BASE);
     I2C0_Settle();
@@ -521,17 +550,20 @@ static uint8_t I2C0_WriteByte(uint8_t devAddr, uint8_t regAddr,
 
 static uint8_t I2C0_ReadByte(uint8_t devAddr, uint8_t regAddr)
 {
-    while (I2CMasterBusy(I2C0_BASE)) {
+    if (I2C0_WaitMasterReady(false) == false) {
+        return 0xFFU;
     }
     I2CMasterSlaveAddrSet(I2C0_BASE, devAddr, false);
     I2CMasterDataPut(I2C0_BASE, regAddr);
     I2CMasterControl(I2C0_BASE, I2C_MASTER_CMD_SINGLE_SEND);
-    while (I2CMasterBusBusy(I2C0_BASE)) {
+    if (I2C0_WaitMasterReady(true) == false) {
+        return 0xFFU;
     }
     I2C0_Settle();
     I2CMasterSlaveAddrSet(I2C0_BASE, devAddr, true);
     I2CMasterControl(I2C0_BASE, I2C_MASTER_CMD_SINGLE_RECEIVE);
-    while (I2CMasterBusBusy(I2C0_BASE)) {
+    if (I2C0_WaitMasterReady(true) == false) {
+        return 0xFFU;
     }
     I2C0_Settle();
     return (uint8_t)I2CMasterDataGet(I2C0_BASE);
@@ -609,7 +641,19 @@ static void UART_Poll(void)
 
 static void Tick10ms(void)
 {
-    Keys_Scan();
+    uint8_t index;
+
+    if (g_bootPhase == BOOT_DONE) {
+        Keys_Scan();
+    } else {
+        for (index = 0U; index < KEY_COUNT; index++) {
+            g_lastRawKeys[index] = 0U;
+            g_stableKeys[index] = 0U;
+            g_debounceCounts[index] = 0U;
+            g_holdTicks[index] = 0U;
+            g_longPressDone[index] = 0U;
+        }
+    }
     ServiceBuzzer();
 
     if ((g_bootPhase != BOOT_DONE) && (g_millis >= g_bootDeadlineMs)) {
@@ -1039,7 +1083,7 @@ static void BuildVisibleText(char *out, uint8_t outSize)
         return;
     }
     if (g_bootPhase == BOOT_VERSION) {
-        snprintf(out, outSize, "V2.0");
+        snprintf(out, outSize, "V2.1");
         return;
     }
 
@@ -1797,6 +1841,13 @@ static void HandleKeyRelease(KeyCode key)
 {
     if ((g_editMode == EDIT_NONE) && (g_longPressDone[key] == 0U)) {
         if (key == KEY_USER1) {
+            if ((uint32_t)(g_millis - g_lastUser1ModeMs) < USER1_RELEASE_GUARD_MS) {
+                return;
+            }
+            if ((uint32_t)(g_millis - g_lastUser1ShortMs) < USER1_SHORT_COOLDOWN_MS) {
+                return;
+            }
+            g_lastUser1ShortMs = g_millis;
             HandleKeyPress(KEY_USER1, true);
             return;
         }
@@ -1815,6 +1866,11 @@ static void HandleFuncLongPress(void)
 
 static void ToggleDayNightMode(void)
 {
+    if ((uint32_t)(g_millis - g_lastUser1ModeMs) < USER1_MODE_COOLDOWN_MS) {
+        return;
+    }
+    g_lastUser1ModeMs = g_millis;
+    g_lastUser1ShortMs = g_millis;
     g_dayNight = (g_dayNight == MODE_DAY) ? MODE_NIGHT : MODE_DAY;
     RefreshDisplayAndLeds(true);
     EmitModeEvent();
@@ -1996,6 +2052,9 @@ static bool SimulateKeyPress(const char *nameToken)
     for (index = 0U; index < KEY_COUNT; index++) {
         if (MatchToken(nameToken, kKeyNames[index],
                        (uint8_t)StringLengthBounded(kKeyNames[index], 8U)) != false) {
+            if (g_bootPhase != BOOT_DONE) {
+                return true;
+            }
             HandleKeyPress((KeyCode)index, false);
             return true;
         }
@@ -2642,6 +2701,13 @@ static void HandleSetMessage(const char *params)
     if (length > 32U) {
         UART_ReplyError("LEN");
         return;
+    }
+    if (g_editMode != EDIT_NONE) {
+        ExitEditMode(false);
+    }
+    g_weatherShowUntilMs = 0UL;
+    if (g_messageActive != 0U) {
+        ClearMessageState();
     }
     snprintf(g_messageText, sizeof(g_messageText), "%s", params);
     g_messageActive = 1U;

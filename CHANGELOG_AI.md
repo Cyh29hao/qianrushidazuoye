@@ -4,6 +4,45 @@
 
 ## 2026-06-09
 
+### v2.1 极端并发与 RESET/NTP 稳定收口
+
+#### 已完成修改
+- PC 对时写板端从定时串发改为 `SET DATE -> OK -> SET TIME -> OK` 串行握手；`SET DATE` 偶发 `ERROR PARAM` 时会无前导零重试一次，仍失败则退出写入流程、恢复按钮和后续队列。
+- 串口发送路径增加测试/对时占用保护，防止重复 NTP、连续跑马灯、协议台、天气下发、昼夜切换等不同渠道同时写串口时互相插队。
+- RESET/READY 后增加 PC 模式优先保护窗口：板端启动默认模式若与 PC 不一致，PC 延后同步自身 DAY/NIGHT 到板端，不让板端影响 PC 自动昼夜状态。
+- 自动昼夜在默认配置中设为开启；自动化测试保存并恢复该设置。
+- 自动测试拆为快速/全面两档；全面测试新增跑马灯下划线、DISP/SPEED/FORMAT/EXT、四类 ERROR 格式，并异步触发城市/天气/NTP 一键流程。
+- MCU 开机动画期间屏蔽物理和虚拟按键动作，版本显示改为 `V2.1`；`*SET:MSG` 前会退出编辑态并清除旧天气/消息临时状态。
+- MCU 对 USER1 连续短按/长按增加冷却：长按切 DAY/NIGHT 约 900ms 内只认一次，短按 NTP 事件 4 秒内合并；I2C 读写忙等增加上限，避免外设总线异常把主循环永久卡死。
+- PC 增加串口健康 watchdog：TX 后约 4 秒没有任何 RX 会清掉未完成查询/对时等待，先发 `*SET:KEY EXT` + `*PING` 退出临时显示，仍无响应再尝试软 `*RST`，并恢复 UI 按钮/轮询。
+- 日程表点击空白处可取消选中；右侧数字孪生组高度收紧，减少底部空白。
+- USER2 虚拟按键无天气时也会显示 `NO WX` 并记录日志；实体 USER2 日志说明短显内容。
+- README 与测试指南更新了 v2.1 自动昼夜默认、快速/全面测试、ERROR 全类型、USER2 和 RESET/NTP 说明。
+
+#### 关键文件
+- `pc_host/app.py`
+- `pc_host/run_extension_checks.py`
+- `pc_host/config.json`
+- `pc_host/extension_services.py`
+- `mcu/src/main.c`
+- `README.md`
+- `docs/test-guide.md`
+- `PROJECT_CONTEXT.md`
+- `CHANGELOG_AI.md`
+
+#### 验证结果
+- `python -m py_compile pc_host/app.py pc_host/run_extension_checks.py pc_host/protocol.py pc_host/twin_widgets.py pc_host/extension_services.py pc_host/extension_store.py` 通过。
+- `pc_host/.venv/Scripts/python.exe pc_host/run_extension_checks.py --host-only` 通过。
+- `pc_host/.venv/Scripts/python.exe pc_host/run_extension_checks.py --host-only --full` 通过。
+- PyQt offscreen UI/行为烟测通过：快速/全面测试按钮存在，自动昼夜默认开启，选中左侧页面横向滚动为 0，右侧数字孪生尺寸在离屏窗口内未裁切，虚拟 USER2 会产生 `USER2`/`NO WX` 事件。
+- 静态确认 USER1/串口 watchdog 路径存在：PC 侧 `_check_serial_health()` 已接入 1 秒 tick，MCU 侧 USER1 冷却和 I2C 忙等保护已写入 `mcu/src/main.c`。
+- `launch.bat` 等价离屏启动保持运行到超时退出，未再刷 QSS parse 报错。
+- PyInstaller v2.1 onedir 打包成功，release exe 离屏启动 6 秒未退出；烟测运行态文件已清理，`build_release/SmartClockHost-v2.1.zip` 已重新生成。
+
+#### 未解决问题
+- MCU 已修改 `mcu/src/main.c`，仍必须用 Keil5 重新编译并烧录实板验证 RESET、USER2、跑马灯、提醒触发、连续 NTP/P2 等真实串口场景。
+- 本机没有连接 S800 实板，无法证明 COM5 与硬件长时间压力测试完全通过。
+
 ### v2.1 跑马灯/提醒状态机与自动测试收口
 
 #### 已完成修改

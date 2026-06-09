@@ -292,9 +292,11 @@ SJTU_CLOCK_DEMO_2026
 
 在“调试与测试”页的“协议测试台”做以下检查：
 
+自动化测试区提供 `快速联合测试` 和 `全面联合测试` 两个按钮。快速测试用于课堂演示前的短检查；全面测试会追加跑马灯、DISP/SPEED/FORMAT/EXT、ERROR 全类型和城市/天气/NTP 入口检查。两种测试都应逐项输出 `OK/FAIL/SKIP`，且不能改变自动昼夜模式最终开关状态。
+
 ### 7.1 完整指令模板
 
-从下拉框选择不同类型指令模板，例如 `PING`、`GET TIME`、`SET DATE`、`SET TIME`、`SET DISPLAY`、`SET FORMAT`、`SET MODE`、`SET MSG`、`SET BEEP`、`SET LED`、`SET WEATHER`、`SET KEY` 和错误格式测试，再点击 `发送当前指令`。
+从下拉框选择不同类型指令模板，例如 `PING`、`GET TIME`、`SET DATE`、`SET TIME`、`SET DISPLAY`、`SET FORMAT`、`SET MODE`、`SET MSG`、`SET BEEP`、`SET LED`、`SET WEATHER`、`SET KEY` 和错误格式测试，再点击 `发送当前指令`。错误模板至少应覆盖 `ERROR LEN`、`ERROR SYNTAX`、`ERROR PARAM`、`ERROR RANGE`。
 
 期望：
 - 命令能成功下发，日志能看到 `TX/RX`
@@ -358,7 +360,23 @@ ZZ
 - 板子返回 `ERROR PARAM` 或 `ERROR LEN/RANGE`
 - GUI 不崩
 
-### 8.3 非法时间
+### 8.3 错误格式全集
+
+在协议测试台依次选择并发送：
+
+```text
+ERROR LEN
+ERROR SYNTAX
+ERROR PARAM
+ERROR RANGE
+```
+
+期望：
+- 板端均返回统一格式 `ERROR <reason>`
+- PC 日志记录为 `ERR/ERROR`，GUI 不崩溃
+- 自动化全面测试也会覆盖这些错误类型
+
+### 8.4 非法时间
 
 尝试手动发：
 
@@ -369,13 +387,23 @@ ZZ
 期望：
 - 返回 `ERROR RANGE`
 
-### 8.4 串口断开
+### 8.5 串口断开
 
 连接后拔掉板子 USB。
 
 期望：
 - GUI 不崩
 - 读写异常被日志记录
+
+### 8.6 USER1 连击与串口无响应恢复
+
+连接实板后，连续短按/长按 USER1，包含“短按、长按、短按、长按”的组合。
+
+期望：
+- USER1 短按不会连续触发多次 NTP；日志会显示过快触发已合并/忽略
+- USER1 长按仍能切换 DAY/NIGHT，并同步 PC 主题
+- 若串口在 TX 后数秒没有 RX，日志会提示自动恢复，先尝试 `EXT/PING`，仍无响应再软 `RST`
+- GUI 按钮、日志和数字孪生不应长期卡死；最坏情况下应给出明确错误提示，而不是只能手动 RESET
 
 ---
 
