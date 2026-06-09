@@ -1085,12 +1085,15 @@ class MainWindow(QtWidgets.QMainWindow):
             QGroupBox#twinGroup {{
                 margin-top: 0px;
             }}
-            QGroupBox#twinGroup::title {{
+            QGroupBox#twinGroup::title, QGroupBox#logGroup::title {{
                 height: 0px;
                 padding: 0px;
                 margin: 0px;
                 color: transparent;
                 background: transparent;
+            }}
+            QGroupBox#logGroup {{
+                margin-top: 0px;
             }}
             QPushButton, QToolButton {{
                 background: {palette['button']};
@@ -1695,28 +1698,36 @@ class MainWindow(QtWidgets.QMainWindow):
             f"color: {palette['chip_text']};"
             f"background: transparent;"
             f"border: none;"
-            f"font-size: 11px;"
+            f"font-size: 10px;"
             f"font-weight: 700;"
         )
         card_value_style = (
             f"color: {palette['title']};"
             f"background: transparent;"
             f"border: none;"
-            f"font-size: 20px;"
+            f"font-size: 18px;"
             f"font-weight: 800;"
         )
         card_sub_style = (
             f"color: {palette['chip_text']};"
             f"background: transparent;"
             f"border: none;"
-            f"font-size: 11px;"
+            f"font-size: 10px;"
         )
         card_greeting_style = (
             f"color: {palette['title']};"
             f"background: transparent;"
             f"border: none;"
-            f"font-size: 18px;"
+            f"font-size: 17px;"
             f"font-weight: 800;"
+        )
+        embedded_title_style = (
+            f"color: {palette['title']};"
+            f"background: transparent;"
+            f"border: none;"
+            f"font-size: 15px;"
+            f"font-weight: 800;"
+            f"padding: 0px;"
         )
         info_chip_style = (
             f"background: {palette['chip_bg']};"
@@ -1870,6 +1881,8 @@ class MainWindow(QtWidgets.QMainWindow):
                 label.setStyleSheet(card_greeting_style)
             elif label.property("class") == "infoChip":
                 label.setStyleSheet(info_chip_style)
+            elif label.property("embeddedGroupTitle"):
+                label.setStyleSheet(embedded_title_style)
 
     def _normalize_groupbox_layouts(self) -> None:
         for group in self.findChildren(QtWidgets.QGroupBox):
@@ -2303,6 +2316,7 @@ class MainWindow(QtWidgets.QMainWindow):
             QtWidgets.QSizePolicy.Expanding,
             QtWidgets.QSizePolicy.Expanding,
         )
+        self.ui.logGroup.setTitle("")
         self.ui.logGroup.setMinimumHeight(min_log_height)
 
         self.mainSplitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal, self.ui.centralwidget)
@@ -2318,6 +2332,14 @@ class MainWindow(QtWidgets.QMainWindow):
 
         log_layout = self.ui.logGroup.layout()
         if log_layout is not None and not hasattr(self, "latestDisplayLabel"):
+            log_layout.setContentsMargins(14, 12, 14, 12)
+            log_layout.setSpacing(8)
+
+            self.logEmbeddedTitleLabel = QtWidgets.QLabel("日志与异常", self.ui.logGroup)
+            self.logEmbeddedTitleLabel.setProperty("embeddedGroupTitle", True)
+            self.logEmbeddedTitleLabel.setStyleSheet("")
+            log_layout.insertWidget(0, self.logEmbeddedTitleLabel)
+
             summary_widget = QtWidgets.QWidget(self.ui.logGroup)
             self.logSummaryWidget = summary_widget
             summary_layout = QtWidgets.QGridLayout(summary_widget)
@@ -2361,7 +2383,7 @@ class MainWindow(QtWidgets.QMainWindow):
             summary_layout.addWidget(self.autoScrollCheck, 0, 3)
             summary_layout.addWidget(self.latestEventLabel, 1, 0, 1, 4)
             summary_layout.addWidget(self.autoModeNoticeLabel, 2, 0, 1, 4)
-            log_layout.insertWidget(0, summary_widget)
+            log_layout.insertWidget(1, summary_widget)
 
         if self.ui.horizontalLayout_2.indexOf(self.ui.connectButton) == -1:
             self.ui.horizontalLayout_2.removeWidget(self.ui.refreshPortsButton)
@@ -2501,12 +2523,16 @@ class MainWindow(QtWidgets.QMainWindow):
         ):
             widget.setVisible(False)
 
-    def _build_home_page(self) -> QtWidgets.QScrollArea:
-        page, host, outer = self._create_scroll_page()
+    def _build_home_page(self) -> QtWidgets.QWidget:
+        host = QtWidgets.QWidget(self.ui.centralwidget)
+        host.setObjectName("sectionPageHost")
+        host.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
+        outer = QtWidgets.QVBoxLayout(host)
+        outer.setContentsMargins(6, 8, 6, 8)
+        outer.setSpacing(10)
         outer.addWidget(self.ui.connectionGroup)
-        outer.addWidget(self._build_dashboard_group(host))
-        outer.addStretch(1)
-        return page
+        outer.addWidget(self._build_dashboard_group(host), 1)
+        return host
 
     def _build_board_alarm_group(self, parent: QtWidgets.QWidget) -> QtWidgets.QGroupBox:
         group = QtWidgets.QGroupBox("板载单次闹钟", parent)
@@ -2654,10 +2680,10 @@ class MainWindow(QtWidgets.QMainWindow):
     ) -> tuple[QtWidgets.QFrame, QtWidgets.QLabel, QtWidgets.QLabel]:
         card = QtWidgets.QFrame(parent)
         card.setProperty("dashboardCard", True)
-        card.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Preferred)
+        card.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
         layout = QtWidgets.QVBoxLayout(card)
-        layout.setContentsMargins(12, 10, 12, 10)
-        layout.setSpacing(4)
+        layout.setContentsMargins(9, 8, 9, 8)
+        layout.setSpacing(2)
 
         title_label = QtWidgets.QLabel(title, card)
         title_label.setProperty("dashboardTitle", True)
@@ -2669,7 +2695,7 @@ class MainWindow(QtWidgets.QMainWindow):
             label.setWordWrap(True)
             label.setAlignment(QtCore.Qt.AlignCenter)
             label.setStyleSheet("")
-        value_label.setMinimumHeight(28)
+        value_label.setMinimumHeight(24)
 
         layout.addWidget(title_label)
         layout.addWidget(value_label)
@@ -2679,9 +2705,10 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _build_dashboard_group(self, parent: QtWidgets.QWidget) -> QtWidgets.QGroupBox:
         dashboard_group = QtWidgets.QGroupBox("数据看板", parent)
+        dashboard_group.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
         dashboard_layout = QtWidgets.QVBoxLayout(dashboard_group)
-        dashboard_layout.setContentsMargins(14, 30, 14, 14)
-        dashboard_layout.setSpacing(12)
+        dashboard_layout.setContentsMargins(12, 28, 12, 10)
+        dashboard_layout.setSpacing(8)
 
         self.greetingLabel = QtWidgets.QLabel("早上好，用户！", dashboard_group)
         self.greetingLabel.setProperty("dashboardGreeting", True)
@@ -2690,10 +2717,13 @@ class MainWindow(QtWidgets.QMainWindow):
         dashboard_layout.addWidget(self.greetingLabel)
 
         card_grid = QtWidgets.QGridLayout()
-        card_grid.setHorizontalSpacing(10)
-        card_grid.setVerticalSpacing(10)
+        card_grid.setHorizontalSpacing(8)
+        card_grid.setVerticalSpacing(8)
         card_grid.setColumnStretch(0, 1)
         card_grid.setColumnStretch(1, 1)
+        card_grid.setColumnStretch(2, 1)
+        card_grid.setRowStretch(0, 1)
+        card_grid.setRowStretch(1, 1)
 
         time_card, self.dashboardConnectionLabel, self.dashboardTimeSubLabel = (
             self._build_dashboard_card(dashboard_group, "当前时间", "--:--:--", "城市时间")
@@ -2716,10 +2746,10 @@ class MainWindow(QtWidgets.QMainWindow):
 
         card_grid.addWidget(time_card, 0, 0)
         card_grid.addWidget(date_card, 0, 1)
-        card_grid.addWidget(weather_card, 1, 0)
-        card_grid.addWidget(mode_card, 1, 1)
-        card_grid.addWidget(schedule_card, 2, 0)
-        card_grid.addWidget(system_card, 2, 1)
+        card_grid.addWidget(weather_card, 0, 2)
+        card_grid.addWidget(mode_card, 1, 0)
+        card_grid.addWidget(schedule_card, 1, 1)
+        card_grid.addWidget(system_card, 1, 2)
         dashboard_layout.addLayout(card_grid)
         return dashboard_group
 
