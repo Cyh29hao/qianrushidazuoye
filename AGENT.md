@@ -59,3 +59,8 @@
 - 不要提交 `.venv/`、`__pycache__/`、`tmp/`、`build_release/`、日志、运行态缓存、Keil 中间产物。
 - 每次用户同意上传 GitHub 时，更新 `PROJECT_CONTEXT.md` 和 `CHANGELOG_AI.md`，只记录最终状态、关键文件、验证结果和未解决问题。
 - README 和验收对照文档只写当前真实功能，不要重新加入已删除的 OTA 或旧占位说明。
+## UI Startup Theme Rule
+
+- PC 端新增或重排动态 UI 容器后，必须确认这些控件在第一次 `show()` 前后都经过主题刷新。尤其是 `QSplitter` 分栏、右侧数字孪生面板、日志面板、页面宿主、临时创建的标题/信息条，不能只依赖用户切换 DAY/NIGHT 后才刷新样式。
+- 对首屏可见的动态容器要设置稳定 `objectName`，并纳入全局 QSS 或动态主题覆盖；必要时同时设置 palette 和 `setAutoFillBackground(True)`，防止 release exe 第一帧露出 Qt/Windows 默认白底。
+- 修 UI 后必须至少做一次 “NIGHT 状态下从冷启动进入主窗口” 的验证。只验证切换主题后的效果不够，因为这类问题往往在切换后消失、但首启仍然存在。

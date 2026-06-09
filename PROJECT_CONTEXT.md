@@ -225,3 +225,11 @@
 - 需要 Keil5 重新编译并烧录 `mcu/clock.uvprojx`，验证 EEPROM 初始化是否在目标板正常、RESET 后是否恢复最近时间、串口连接后是否自动写入现实时间。
 - 需要真实串口测试：PC 已连接时 RESET、断电重插、NTP/天气刷新中 RESET、自动测试中 RESET/短暂断开。
 - PC 端 v2.1 打包版已重新生成：`build_release/SmartClockHost-v2.1/SmartClockHost.exe`，压缩包为 `build_release/SmartClockHost-v2.1.zip`。`build_release/` 仍按 `.gitignore` 不提交。
+## 2026-06-09 v2.1 release NIGHT 首启修复
+
+- 当前主版本仍为 `D:\桌面\大二下\大二下 嵌入式系统与接口技术\ARM\真正的最新版`，当前开发分支为 `gemini-ui-improvements`，并同步推送到 `main`。
+- PC 端修复了 v2.1 release 在 `NIGHT` 模式首启时右侧数字孪生/日志区域出现白底的问题。原因是部分动态创建/重排的主容器在首次绘制时没有明确对象名、palette 和最终主题刷新，切换主题后才被重新 polish。
+- `pc_host/app.py` 现在在动态 UI 创建完成后执行最终主题刷新，并在 `showEvent` 里补一次首屏主题落地；`mainLeftPanel`、`mainRightPanel`、`twinGroup`、`logGroup`、`statusbar` 等都会在 NIGHT 首帧获得深色 palette。
+- v2.1 release 已重新打包：`build_release/SmartClockHost-v2.1/SmartClockHost.exe`，压缩包为 `build_release/SmartClockHost-v2.1.zip`。该目录仍被 `.gitignore` 忽略，不进入 Git。
+- 已验证：Python 语法检查通过、host-only 自动测试通过、强制 NIGHT 离屏首启 palette 检查通过、release exe 5 秒短启动烟测通过。
+- 后续测试重点：真实桌面双击 release exe，在上次保存为 `NIGHT` 的状态下确认首屏右侧数字孪生、日志区、页脚/状态栏不再出现白底；再切换 DAY/NIGHT 各一次确认主题仍正常。

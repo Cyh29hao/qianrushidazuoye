@@ -215,3 +215,25 @@
 
 - 仍需用 Keil5 打开 `mcu/clock.uvprojx` 进行正式编译、烧录与实板验证。
 - 当前 `.venv` 缺 PyQt5，GUI 离屏/真实界面烟测需要在完整 PC 环境中运行。
+## 2026-06-09 v2.1 release NIGHT 首启白底修复
+
+### 已完成修改
+- 修复 v2.1 打包版首次以 `NIGHT` 模式启动时，右侧数字孪生/日志区域短暂或持续显示系统默认白底的问题。
+- `pc_host/app.py` 现在在动态布局创建完成后、窗口首次显示前后都会执行一次最终主题刷新；右侧/左侧主容器被赋予明确对象名并纳入全局主题 QSS。
+- 同步给 `QApplication`、主窗口、central widget、左右主面板、`twinGroup`、`logGroup`、日志框等设置主题 palette，避免 release exe 第一帧还没完成 QSS polish 时露出白底。
+- 重新生成 v2.1 打包产物：`build_release/SmartClockHost-v2.1/SmartClockHost.exe` 和 `build_release/SmartClockHost-v2.1.zip`。`build_release/` 仍按 `.gitignore` 不纳入 Git 跟踪。
+
+### 关键文件
+- `pc_host/app.py`
+- `AGENT.md`
+- `PROJECT_CONTEXT.md`
+- `CHANGELOG_AI.md`
+
+### 验证结果
+- `python -m py_compile pc_host\app.py pc_host\extension_store.py pc_host\protocol.py pc_host\twin_widgets.py pc_host\run_extension_checks.py pc_host\extension_services.py` 通过。
+- `python pc_host\run_extension_checks.py --host-only` 通过。
+- PyQt offscreen 强制 `NIGHT` 首启 palette 检查通过：`central`/`leftPanel`/`rightPanel` 为 `#18212b`，`twinGroup`/`logGroup` 为 `#223041`，`statusbar` 为 `#151e27`。
+- v2.1 release exe 使用临时 `NIGHT` 运行状态启动 5 秒未退出；烟测生成的运行状态和日志已清理。
+
+### 未解决问题
+- 仍建议在真实 Windows 桌面双击 `build_release/SmartClockHost-v2.1/SmartClockHost.exe`，确认首屏 NIGHT 模式不再出现白底；offscreen 可验证 palette，但真实 DPI/显卡绘制仍以本机肉眼复核为准。

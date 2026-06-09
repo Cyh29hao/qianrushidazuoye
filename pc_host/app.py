@@ -276,6 +276,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.local_view_scroll_started = 0.0
         self.boot_mirror_generation = 0
         self.startup_sync_pending = False
+        self._startup_theme_polished = False
         self.syncing_extension_widgets = False
         self.preferred_port_name = ""
         self.manual_port_choice_made = False
@@ -327,7 +328,18 @@ class MainWindow(QtWidgets.QMainWindow):
         self.refresh_dashboard()
         self.refresh_place_combo_labels()
         self._refresh_theme_from_mode()
+        QtCore.QTimer.singleShot(0, self._finalize_startup_theme)
+        QtCore.QTimer.singleShot(180, self._finalize_startup_theme)
         self.log("INFO", "PC 上位机已启动，等待连接 S800。")
+
+    def showEvent(self, event: QtGui.QShowEvent) -> None:  # noqa: N802 - Qt API
+        super().showEvent(event)
+        if not self._startup_theme_polished:
+            self._finalize_startup_theme()
+
+    def _finalize_startup_theme(self) -> None:
+        self._refresh_theme_from_mode()
+        self._startup_theme_polished = True
 
     def _build_statusbar(self) -> None:
         self.status_project = QtWidgets.QLabel("智能时钟")
@@ -1096,6 +1108,12 @@ class MainWindow(QtWidgets.QMainWindow):
                     "splitter_handle_hover": "#516477",
                 }
             )
+        base_palette = self._palette_for_colors(palette["background"], palette["text"])
+        app = QtWidgets.QApplication.instance()
+        if app is not None:
+            app.setPalette(base_palette)
+        self.setPalette(base_palette)
+        self.setAutoFillBackground(True)
         self.setStyleSheet(
             f"""
             QMainWindow {{
@@ -1108,6 +1126,12 @@ class MainWindow(QtWidgets.QMainWindow):
             }}
             QWidget#centralwidget {{
                 background: {palette['background']};
+            }}
+            QWidget#mainLeftPanel, QWidget#mainRightPanel {{
+                background: {palette['background']};
+            }}
+            QWidget#twinContainer {{
+                background: transparent;
             }}
             QGroupBox {{
                 background: {palette['group_bg']};
@@ -1126,6 +1150,9 @@ class MainWindow(QtWidgets.QMainWindow):
                 color: {palette['title']};
             }}
             QGroupBox#twinGroup {{
+                background: {palette['group_bg']};
+                border: 1px solid {palette['group_border']};
+                border-radius: 8px;
                 margin-top: 0px;
             }}
             QGroupBox#twinGroup::title, QGroupBox#logGroup::title {{
@@ -1136,6 +1163,9 @@ class MainWindow(QtWidgets.QMainWindow):
                 background: transparent;
             }}
             QGroupBox#logGroup {{
+                background: {palette['group_bg']};
+                border: 1px solid {palette['group_border']};
+                border-radius: 8px;
                 margin-top: 0px;
             }}
             QPushButton, QToolButton {{
@@ -1824,6 +1854,37 @@ class MainWindow(QtWidgets.QMainWindow):
             f"color: {palette['text']};"
             f"font-size: 12px;"
         )
+        background_palette = self._palette_for_colors(palette["background"], palette["text"])
+        group_palette = self._palette_for_colors(palette["group_bg"], palette["text"])
+        input_palette = self._palette_for_colors(palette["input_bg"], palette["text"])
+
+        for widget in (
+            getattr(self.ui, "centralwidget", None),
+            getattr(self, "leftPanel", None),
+            getattr(self, "rightPanel", None),
+        ):
+            if widget is None:
+                continue
+            widget.setAutoFillBackground(True)
+            widget.setPalette(background_palette)
+        for widget in (
+            getattr(self.ui, "twinGroup", None),
+            getattr(self.ui, "logGroup", None),
+        ):
+            if widget is None:
+                continue
+            widget.setAutoFillBackground(True)
+            widget.setPalette(group_palette)
+        if hasattr(self.ui, "twinContainer"):
+            self.ui.twinContainer.setAutoFillBackground(False)
+            self.ui.twinContainer.setPalette(group_palette)
+        for widget in (
+            getattr(self.ui, "logTextEdit", None),
+            getattr(self, "testOutputText", None),
+        ):
+            if widget is None:
+                continue
+            widget.setPalette(input_palette)
 
         for widget in self.findChildren(QtWidgets.QWidget, "sectionPageHost"):
             widget.setStyleSheet(page_style)
@@ -2315,6 +2376,8 @@ class MainWindow(QtWidgets.QMainWindow):
             return page
 
         left_panel = QtWidgets.QWidget(self.ui.centralwidget)
+        left_panel.setObjectName("mainLeftPanel")
+        self.leftPanel = left_panel
         left_panel.setMinimumWidth(500)
         left_panel.setMaximumWidth(650)
         left_panel.setSizePolicy(
@@ -2333,6 +2396,8 @@ class MainWindow(QtWidgets.QMainWindow):
         left_layout.addWidget(self.leftSections)
 
         right_panel = QtWidgets.QWidget(self.ui.centralwidget)
+        right_panel.setObjectName("mainRightPanel")
+        self.rightPanel = right_panel
         right_panel.setMinimumWidth(600)
         right_panel.setSizePolicy(
             QtWidgets.QSizePolicy.Expanding,
