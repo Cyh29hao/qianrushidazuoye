@@ -2205,7 +2205,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ui.verticalLayout_5.setContentsMargins(14, 10, 14, 12)
 
         self.ui.connectButton.setText("连接")
-        self.ui.syncNowButton.setText("一键对时并写入")
+        self.ui.syncNowButton.setText("NTP 对时并写入 S800")
         self.ui.applyDisplayButton.setText("切换并应用")
         self.ui.applyFormatButton.setText("切换并应用")
         self.ui.applyModeButton.setText("日夜切换")
@@ -2458,12 +2458,13 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ui.gridLayout.setColumnStretch(2, 0)
         self.ui.gridLayout.setColumnStretch(3, 0)
         self.ui.gridLayout.setHorizontalSpacing(12)
-        self.ui.gridLayout.setVerticalSpacing(12)
-        self.ui.gridLayout.setContentsMargins(16, 32, 16, 14)
-        self.ui.gridLayout.setRowMinimumHeight(0, 48)
-        self.ui.gridLayout.setRowMinimumHeight(1, 48)
-        self.ui.gridLayout.setRowMinimumHeight(2, 0)
-        self.ui.gridLayout.setRowMinimumHeight(3, 48)
+        self.ui.gridLayout.setVerticalSpacing(8)
+        self.ui.gridLayout.setContentsMargins(16, 30, 16, 12)
+        self.ui.gridLayout.setRowMinimumHeight(0, 24)
+        self.ui.gridLayout.setRowMinimumHeight(1, 44)
+        self.ui.gridLayout.setRowMinimumHeight(2, 44)
+        self.ui.gridLayout.setRowMinimumHeight(3, 24)
+        self.ui.gridLayout.setRowMinimumHeight(4, 42)
         self.ui.gridLayout_2.setColumnMinimumWidth(0, 86)
         self.ui.gridLayout_2.setColumnMinimumWidth(2, 116)
         self.ui.gridLayout_2.setColumnMinimumWidth(3, 104)
@@ -2486,7 +2487,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ui.verticalLayout_5.setContentsMargins(12, 20, 12, 8)
 
         self.ui.connectButton.setText("连接")
-        self.ui.syncNowButton.setText("一键对时并写入")
+        self.ui.syncNowButton.setText("NTP 对时并写入 S800")
         self.ui.applyDisplayButton.setText("切换并应用")
         self.ui.applyFormatButton.setText("切换并应用")
         self.ui.applyModeButton.setText("日夜切换")
@@ -2494,6 +2495,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ui.sendPresetButton.setText("发送预设")
         self.ui.mixedCaseDemoButton.setText("混合大小写")
         self._normalize_groupbox_layouts()
+        self._compact_sync_clock_layout()
 
     def _create_scroll_page(
         self,
@@ -2513,7 +2515,7 @@ class MainWindow(QtWidgets.QMainWindow):
         return page, host, outer
 
     def _configure_sync_clock_group(self) -> None:
-        self.ui.clockGroup.setTitle("时间与同步")
+        self.ui.clockGroup.setTitle("时间写入与 NTP 对时")
         for widget in (
             self.ui.alarmLabel,
             self.ui.alarmTimeEdit,
@@ -2522,6 +2524,70 @@ class MainWindow(QtWidgets.QMainWindow):
             self.ui.queryAlarmButton,
         ):
             widget.setVisible(False)
+        layout = self.ui.gridLayout
+
+        if not hasattr(self, "manualTimeWriteHintLabel"):
+            self.manualTimeWriteHintLabel = QtWidgets.QLabel(
+                "手动编辑写入：上方日期/时间可自行修改，点击“写入”发送到 S800。",
+                self.ui.clockGroup,
+            )
+            self.manualTimeWriteHintLabel.setProperty("class", "infoChip")
+            self.manualTimeWriteHintLabel.setWordWrap(True)
+            self.manualTimeWriteHintLabel.setStyleSheet("")
+        if not hasattr(self, "ntpTimeWriteHintLabel"):
+            self.ntpTimeWriteHintLabel = QtWidgets.QLabel(
+                "NTP 自动对时：从网络获取当前城市时间，再写入 S800。",
+                self.ui.clockGroup,
+            )
+            self.ntpTimeWriteHintLabel.setProperty("class", "infoChip")
+            self.ntpTimeWriteHintLabel.setWordWrap(True)
+            self.ntpTimeWriteHintLabel.setStyleSheet("")
+
+        layout.removeWidget(self.manualTimeWriteHintLabel)
+        layout.removeWidget(self.ntpTimeWriteHintLabel)
+        layout.removeWidget(self.ui.dateLabel)
+        layout.removeWidget(self.ui.dateEdit)
+        layout.removeWidget(self.ui.applyDateButton)
+        layout.removeWidget(self.ui.queryDateButton)
+        layout.removeWidget(self.ui.timeLabel)
+        layout.removeWidget(self.ui.timeEdit)
+        layout.removeWidget(self.ui.applyTimeButton)
+        layout.removeWidget(self.ui.queryTimeButton)
+        layout.removeWidget(self.ui.syncNowButton)
+
+        layout.addWidget(self.manualTimeWriteHintLabel, 0, 0, 1, 4)
+        layout.addWidget(self.ui.dateLabel, 1, 0, 1, 1)
+        layout.addWidget(self.ui.dateEdit, 1, 1, 1, 1)
+        layout.addWidget(self.ui.applyDateButton, 1, 2, 1, 1)
+        layout.addWidget(self.ui.queryDateButton, 1, 3, 1, 1)
+        layout.addWidget(self.ui.timeLabel, 2, 0, 1, 1)
+        layout.addWidget(self.ui.timeEdit, 2, 1, 1, 1)
+        layout.addWidget(self.ui.applyTimeButton, 2, 2, 1, 1)
+        layout.addWidget(self.ui.queryTimeButton, 2, 3, 1, 1)
+        layout.addWidget(self.ntpTimeWriteHintLabel, 3, 0, 1, 4)
+        layout.addWidget(self.ui.syncNowButton, 4, 0, 1, 4)
+
+        self.ui.syncNowButton.setText("NTP 对时并写入 S800")
+        self.ui.syncNowButton.setMinimumHeight(38)
+        self.ui.clockGroup.setMinimumHeight(220)
+        self._compact_sync_clock_layout()
+
+    def _compact_sync_clock_layout(self) -> None:
+        if not hasattr(self.ui, "gridLayout"):
+            return
+        layout = self.ui.gridLayout
+        layout.setContentsMargins(16, 28, 16, 12)
+        layout.setHorizontalSpacing(12)
+        layout.setVerticalSpacing(6)
+        for row, height in {
+            0: 28,
+            1: 42,
+            2: 42,
+            3: 28,
+            4: 40,
+        }.items():
+            layout.setRowMinimumHeight(row, height)
+        self.ui.syncNowButton.setMaximumHeight(44)
 
     def _build_home_page(self) -> QtWidgets.QWidget:
         host = QtWidgets.QWidget(self.ui.centralwidget)
