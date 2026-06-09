@@ -7,6 +7,9 @@ pc_host/runtime_state.json
 build/
 dist/
 build_release/
+_pyi_build*/
+_pyi_dist*/
+_pyi_spec*/
 *.spec
 mcu/*.uvgui*
 mcu/*.uvguix*

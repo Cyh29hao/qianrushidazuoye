@@ -4,6 +4,35 @@
 
 ## 2026-06-09
 
+### v2.1 真实窗口布局回修
+
+#### 已完成修改
+- 根据用户真实窗口反馈，重新收紧主窗口 `QSplitter` 策略：左侧主内容默认约 460px，最大 560px；右侧数字孪生最小 620px 并获得伸展优先级，避免左侧超宽压住右侧。
+- 右侧数字孪生固定在右上方，按键行高度和字体略收紧；日志区降低最小高度，只占用数字孪生下方剩余空间，避免第二行按键被裁切。
+- 系统设置行改为更窄的标签/字段/按钮比例；移除 `gridLayout_2` 旧空列最小宽度，修复系统设置按钮只显示半截的问题。
+- 网络对时状态标签和当前时间标签改为可换行、可收缩，避免长城市/时区文本把系统设置页 host 撑宽。
+- 调试页“时间写入与 NTP 对时”压缩列宽，日期/时间编辑器允许收缩，写入/查询按钮改为窄按钮；自动测试页 host 不再宽过左侧 viewport。
+- `AGENT.md` 新增布局硬规则：必须检查 1280x720、1366x768 和全屏；左侧 scroll host 不得宽过 viewport；右侧日志不得压住数字孪生两行按键。
+
+#### 关键文件
+- `pc_host/app.py`
+- `pc_host/twin_widgets.py`
+- `.gitignore`
+- `AGENT.md`
+- `PROJECT_CONTEXT.md`
+- `CHANGELOG_AI.md`
+
+#### 验证结果
+- `python -m py_compile pc_host/app.py pc_host/twin_widgets.py pc_host/run_extension_checks.py pc_host/protocol.py pc_host/extension_services.py pc_host/extension_store.py` 通过。
+- `python pc_host/run_extension_checks.py --host-only` 通过；测试产生的 `config.json`/`schedules.json` 运行态回写已恢复，未纳入提交。
+- PyQt offscreen 几何烟测通过：1280x720、1366x768、1500x900 下系统设置页 host 等于 viewport，系统设置按钮完整显示；调试页 host 等于 viewport；右侧数字孪生与日志上下分栏不覆盖。
+- PyQt offscreen 截图烟测覆盖主页、系统设置、调试页、夜间模式；离屏环境中文可能不渲染，但布局无明显遮挡。
+- PyInstaller onedir 重新打包成功：`build_release/SmartClockHost-v2.1/SmartClockHost.exe`；压缩包 `build_release/SmartClockHost-v2.1.zip` 已更新，打包版 exe 启动 5 秒未退出，烟测运行态已清理后重新压缩。
+
+#### 未解决问题
+- 真实 Windows 字体/DPI 与 offscreen 仍可能有差异，明天需要在用户机器上用 `launch.bat` 双击复核 1366x768/全屏效果。
+- 打包产物在 `build_release/` 下，按 `.gitignore` 不纳入 Git 跟踪；如需 GitHub Release，需要上传 zip 作为 release 附件。
+
 ### v2.1 UI 收口与发布准备
 
 #### 已完成修改

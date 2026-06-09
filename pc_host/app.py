@@ -1361,8 +1361,8 @@ class MainWindow(QtWidgets.QMainWindow):
                 border: none;
                 border-radius: 7px;
                 padding: 4px 6px;
-                min-height: 40px;
-                font-size: 10px;
+                min-height: 36px;
+                font-size: 9px;
                 font-weight: 700;
             }}
             QPushButton#twinKeyButton:hover {{
@@ -1672,8 +1672,8 @@ class MainWindow(QtWidgets.QMainWindow):
                 f"color: white;"
                 f"border: none;"
                 f"border-radius: 8px;"
-                f"padding: 7px 14px;"
-                f"min-height: 34px;"
+                f"padding: 5px 10px;"
+                f"min-height: 28px;"
                 f"font-weight: 700;"
                 f"font-size: 12px;"
                 f"text-align: center;"
@@ -1919,30 +1919,37 @@ class MainWindow(QtWidgets.QMainWindow):
         field: QtWidgets.QWidget,
         action: QtWidgets.QWidget | None = None,
         *,
-        field_min_width: int = 170,
-        action_width: int = 128,
+        field_min_width: int = 150,
+        action_width: int = 112,
     ) -> QtWidgets.QWidget:
         row = QtWidgets.QWidget(self.ui.displayGroup)
         row.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
+        row.setMinimumHeight(40)
+        row.setMaximumHeight(44)
         layout = QtWidgets.QHBoxLayout(row)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(10)
+        layout.setSpacing(8)
 
         label = QtWidgets.QLabel(label_text, row)
-        label.setMinimumWidth(96)
+        label.setMinimumWidth(82)
+        label.setMaximumWidth(92)
         label.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed)
         label.setAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
         layout.addWidget(label)
 
         field.setParent(row)
         field.setMinimumWidth(field_min_width)
+        field.setMinimumHeight(34)
+        field.setMaximumHeight(38)
         field.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
         layout.addWidget(field, 1)
 
         if action is not None:
             action.setParent(row)
             action.setMinimumWidth(action_width)
-            action.setMaximumWidth(max(action_width, 150))
+            action.setMaximumWidth(max(action_width, 126))
+            action.setMinimumHeight(34)
+            action.setMaximumHeight(38)
             action.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed)
             layout.addWidget(action)
         return row
@@ -1969,14 +1976,14 @@ class MainWindow(QtWidgets.QMainWindow):
         layout: QtWidgets.QGridLayout,
         *,
         label_width: int = 90,
-        row_height: int = 48,
+        row_height: int = 44,
         top_margin: int = 32,
         side_margin: int = 16,
         bottom_margin: int = 14,
     ) -> None:
         layout.setContentsMargins(side_margin, top_margin, side_margin, bottom_margin)
         layout.setHorizontalSpacing(12)
-        layout.setVerticalSpacing(12)
+        layout.setVerticalSpacing(8)
         layout.setColumnStretch(0, 0)
         layout.setColumnStretch(1, 1)
         if layout.columnCount() > 2:
@@ -2005,7 +2012,8 @@ class MainWindow(QtWidgets.QMainWindow):
                     QtWidgets.QSpinBox,
                 ),
             ):
-                widget.setMinimumHeight(38)
+                widget.setMinimumHeight(34)
+                widget.setMaximumHeight(38)
                 widget.setSizePolicy(
                     QtWidgets.QSizePolicy.Expanding,
                     QtWidgets.QSizePolicy.Fixed,
@@ -2016,9 +2024,12 @@ class MainWindow(QtWidgets.QMainWindow):
         layout = self.ui.gridLayout_2
         while layout.count():
             layout.takeAt(0)
-        layout.setContentsMargins(18, 34, 18, 18)
+        layout.setContentsMargins(12, 26, 12, 12)
         layout.setHorizontalSpacing(0)
-        layout.setVerticalSpacing(12)
+        layout.setVerticalSpacing(8)
+        for column in range(4):
+            layout.setColumnMinimumWidth(column, 0)
+            layout.setColumnStretch(column, 0)
         layout.setColumnStretch(0, 1)
 
         self.ui.applyModeButton.setText("日夜切换")
@@ -2044,15 +2055,15 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.ui.messageEdit,
                 self.ui.sendMessageButton,
                 field_min_width=170,
-                action_width=128,
+                action_width=112,
             ),
             self._make_settings_row("用户名", self.usernameEdit, self.usernameSaveButton),
         ]
         for row_index, row in enumerate(rows):
             layout.addWidget(row, row_index, 0)
-            layout.setRowMinimumHeight(row_index, 52)
+            layout.setRowMinimumHeight(row_index, 44)
         layout.addWidget(self.voiceEnabledCheck, len(rows), 0)
-        layout.setRowMinimumHeight(len(rows), 44)
+        layout.setRowMinimumHeight(len(rows), 38)
 
     def _refresh_theme_from_mode(self) -> None:
         if hasattr(self, "themeModeLabel"):
@@ -2217,12 +2228,12 @@ class MainWindow(QtWidgets.QMainWindow):
     def _refine_layout(self) -> None:
         screen = QtWidgets.QApplication.primaryScreen()
         available = screen.availableGeometry() if screen is not None else QtCore.QRect(0, 0, 1440, 900)
-        target_width = min(1500, max(1180, int(available.width() * 0.94)))
+        target_width = min(1500, max(1120, int(available.width() * 0.94)))
         target_height = min(900, max(680, int(available.height() * 0.92)))
         self.resize(target_width, target_height)
-        self.setMinimumSize(1080, 720)
-        self.ui.horizontalLayout.setContentsMargins(14, 14, 14, 14)
-        self.ui.horizontalLayout.setSpacing(14)
+        self.setMinimumSize(1040, 700)
+        self.ui.horizontalLayout.setContentsMargins(10, 10, 10, 10)
+        self.ui.horizontalLayout.setSpacing(10)
 
         while self.ui.horizontalLayout.count():
             item = self.ui.horizontalLayout.takeAt(0)
@@ -2261,10 +2272,10 @@ class MainWindow(QtWidgets.QMainWindow):
             return page
 
         left_panel = QtWidgets.QWidget(self.ui.centralwidget)
-        left_panel.setMinimumWidth(600)
-        left_panel.setMaximumWidth(780)
+        left_panel.setMinimumWidth(430)
+        left_panel.setMaximumWidth(560)
         left_panel.setSizePolicy(
-            QtWidgets.QSizePolicy.Expanding,
+            QtWidgets.QSizePolicy.Preferred,
             QtWidgets.QSizePolicy.Expanding,
         )
         left_layout = QtWidgets.QVBoxLayout(left_panel)
@@ -2279,31 +2290,32 @@ class MainWindow(QtWidgets.QMainWindow):
         left_layout.addWidget(self.leftSections)
 
         right_panel = QtWidgets.QWidget(self.ui.centralwidget)
-        right_panel.setMinimumWidth(470)
+        right_panel.setMinimumWidth(620)
         right_panel.setSizePolicy(
             QtWidgets.QSizePolicy.Expanding,
             QtWidgets.QSizePolicy.Expanding,
         )
         right_layout = QtWidgets.QVBoxLayout(right_panel)
         right_layout.setContentsMargins(0, 0, 0, 0)
-        right_layout.setSpacing(10)
+        right_layout.setSpacing(8)
         right_layout.addWidget(self.ui.twinGroup, 0, QtCore.Qt.AlignTop)
         right_layout.addWidget(self.ui.logGroup, 1)
 
-        self.ui.connectionGroup.setMinimumHeight(132)
-        self.ui.clockGroup.setMinimumHeight(184)
-        self.ui.displayGroup.setMinimumHeight(368)
-        self.ui.demoGroup.setMinimumHeight(238)
+        self.ui.connectionGroup.setMinimumHeight(124)
+        self.ui.clockGroup.setMinimumHeight(178)
+        self.ui.displayGroup.setMinimumHeight(330)
+        self.ui.demoGroup.setMinimumHeight(220)
 
         available_height = max(target_height, available.height())
-        min_log_height = 260 if available_height >= 760 else 220
+        min_log_height = 180 if available_height >= 760 else 150
         required_twin_height = max(
-            self.twin.sizeHint().height() + 36,
-            int(available_height * 0.30),
+            self.twin.sizeHint().height() + 44,
+            self.twin.minimumSizeHint().height() + 40,
+            312,
         )
         required_twin_height = min(
             required_twin_height,
-            max(self.twin.minimumSizeHint().height() + 28, available_height - min_log_height - 80),
+            max(self.twin.minimumSizeHint().height() + 40, available_height - min_log_height - 70),
         )
         self.ui.twinGroup.setTitle("")
         self.ui.twinGroup.setFixedHeight(required_twin_height)
@@ -2324,10 +2336,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self.mainSplitter.setHandleWidth(6)
         self.mainSplitter.addWidget(left_panel)
         self.mainSplitter.addWidget(right_panel)
-        self.mainSplitter.setStretchFactor(0, 1)
+        self.mainSplitter.setStretchFactor(0, 0)
         self.mainSplitter.setStretchFactor(1, 1)
-        left_size = min(760, max(620, int(target_width * 0.52)))
-        self.mainSplitter.setSizes([left_size, max(470, target_width - left_size)])
+        left_size = min(540, max(460, int(target_width * 0.40)))
+        right_size = max(620, target_width - left_size)
+        self.mainSplitter.setSizes([left_size, right_size])
         self.ui.horizontalLayout.addWidget(self.mainSplitter)
 
         log_layout = self.ui.logGroup.layout()
@@ -2402,7 +2415,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ui.horizontalLayout_2.setStretch(0, 6)
         self.ui.horizontalLayout_2.setStretch(1, 3)
         self.ui.horizontalLayout_2.setStretch(2, 3)
-        self.ui.logTextEdit.setMinimumHeight(190 if available_height >= 760 else 160)
+        self.ui.logTextEdit.setMinimumHeight(150 if available_height >= 760 else 130)
         self.ui.logTextEdit.setSizePolicy(
             QtWidgets.QSizePolicy.Expanding,
             QtWidgets.QSizePolicy.Expanding,
@@ -2421,11 +2434,11 @@ class MainWindow(QtWidgets.QMainWindow):
         for button in self.findChildren(QtWidgets.QPushButton):
             button.setCursor(QtGui.QCursor(QtCore.Qt.PointingHandCursor))
             if button.objectName() == "twinKeyButton":
-                button.setMinimumHeight(42)
-                button.setMaximumHeight(48)
+                button.setMinimumHeight(38)
+                button.setMaximumHeight(44)
                 continue
-            button.setMinimumHeight(36)
-            button.setMinimumWidth(max(button.minimumWidth(), 104))
+            button.setMinimumHeight(34)
+            button.setMinimumWidth(max(button.minimumWidth(), 76))
         for button in getattr(self.twin, "key_buttons", []):
             button.setMinimumWidth(0)
 
@@ -2450,14 +2463,14 @@ class MainWindow(QtWidgets.QMainWindow):
             if line_edit is not None:
                 line_edit.setClearButtonEnabled(False)
 
-        self.ui.gridLayout.setColumnMinimumWidth(0, 92)
-        self.ui.gridLayout.setColumnMinimumWidth(2, 112)
-        self.ui.gridLayout.setColumnMinimumWidth(3, 84)
+        self.ui.gridLayout.setColumnMinimumWidth(0, 54)
+        self.ui.gridLayout.setColumnMinimumWidth(2, 70)
+        self.ui.gridLayout.setColumnMinimumWidth(3, 64)
         self.ui.gridLayout.setColumnStretch(0, 0)
-        self.ui.gridLayout.setColumnStretch(1, 4)
+        self.ui.gridLayout.setColumnStretch(1, 1)
         self.ui.gridLayout.setColumnStretch(2, 0)
         self.ui.gridLayout.setColumnStretch(3, 0)
-        self.ui.gridLayout.setHorizontalSpacing(12)
+        self.ui.gridLayout.setHorizontalSpacing(8)
         self.ui.gridLayout.setVerticalSpacing(8)
         self.ui.gridLayout.setContentsMargins(16, 30, 16, 12)
         self.ui.gridLayout.setRowMinimumHeight(0, 24)
@@ -2465,18 +2478,15 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ui.gridLayout.setRowMinimumHeight(2, 44)
         self.ui.gridLayout.setRowMinimumHeight(3, 24)
         self.ui.gridLayout.setRowMinimumHeight(4, 42)
-        self.ui.gridLayout_2.setColumnMinimumWidth(0, 86)
-        self.ui.gridLayout_2.setColumnMinimumWidth(2, 116)
-        self.ui.gridLayout_2.setColumnMinimumWidth(3, 104)
-        self.ui.gridLayout_2.setColumnStretch(0, 0)
-        self.ui.gridLayout_2.setColumnStretch(1, 4)
-        self.ui.gridLayout_2.setColumnStretch(2, 0)
-        self.ui.gridLayout_2.setColumnStretch(3, 0)
-        self.ui.gridLayout_2.setHorizontalSpacing(12)
-        self.ui.gridLayout_2.setVerticalSpacing(18)
-        self.ui.gridLayout_2.setContentsMargins(14, 32, 14, 16)
-        for row in range(7):
-            self.ui.gridLayout_2.setRowMinimumHeight(row, 52)
+        for column in range(4):
+            self.ui.gridLayout_2.setColumnMinimumWidth(column, 0)
+            self.ui.gridLayout_2.setColumnStretch(column, 0)
+        self.ui.gridLayout_2.setColumnStretch(0, 1)
+        self.ui.gridLayout_2.setHorizontalSpacing(0)
+        self.ui.gridLayout_2.setVerticalSpacing(8)
+        self.ui.gridLayout_2.setContentsMargins(12, 26, 12, 12)
+        for row in range(8):
+            self.ui.gridLayout_2.setRowMinimumHeight(row, 44)
         self.ui.verticalLayout_2.setSpacing(10)
         self.ui.verticalLayout_2.setContentsMargins(12, 28, 12, 12)
         self.ui.verticalLayout_3.setSpacing(8)
@@ -2567,6 +2577,27 @@ class MainWindow(QtWidgets.QMainWindow):
         layout.addWidget(self.ntpTimeWriteHintLabel, 3, 0, 1, 4)
         layout.addWidget(self.ui.syncNowButton, 4, 0, 1, 4)
 
+        for editor in (self.ui.dateEdit, self.ui.timeEdit):
+            editor.setMinimumWidth(0)
+            editor.setSizePolicy(
+                QtWidgets.QSizePolicy.Ignored,
+                QtWidgets.QSizePolicy.Fixed,
+            )
+        for button in (
+            self.ui.applyDateButton,
+            self.ui.queryDateButton,
+            self.ui.applyTimeButton,
+            self.ui.queryTimeButton,
+        ):
+            button.setMinimumWidth(64)
+            button.setMaximumWidth(78)
+            button.setMinimumHeight(34)
+            button.setMaximumHeight(38)
+            button.setSizePolicy(
+                QtWidgets.QSizePolicy.Fixed,
+                QtWidgets.QSizePolicy.Fixed,
+            )
+
         self.ui.syncNowButton.setText("NTP 对时并写入 S800")
         self.ui.syncNowButton.setMinimumHeight(38)
         self.ui.clockGroup.setMinimumHeight(220)
@@ -2577,8 +2608,15 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         layout = self.ui.gridLayout
         layout.setContentsMargins(16, 28, 16, 12)
-        layout.setHorizontalSpacing(12)
+        layout.setHorizontalSpacing(8)
         layout.setVerticalSpacing(6)
+        layout.setColumnMinimumWidth(0, 54)
+        layout.setColumnMinimumWidth(2, 70)
+        layout.setColumnMinimumWidth(3, 64)
+        layout.setColumnStretch(0, 0)
+        layout.setColumnStretch(1, 1)
+        layout.setColumnStretch(2, 0)
+        layout.setColumnStretch(3, 0)
         for row, height in {
             0: 28,
             1: 42,
@@ -2963,6 +3001,18 @@ class MainWindow(QtWidgets.QMainWindow):
         self.weatherInfoLabel.setProperty("class", "infoChip")
         self.sunriseSunsetLabel = QtWidgets.QLabel("日出/日落: -- / --", network_group)
         self.sunriseSunsetLabel.setProperty("class", "infoChip")
+        for label in (
+            self.cityInfoLabel,
+            self.networkTimeLabel,
+            self.weatherInfoLabel,
+            self.sunriseSunsetLabel,
+        ):
+            label.setWordWrap(True)
+            label.setMinimumWidth(0)
+            label.setSizePolicy(
+                QtWidgets.QSizePolicy.Ignored,
+                QtWidgets.QSizePolicy.Preferred,
+            )
 
         sync_button_row = QtWidgets.QWidget(network_group)
         sync_button_layout = QtWidgets.QHBoxLayout(sync_button_row)

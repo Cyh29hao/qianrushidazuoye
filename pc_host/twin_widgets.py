@@ -264,8 +264,8 @@ class DigitalTwinWidget(QtWidgets.QWidget):
 
         self.grid = QtWidgets.QGridLayout()
         self.grid.setContentsMargins(0, 0, 0, 0)
-        self.grid.setHorizontalSpacing(8)
-        self.grid.setVerticalSpacing(8)
+        self.grid.setHorizontalSpacing(7)
+        self.grid.setVerticalSpacing(6)
 
         self.key_buttons: list[QtWidgets.QPushButton] = []
         self.key_button_by_name: dict[str, QtWidgets.QPushButton] = {}
@@ -289,11 +289,11 @@ class DigitalTwinWidget(QtWidgets.QWidget):
                 button.setToolTip("短按请求 PC 对时；板端长按切换 DAY/NIGHT")
             if key_name == "USER2":
                 button.setToolTip("USER2: 非编辑状态显示天气短显；编辑状态作为 SUB 减一键")
-            button.setMinimumHeight(42)
-            button.setMaximumHeight(48)
+            button.setMinimumHeight(38)
+            button.setMaximumHeight(44)
             button.setStyleSheet(self.key_button_base_style)
             font = button.font()
-            font.setPointSize(9)
+            font.setPointSize(8)
             font.setBold(True)
             button.setFont(font)
             button.clicked.connect(
