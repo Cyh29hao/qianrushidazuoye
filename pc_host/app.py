@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import html
 import os
+import random
 import subprocess
 import sys
 import threading
@@ -199,7 +200,7 @@ class CollapsibleNavWidget(QtWidgets.QWidget):
 
 
 class MainWindow(QtWidgets.QMainWindow):
-    weather_refresh_finished = QtCore.pyqtSignal(object, object, bool, int)
+    weather_refresh_finished = QtCore.pyqtSignal(object, object, bool, int, object)
     ntp_sync_finished = QtCore.pyqtSignal(object, object, str, int)
     test_point_finished = QtCore.pyqtSignal(str)
     test_run_finished = QtCore.pyqtSignal(str, bool)
@@ -247,6 +248,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.sync_watchdog_token = 0
         self.ntp_watchdog_token = 0
         self.weather_watchdog_token = 0
+        self.weather_timeout_ntp_source = ""
         self.runtime_shadow_base_iso = ""
         self.runtime_shadow_base_datetime: datetime | None = None
         self.runtime_shadow_base_monotonic = 0.0
@@ -267,6 +269,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.pending_mode_origin = ""
         self.pending_mode_value = ""
         self.pending_mode_deadline = 0.0
+        self.last_mode_resync_monotonic = 0.0
         self.board_ready_seen = False
         self.local_display_override_text = ""
         self.local_display_override_started = 0.0
@@ -627,8 +630,8 @@ class MainWindow(QtWidgets.QMainWindow):
     def _message_display_duration_s(self, text: str) -> float:
         visible_len = max(1, len(text.strip()))
         if visible_len <= 8:
-            return 5.0
-        return 8.0
+            return 7.0
+        return 10.0
 
     def _scroll_leg_count(self, limit: int) -> int:
         if limit <= 0:
@@ -672,9 +675,10 @@ class MainWindow(QtWidgets.QMainWindow):
             return self._visible_text_to_frame(text)
         elapsed = max(0.0, time.monotonic() - started_at)
         limit = max(0, len(text) - 8)
-        duration = min(10.0, max(5.0, duration_s))
+        duration = min(10.0, max(7.0, duration_s))
+        scroll_duration = max(5.0, duration - 2.0)
         max_step = self._scroll_max_step(limit)
-        interval = duration / max(1, max_step + 1)
+        interval = scroll_duration / max(1, max_step + 1)
         step = min(max_step, int(elapsed / max(0.1, interval)))
         offset = self._scroll_offset_for_step(step, limit)
         if self.runtime_state.format == "RIGHT":
@@ -1392,14 +1396,21 @@ class MainWindow(QtWidgets.QMainWindow):
                 background: transparent;
             }}
             QLabel#twinTitle {{
-                font-size: 10px;
+                font-size: 9px;
                 font-weight: 600;
                 color: {palette['title']};
             }}
             QLabel#twinHeaderLabel {{
-                font-size: 12px;
+                font-size: 11px;
                 font-weight: 700;
                 color: {palette['title']};
+            }}
+            QToolTip {{
+                background: {palette['chip_bg']};
+                color: {palette['chip_text']};
+                border: 1px solid {palette['chip_border']};
+                border-radius: 6px;
+                padding: 6px 8px;
             }}
             QLabel.infoChip {{
                 background: {palette['chip_bg']};
@@ -1436,10 +1447,10 @@ class MainWindow(QtWidgets.QMainWindow):
                 background: {palette['button']};
                 color: white;
                 border: none;
-                border-radius: 7px;
-                padding: 4px 6px;
-                min-height: 36px;
-                font-size: 9px;
+                border-radius: 6px;
+                padding: 2px 4px;
+                min-height: 26px;
+                font-size: 8px;
                 font-weight: 700;
             }}
             QPushButton#twinKeyButton:hover {{
@@ -2161,7 +2172,11 @@ class MainWindow(QtWidgets.QMainWindow):
         group = self.ui.displayGroup
         layout = self.ui.gridLayout_2
         while layout.count():
-            layout.takeAt(0)
+            item = layout.takeAt(0)
+            widget = item.widget()
+            if isinstance(widget, QtWidgets.QLabel):
+                widget.setParent(None)
+                widget.deleteLater()
         layout.setContentsMargins(12, 26, 12, 12)
         layout.setHorizontalSpacing(0)
         layout.setVerticalSpacing(8)
@@ -2171,23 +2186,19 @@ class MainWindow(QtWidgets.QMainWindow):
         layout.setColumnStretch(0, 1)
 
         self.ui.applyModeButton.setText("日夜切换")
-        self.ui.sendLedButton.setText("设置 LED")
         self.ui.sendMessageButton.setText("发送 MSG")
         self.usernameSaveButton.setText("确认用户名")
 
         for combo in (self.ui.displayToggleCombo, self.ui.formatCombo, self.ui.modeCombo):
             self._configure_centered_combo(combo)
-        for widget in (self.ui.beepSpinBox, self.ui.ledHexEdit, self.usernameEdit):
+        for widget in (self.usernameEdit,):
             widget.setAlignment(QtCore.Qt.AlignCenter)
         self.ui.messageEdit.setAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
-        self.ui.ledHexEdit.setClearButtonEnabled(False)
 
         rows = [
             self._make_settings_row("显示开关", self.ui.displayToggleCombo, self.ui.applyDisplayButton),
             self._make_settings_row("FORMAT", self.ui.formatCombo, self.ui.applyFormatButton),
             self._make_settings_row("MODE", self.ui.modeCombo, self.ui.applyModeButton),
-            self._make_settings_row("蜂鸣(ms)", self.ui.beepSpinBox, self.ui.sendBeepButton),
-            self._make_settings_row("LED 掩码", self.ui.ledHexEdit, self.ui.sendLedButton),
             self._make_settings_row(
                 "滚动消息",
                 self.ui.messageEdit,
@@ -2197,11 +2208,13 @@ class MainWindow(QtWidgets.QMainWindow):
             ),
             self._make_settings_row("用户名", self.usernameEdit, self.usernameSaveButton),
         ]
+        if hasattr(self, "themeModeLabel"):
+            self.themeModeLabel.setParent(group)
+            self.themeModeLabel.setWordWrap(True)
+            rows.append(self.themeModeLabel)
         for row_index, row in enumerate(rows):
             layout.addWidget(row, row_index, 0)
             layout.setRowMinimumHeight(row_index, 44)
-        layout.addWidget(self.voiceEnabledCheck, len(rows), 0)
-        layout.setRowMinimumHeight(len(rows), 38)
 
     def _refresh_theme_from_mode(self) -> None:
         if hasattr(self, "themeModeLabel"):
@@ -2325,9 +2338,9 @@ class MainWindow(QtWidgets.QMainWindow):
         for combo in self.findChildren(QtWidgets.QComboBox):
             combo.setSizeAdjustPolicy(QtWidgets.QComboBox.AdjustToContents)
 
-        self.ui.messageEdit.setClearButtonEnabled(True)
-        self.ui.rawCommandEdit.setClearButtonEnabled(True)
-        self.ui.ledHexEdit.setClearButtonEnabled(True)
+        self.ui.messageEdit.setClearButtonEnabled(False)
+        self.ui.rawCommandEdit.setClearButtonEnabled(False)
+        self.ui.ledHexEdit.setClearButtonEnabled(False)
         for spinbox in (self.ui.dateEdit, self.ui.timeEdit, self.ui.alarmTimeEdit):
             line_edit = spinbox.findChild(QtWidgets.QLineEdit)
             if line_edit is not None:
@@ -2359,8 +2372,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ui.applyFormatButton.setText("切换并应用")
         self.ui.applyModeButton.setText("日夜切换")
         self.ui.sendLedButton.setText("设置 LED")
-        self.ui.sendPresetButton.setText("发送预设")
-        self.ui.mixedCaseDemoButton.setText("混合大小写")
+        self.ui.sendPresetButton.setText("发送当前指令")
+        self.ui.abbrevDemoButton.setText("缩写当前指令")
+        self.ui.mixedCaseDemoButton.setText("随机混合大小写")
         self.ui.portHintLabel.setText("115200 8N1，自动扫描 COM，显示延迟和事件。")
 
     def _refine_layout(self) -> None:
@@ -2412,10 +2426,9 @@ class MainWindow(QtWidgets.QMainWindow):
         left_panel = QtWidgets.QWidget(self.ui.centralwidget)
         left_panel.setObjectName("mainLeftPanel")
         self.leftPanel = left_panel
-        left_panel.setMinimumWidth(520)
-        left_panel.setMaximumWidth(600)
+        left_panel.setMinimumWidth(620)
         left_panel.setSizePolicy(
-            QtWidgets.QSizePolicy.Preferred,
+            QtWidgets.QSizePolicy.Expanding,
             QtWidgets.QSizePolicy.Expanding,
         )
         left_layout = QtWidgets.QVBoxLayout(left_panel)
@@ -2429,33 +2442,21 @@ class MainWindow(QtWidgets.QMainWindow):
         self.leftSections.add_section("调试与测试", self._build_debug_test_page())
         left_layout.addWidget(self.leftSections)
 
-        right_scroll = QtWidgets.QScrollArea(self.ui.centralwidget)
-        right_scroll.setObjectName("mainRightScrollArea")
-        right_scroll.setWidgetResizable(True)
-        right_scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
-        right_scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
-        right_scroll.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
-        right_scroll.setMinimumWidth(600)
-        right_scroll.setSizePolicy(
-            QtWidgets.QSizePolicy.Expanding,
-            QtWidgets.QSizePolicy.Expanding,
-        )
-        self.rightScrollArea = right_scroll
-
-        right_panel = QtWidgets.QWidget()
+        right_panel = QtWidgets.QWidget(self.ui.centralwidget)
         right_panel.setObjectName("mainRightPanel")
         self.rightPanel = right_panel
-        right_panel.setMinimumWidth(600)
+        self.rightScrollArea = None
+        right_panel.setMinimumWidth(500)
+        right_panel.setMaximumWidth(560)
         right_panel.setSizePolicy(
+            QtWidgets.QSizePolicy.Fixed,
             QtWidgets.QSizePolicy.Expanding,
-            QtWidgets.QSizePolicy.MinimumExpanding,
         )
         right_layout = QtWidgets.QVBoxLayout(right_panel)
         right_layout.setContentsMargins(0, 0, 0, 0)
-        right_layout.setSpacing(10)
+        right_layout.setSpacing(8)
         right_layout.addWidget(self.ui.twinGroup, 0)
         right_layout.addWidget(self.ui.logGroup, 1)
-        right_scroll.setWidget(right_panel)
 
         self.ui.connectionGroup.setMinimumHeight(124)
         self.ui.clockGroup.setMinimumHeight(178)
@@ -2463,20 +2464,20 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ui.demoGroup.setMinimumHeight(220)
 
         available_height = max(target_height, available.height())
-        min_log_height = 240 if available_height >= 760 else 190
+        min_log_height = 120 if available_height >= 760 else 90
         self.twin.ensurePolished()
         twin_content_height = max(
             self.twin.sizeHint().height(),
             self.twin.minimumSizeHint().height(),
         )
-        required_twin_height = max(twin_content_height + 58, 440)
+        required_twin_height = max(twin_content_height + 32, 220)
         self.ui.twinGroup.setTitle("")
-        self.twin.setMinimumHeight(twin_content_height + 12)
+        self.twin.setMinimumHeight(twin_content_height)
         self.ui.twinGroup.setMinimumHeight(required_twin_height)
-        self.ui.twinGroup.setMaximumHeight(16777215)
+        self.ui.twinGroup.setMaximumHeight(required_twin_height + 10)
         self.ui.twinGroup.setSizePolicy(
             QtWidgets.QSizePolicy.Expanding,
-            QtWidgets.QSizePolicy.Preferred,
+            QtWidgets.QSizePolicy.Fixed,
         )
 
         self.ui.logGroup.setSizePolicy(
@@ -2485,20 +2486,16 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         self.ui.logGroup.setTitle("")
         self.ui.logGroup.setMinimumHeight(min_log_height)
-        right_panel.setMinimumHeight(required_twin_height + min_log_height + 18)
 
         self.mainSplitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal, self.ui.centralwidget)
         self.mainSplitter.setChildrenCollapsible(False)
         self.mainSplitter.setHandleWidth(6)
         self.mainSplitter.addWidget(left_panel)
-        self.mainSplitter.addWidget(right_scroll)
-        self.mainSplitter.setStretchFactor(0, 0)
-        self.mainSplitter.setStretchFactor(1, 1)
-        right_min_width = 600
-        left_size = min(600, max(540, int(target_width * 0.42)))
-        if target_width - left_size < right_min_width:
-            left_size = max(520, target_width - right_min_width)
-        right_size = max(right_min_width, target_width - left_size)
+        self.mainSplitter.addWidget(right_panel)
+        self.mainSplitter.setStretchFactor(0, 1)
+        self.mainSplitter.setStretchFactor(1, 0)
+        right_size = min(540, max(500, int(target_width * 0.36)))
+        left_size = max(620, target_width - right_size - 20)
         self.mainSplitter.setSizes([left_size, right_size])
         self.ui.horizontalLayout.addWidget(self.mainSplitter)
 
@@ -2574,7 +2571,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ui.horizontalLayout_2.setStretch(0, 6)
         self.ui.horizontalLayout_2.setStretch(1, 3)
         self.ui.horizontalLayout_2.setStretch(2, 3)
-        self.ui.logTextEdit.setMinimumHeight(150 if available_height >= 760 else 130)
+        self.ui.logTextEdit.setMinimumHeight(86 if available_height >= 760 else 72)
         self.ui.logTextEdit.setSizePolicy(
             QtWidgets.QSizePolicy.Expanding,
             QtWidgets.QSizePolicy.Expanding,
@@ -2593,8 +2590,8 @@ class MainWindow(QtWidgets.QMainWindow):
         for button in self.findChildren(QtWidgets.QPushButton):
             button.setCursor(QtGui.QCursor(QtCore.Qt.PointingHandCursor))
             if button.objectName() == "twinKeyButton":
-                button.setMinimumHeight(40)
-                button.setMaximumHeight(48)
+                button.setMinimumHeight(28)
+                button.setMaximumHeight(32)
                 continue
             button.setMinimumHeight(34)
             button.setMinimumWidth(max(button.minimumWidth(), 76))
@@ -2614,9 +2611,9 @@ class MainWindow(QtWidgets.QMainWindow):
         for spinbox in self.findChildren(QtWidgets.QAbstractSpinBox):
             self._install_wheel_guard(spinbox)
 
-        self.ui.messageEdit.setClearButtonEnabled(True)
-        self.ui.rawCommandEdit.setClearButtonEnabled(True)
-        self.ui.ledHexEdit.setClearButtonEnabled(True)
+        self.ui.messageEdit.setClearButtonEnabled(False)
+        self.ui.rawCommandEdit.setClearButtonEnabled(False)
+        self.ui.ledHexEdit.setClearButtonEnabled(False)
         for spinbox in (self.ui.dateEdit, self.ui.timeEdit, self.ui.alarmTimeEdit):
             line_edit = spinbox.findChild(QtWidgets.QLineEdit)
             if line_edit is not None:
@@ -2661,10 +2658,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ui.applyFormatButton.setText("切换并应用")
         self.ui.applyModeButton.setText("日夜切换")
         self.ui.sendLedButton.setText("设置 LED")
-        self.ui.sendPresetButton.setText("发送预设")
-        self.ui.mixedCaseDemoButton.setText("混合大小写")
+        self.ui.sendPresetButton.setText("发送当前指令")
+        self.ui.abbrevDemoButton.setText("缩写当前指令")
+        self.ui.mixedCaseDemoButton.setText("随机混合大小写")
         self._normalize_groupbox_layouts()
         self._compact_sync_clock_layout()
+        self._configure_protocol_test_group()
 
     def _create_scroll_page(
         self,
@@ -2814,6 +2813,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.scheduleDisableAlarmButton.setVisible(False)
         self.scheduleQueryAlarmButton = QtWidgets.QPushButton("查询", group)
         self.scheduleQueryAlarmButton.setMaximumWidth(96)
+        self.alarmVoiceEnabledCheck = QtWidgets.QCheckBox("启用语音播报", group)
+        self.voiceEnabledCheck = self.alarmVoiceEnabledCheck
         self.scheduleAlarmStatusLabel = QtWidgets.QLabel(
             "当前状态：关    触发时间：--",
             group,
@@ -2838,9 +2839,10 @@ class MainWindow(QtWidgets.QMainWindow):
         layout.addWidget(QtWidgets.QLabel("触发时间"), 0, 0)
         layout.addWidget(self.scheduleAlarmTimeEdit, 0, 1, 1, 2)
         layout.addWidget(self.scheduleAlarmStatusLabel, 1, 0, 1, 3)
-        layout.addWidget(button_row, 2, 1, 1, 2)
-        layout.addWidget(self.scheduleAlarmHintLabel, 3, 0, 1, 3)
-        self._style_form_grid(layout, label_width=92, row_height=48)
+        layout.addWidget(self.alarmVoiceEnabledCheck, 2, 1, 1, 2)
+        layout.addWidget(button_row, 3, 1, 1, 2)
+        layout.addWidget(self.scheduleAlarmHintLabel, 4, 0, 1, 3)
+        self._style_form_grid(layout, label_width=92, row_height=42)
         return group
 
     def _build_schedule_management_group(self, parent: QtWidgets.QWidget) -> QtWidgets.QGroupBox:
@@ -2875,7 +2877,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.scheduleTitleEdit = QtWidgets.QLineEdit(schedule_group)
         self.scheduleBoardLabelEdit = QtWidgets.QLineEdit(schedule_group)
         self.scheduleBoardLabelEdit.setMaxLength(32)
-        self.scheduleBoardLabelEdit.setPlaceholderText("板端标签，最多 32 个 ASCII 字符；超出 8 位自动走马灯")
+        self.scheduleBoardLabelEdit.setPlaceholderText("最多 32 字，超 8 位滚动")
         self.scheduleTimeEdit = QtWidgets.QTimeEdit(schedule_group)
         self.scheduleTimeEdit.setDisplayFormat("HH:mm:ss")
         self.scheduleTimeEdit.setTime(QtCore.QTime(8, 0, 0))
@@ -2886,8 +2888,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self.scheduleDateEdit.setDate(QtCore.QDate.currentDate())
         self.scheduleRingCombo = QtWidgets.QComboBox(schedule_group)
         self.scheduleRingCombo.addItems([label for _, label in self.ring_names])
+        self.scheduleRingPreviewButton = QtWidgets.QPushButton("预览", schedule_group)
+        self.scheduleVoiceEnabledCheck = QtWidgets.QCheckBox("启用语音播报", schedule_group)
         self.scheduleVoiceEdit = QtWidgets.QLineEdit(schedule_group)
         self.scheduleVoiceEdit.setPlaceholderText("语音播报文案，留空则不播报")
+        self.quietNightCheck = QtWidgets.QCheckBox("夜间抑制日程铃声", schedule_group)
         self.scheduleWeekdayChecks: list[QtWidgets.QCheckBox] = []
 
         weekday_host = QtWidgets.QWidget(schedule_group)
@@ -2905,6 +2910,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self.scheduleDateLabel = QtWidgets.QLabel("执行日期", schedule_group)
         self.scheduleWeekdayLabel = QtWidgets.QLabel("每周", schedule_group)
         self.scheduleWeekdayHost = weekday_host
+        ring_row = QtWidgets.QWidget(schedule_group)
+        ring_layout = QtWidgets.QHBoxLayout(ring_row)
+        ring_layout.setContentsMargins(0, 0, 0, 0)
+        ring_layout.setSpacing(8)
+        ring_layout.addWidget(self.scheduleRingCombo, 1)
+        ring_layout.addWidget(self.scheduleRingPreviewButton)
 
         form.addWidget(QtWidgets.QLabel("标题"), 0, 0)
         form.addWidget(self.scheduleTitleEdit, 0, 1)
@@ -2919,9 +2930,11 @@ class MainWindow(QtWidgets.QMainWindow):
         form.addWidget(self.scheduleWeekdayLabel, 5, 0)
         form.addWidget(weekday_host, 5, 1)
         form.addWidget(QtWidgets.QLabel("铃声"), 6, 0)
-        form.addWidget(self.scheduleRingCombo, 6, 1)
-        form.addWidget(QtWidgets.QLabel("语音"), 7, 0)
-        form.addWidget(self.scheduleVoiceEdit, 7, 1)
+        form.addWidget(ring_row, 6, 1)
+        form.addWidget(self.quietNightCheck, 7, 1)
+        form.addWidget(QtWidgets.QLabel("语音"), 8, 0)
+        form.addWidget(self.scheduleVoiceEnabledCheck, 8, 1)
+        form.addWidget(self.scheduleVoiceEdit, 9, 1)
 
         button_row = QtWidgets.QWidget(schedule_group)
         button_layout = QtWidgets.QHBoxLayout(button_row)
@@ -2929,10 +2942,10 @@ class MainWindow(QtWidgets.QMainWindow):
         button_layout.setSpacing(8)
         button_layout.addWidget(self.scheduleSaveButton)
 
-        form.addWidget(button_row, 8, 1)
-        form.addWidget(self.scheduleDeleteButton, 9, 1)
+        form.addWidget(button_row, 10, 1)
+        form.addWidget(self.scheduleDeleteButton, 11, 1)
         schedule_layout.addLayout(form)
-        self._style_form_grid(form, label_width=92, row_height=48)
+        self._style_form_grid(form, label_width=92, row_height=42)
         return schedule_group
 
     def _build_dashboard_card(
@@ -3024,19 +3037,44 @@ class MainWindow(QtWidgets.QMainWindow):
         outer.addStretch(1)
         return page
 
+    def _build_debug_hardware_group(self, parent: QtWidgets.QWidget) -> QtWidgets.QGroupBox:
+        group = QtWidgets.QGroupBox("板端硬件测试", parent)
+        layout = QtWidgets.QGridLayout(group)
+        layout.setContentsMargins(12, 22, 12, 12)
+        layout.setHorizontalSpacing(10)
+        layout.setVerticalSpacing(8)
+        layout.setColumnStretch(1, 1)
+        self.ui.sendLedButton.setText("设置 LED")
+        self.ui.beepSpinBox.setAlignment(QtCore.Qt.AlignCenter)
+        self.ui.ledHexEdit.setAlignment(QtCore.Qt.AlignCenter)
+        self.ui.ledHexEdit.setClearButtonEnabled(False)
+        layout.addWidget(QtWidgets.QLabel("蜂鸣(ms)", group), 0, 0)
+        layout.addWidget(self.ui.beepSpinBox, 0, 1)
+        layout.addWidget(self.ui.sendBeepButton, 0, 2)
+        layout.addWidget(QtWidgets.QLabel("LED 掩码", group), 1, 0)
+        layout.addWidget(self.ui.ledHexEdit, 1, 1)
+        layout.addWidget(self.ui.sendLedButton, 1, 2)
+        hint = QtWidgets.QLabel("用于验收时快速验证蜂鸣器和 8 位 LED；日常设置请优先使用上方功能页。", group)
+        hint.setWordWrap(True)
+        hint.setProperty("class", "infoChip")
+        hint.setStyleSheet("")
+        layout.addWidget(hint, 2, 0, 1, 3)
+        self._style_form_grid(layout, label_width=82, row_height=42)
+        return group
+
     def _build_debug_test_page(self) -> QtWidgets.QScrollArea:
         page, host, outer = self._create_scroll_page()
         self._configure_sync_clock_group()
         outer.addWidget(self.ui.clockGroup)
         self.ui.demoGroup.setTitle("调试与协议")
         outer.addWidget(self.ui.demoGroup)
+        outer.addWidget(self._build_debug_hardware_group(host))
 
         test_group = QtWidgets.QGroupBox("自动化测试", host)
         test_layout = QtWidgets.QVBoxLayout(test_group)
         test_layout.setContentsMargins(16, 32, 16, 14)
         test_layout.setSpacing(12)
         self.runChecksButton = QtWidgets.QPushButton("一键运行联合测试", test_group)
-        self.autoRunTestsCheck = QtWidgets.QCheckBox("启动后自动执行一次自动化测试", test_group)
         self.testStatusLabel = QtWidgets.QLabel("状态: 未运行", test_group)
         self.testStatusLabel.setProperty("class", "infoChip")
         self.testStatusLabel.setStyleSheet("")
@@ -3068,7 +3106,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self.testOutputText.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
         self.testOutputText.setPlaceholderText("测试输出会显示在这里。")
         test_layout.addWidget(self.runChecksButton)
-        test_layout.addWidget(self.autoRunTestsCheck)
         test_layout.addWidget(self.testStatusLabel)
         test_layout.addWidget(self.testEstimateLabel)
         test_layout.addWidget(self.testExplainLabel)
@@ -3110,28 +3147,164 @@ class MainWindow(QtWidgets.QMainWindow):
         ):
             widget.setAlignment(QtCore.Qt.AlignCenter)
 
-        preset_items = [
-            "*SET:DATE YEAR 2026 MONTH 06 DATE 02",
-            "*SET:TIME HOUR 12 MINUTE 30 SECOND 45",
-            "*SET:ALARM HOUR 07 MINUTE 30 SECOND 00",
-            "*SET:MSG Hello Clock",
-            "*SET:DISPLAY OFF",
-            "*SET:DISPLAY ON",
-        ]
-        self.ui.presetCombo.addItems(preset_items)
+        self._configure_protocol_test_group()
         self._apply_runtime_state_to_ui()
+
+    def _protocol_command_templates(self) -> list[tuple[str, str]]:
+        return [
+            ("PING 心跳 | *PING", "*PING"),
+            ("RST 软复位 | *RST", "*RST"),
+            ("GET 日期 | *GET:DATE", "*GET:DATE"),
+            ("GET 时间 | *GET:TIME", "*GET:TIME"),
+            ("GET 闹钟 | *GET:ALARM", "*GET:ALARM"),
+            ("GET 显示开关 | *GET:DISPLAY", "*GET:DISPLAY"),
+            ("GET FORMAT | *GET:FORMAT", "*GET:FORMAT"),
+            ("GET MODE | *GET:MODE", "*GET:MODE"),
+            ("SET 日期 | *SET:DATE YEAR 2026 MONTH 06 DATE 09", "*SET:DATE YEAR 2026 MONTH 06 DATE 09"),
+            ("SET 时间 | *SET:TIME HOUR 12 MINUTE 30 SECOND 45", "*SET:TIME HOUR 12 MINUTE 30 SECOND 45"),
+            ("SET 闹钟 | *SET:ALARM HOUR 07 MINUTE 30 SECOND 00", "*SET:ALARM HOUR 07 MINUTE 30 SECOND 00"),
+            ("关闭闹钟 | *SET:ALARM OFF", "*SET:ALARM OFF"),
+            ("显示 ON | *SET:DISPLAY ON", "*SET:DISPLAY ON"),
+            ("显示 OFF | *SET:DISPLAY OFF", "*SET:DISPLAY OFF"),
+            ("FORMAT LEFT | *SET:FORMAT LEFT", "*SET:FORMAT LEFT"),
+            ("FORMAT RIGHT | *SET:FORMAT RIGHT", "*SET:FORMAT RIGHT"),
+            ("MODE DAY | *SET:MODE DAY", "*SET:MODE DAY"),
+            ("MODE NIGHT | *SET:MODE NIGHT", "*SET:MODE NIGHT"),
+            ("滚动消息 | *SET:MSG HELLO_CLOCK_DEMO", "*SET:MSG HELLO_CLOCK_DEMO"),
+            ("蜂鸣 | *SET:BEEP 500", "*SET:BEEP 500"),
+            ("LED 掩码 | *SET:LED 80", "*SET:LED 80"),
+            ("天气短显 | *SET:WEATHER DISP SUN29C__ LED 05", "*SET:WEATHER DISP SUN29C__ LED 05"),
+            ("铃声 DEFAULT | *SET:RING DEFAULT", "*SET:RING DEFAULT"),
+            ("铃声 WORK_START | *SET:RING WORK_START", "*SET:RING WORK_START"),
+            ("铃声 WORK_END | *SET:RING WORK_END", "*SET:RING WORK_END"),
+            ("铃声 WAKE | *SET:RING WAKE", "*SET:RING WAKE"),
+            ("铃声 SONG | *SET:RING SONG", "*SET:RING SONG"),
+            ("模拟 USER1 | *SET:KEY USER1", "*SET:KEY USER1"),
+            ("模拟 USER2 | *SET:KEY USER2", "*SET:KEY USER2"),
+            ("模拟 DISP | *SET:KEY DISP", "*SET:KEY DISP"),
+            ("模拟 SPEED | *SET:KEY SPEED", "*SET:KEY SPEED"),
+            ("模拟 FORMAT | *SET:KEY FORMAT", "*SET:KEY FORMAT"),
+            ("模拟 EXT | *SET:KEY EXT", "*SET:KEY EXT"),
+            ("模拟 FUNC | *SET:KEY FUNC", "*SET:KEY FUNC"),
+            ("模拟 SHIFT | *SET:KEY SHIFT", "*SET:KEY SHIFT"),
+            ("模拟 ADD | *SET:KEY ADD", "*SET:KEY ADD"),
+            ("模拟 SAVE | *SET:KEY SAVE", "*SET:KEY SAVE"),
+            ("错误格式测试 | *SET:TIME HOUR 99 MINUTE 00 SECOND 00", "*SET:TIME HOUR 99 MINUTE 00 SECOND 00"),
+        ]
+
+    def _configure_protocol_test_group(self) -> None:
+        self.ui.demoGroup.setTitle("协议测试台")
+        layout = self.ui.verticalLayout_3
+        reusable = {
+            self.ui.presetCombo,
+            self.ui.rawCommandEdit,
+            self.ui.sendPresetButton,
+            self.ui.abbrevDemoButton,
+            self.ui.mixedCaseDemoButton,
+            self.ui.sendRawCommandButton,
+        }
+        while layout.count():
+            item = layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None and widget not in reusable:
+                if widget.objectName() == "protocolActionRow":
+                    for button in (
+                        self.ui.sendPresetButton,
+                        self.ui.abbrevDemoButton,
+                        self.ui.mixedCaseDemoButton,
+                    ):
+                        button.setParent(self.ui.demoGroup)
+                widget.setParent(None)
+                widget.deleteLater()
+
+        self.protocolHintLabel = QtWidgets.QLabel(
+            "先选完整指令模板，可在文本框里手改；缩写和随机大小写都会作用到当前文本框，最终统一发送并在日志看 TX/RX。",
+            self.ui.demoGroup,
+        )
+        self.protocolHintLabel.setProperty("class", "infoChip")
+        self.protocolHintLabel.setWordWrap(True)
+        self.protocolHintLabel.setStyleSheet("")
+
+        self.ui.presetCombo.clear()
+        for label, command in self._protocol_command_templates():
+            self.ui.presetCombo.addItem(label, command)
+        self.ui.presetCombo.setMinimumContentsLength(24)
+        self.ui.presetCombo.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
+        self.ui.rawCommandEdit.setPlaceholderText("当前指令，可直接编辑，例如 *GET:TIME")
+        self.ui.rawCommandEdit.setClearButtonEnabled(False)
+
+        self.ui.sendPresetButton.setText("发送当前指令")
+        self.ui.abbrevDemoButton.setText("缩写当前指令")
+        self.ui.mixedCaseDemoButton.setText("随机混合大小写")
+        self.ui.sendRawCommandButton.setText("发送文本框")
+        self.ui.sendRawCommandButton.hide()
+
+        action_row = QtWidgets.QWidget(self.ui.demoGroup)
+        action_row.setObjectName("protocolActionRow")
+        action_layout = QtWidgets.QHBoxLayout(action_row)
+        action_layout.setContentsMargins(0, 0, 0, 0)
+        action_layout.setSpacing(8)
+        action_layout.addWidget(self.ui.sendPresetButton)
+        action_layout.addWidget(self.ui.abbrevDemoButton)
+        action_layout.addWidget(self.ui.mixedCaseDemoButton)
+
+        layout.addWidget(self.protocolHintLabel)
+        layout.addWidget(self.ui.presetCombo)
+        layout.addWidget(self.ui.rawCommandEdit)
+        layout.addWidget(action_row)
+        self._apply_protocol_template(0)
+
+    def _apply_protocol_template(self, index: int) -> None:
+        command = self.ui.presetCombo.itemData(index)
+        if not command:
+            command = self.ui.presetCombo.currentText().strip()
+        self.ui.rawCommandEdit.setText(str(command))
+
+    def _abbreviate_protocol_command(self, command: str) -> str:
+        replacements = {
+            "DISPLAY": "DISP",
+            "FORMAT": "FOR",
+            "WEATHER": "WEAT",
+            "DEFAULT": "DEF",
+            "WORK_START": "WORK_S",
+            "WORK_END": "WORK_E",
+            "MINUTE": "MIN",
+            "SECOND": "SEC",
+            "MONTH": "MON",
+        }
+        parts = command.strip().split()
+        if not parts:
+            return command
+        return " ".join(replacements.get(part.upper(), part) for part in parts)
+
+    def abbreviate_current_protocol_command(self) -> None:
+        command = self.ui.rawCommandEdit.text().strip()
+        abbreviated = self._abbreviate_protocol_command(command)
+        self.ui.rawCommandEdit.setText(abbreviated)
+        self.log("INFO", f"已缩写当前指令: {abbreviated}")
+
+    def randomize_current_protocol_command_case(self) -> None:
+        command = self.ui.rawCommandEdit.text().strip()
+        mixed = "".join(
+            random.choice((ch.lower(), ch.upper())) if ch.isalpha() else ch
+            for ch in command
+        )
+        self.ui.rawCommandEdit.setText(mixed)
+        self.log("INFO", f"已随机混合大小写: {mixed}")
+
+    def send_protocol_current_command(self) -> None:
+        self.send_command(self.ui.rawCommandEdit.text())
 
     def _build_extension_settings_page(self) -> QtWidgets.QScrollArea:
         page, host, outer = self._create_scroll_page()
 
-        self.ui.displayGroup.setTitle("系统设置")
-        self.voiceEnabledCheck = QtWidgets.QCheckBox("启用语音播报", self.ui.displayGroup)
+        self.ui.displayGroup.setTitle("板端显示与快捷控制")
         self.usernameEdit = QtWidgets.QLineEdit(self.ui.displayGroup)
         self.usernameEdit.setPlaceholderText("默认 用户")
         self.usernameSaveButton = QtWidgets.QPushButton("确认用户名", self.ui.displayGroup)
-        self.ui.gridLayout_2.addWidget(QtWidgets.QLabel("用户名", self.ui.displayGroup), 6, 0)
-        self.ui.gridLayout_2.addWidget(self.usernameEdit, 6, 1)
-        self.ui.gridLayout_2.addWidget(self.usernameSaveButton, 6, 2)
+        self.themeModeLabel = QtWidgets.QLabel("主题状态: DAY", self.ui.displayGroup)
+        self.themeModeLabel.setProperty("class", "infoChip")
+        self.themeModeLabel.setStyleSheet("")
         self._rebuild_system_settings_group()
         outer.addWidget(self.ui.displayGroup)
 
@@ -3161,11 +3334,14 @@ class MainWindow(QtWidgets.QMainWindow):
         self.weatherInfoLabel.setProperty("class", "infoChip")
         self.sunriseSunsetLabel = QtWidgets.QLabel("日出/日落: -- / --", network_group)
         self.sunriseSunsetLabel.setProperty("class", "infoChip")
+        self.ntpStatusLabel = QtWidgets.QLabel("最近 NTP: 未进行网络对时", network_group)
+        self.ntpStatusLabel.setProperty("class", "infoChip")
         for label in (
             self.cityInfoLabel,
             self.networkTimeLabel,
             self.weatherInfoLabel,
             self.sunriseSunsetLabel,
+            self.ntpStatusLabel,
         ):
             label.setWordWrap(True)
             label.setMinimumWidth(0)
@@ -3197,36 +3373,10 @@ class MainWindow(QtWidgets.QMainWindow):
         network_layout.addWidget(self.networkTimeLabel, 5, 1)
         network_layout.addWidget(self.weatherInfoLabel, 6, 1)
         network_layout.addWidget(self.sunriseSunsetLabel, 7, 1)
+        network_layout.addWidget(self.ntpStatusLabel, 8, 1)
         self._style_form_grid(network_layout, label_width=82, row_height=46)
 
-        ring_group = QtWidgets.QGroupBox("扩展提醒与铃声", host)
-        ring_layout = QtWidgets.QGridLayout(ring_group)
-        ring_layout.setContentsMargins(12, 22, 12, 12)
-        ring_layout.setHorizontalSpacing(10)
-        ring_layout.setVerticalSpacing(10)
-        ring_layout.setColumnStretch(1, 1)
-
-        self.ringPreviewCombo = QtWidgets.QComboBox(ring_group)
-        self.ringPreviewCombo.addItems([label for _, label in self.ring_names])
-        self.ringPreviewButton = QtWidgets.QPushButton("预览铃声", ring_group)
-        self.quietNightCheck = QtWidgets.QCheckBox("夜间抑制扩展铃声", ring_group)
-        self.themeModeLabel = QtWidgets.QLabel("主题状态: DAY", ring_group)
-        self.themeModeLabel.setProperty("class", "infoChip")
-        self.themeModeLabel.setStyleSheet("")
-        self.ntpStatusLabel = QtWidgets.QLabel("最近 NTP: 未进行网络对时", ring_group)
-        self.ntpStatusLabel.setProperty("class", "infoChip")
-        self.ntpStatusLabel.setStyleSheet("")
-
-        ring_layout.addWidget(QtWidgets.QLabel("铃声类型"), 0, 0)
-        ring_layout.addWidget(self.ringPreviewCombo, 0, 1)
-        ring_layout.addWidget(self.ringPreviewButton, 1, 1)
-        ring_layout.addWidget(self.quietNightCheck, 2, 1)
-        ring_layout.addWidget(self.themeModeLabel, 3, 1)
-        ring_layout.addWidget(self.ntpStatusLabel, 4, 1)
-        self._style_form_grid(ring_layout, label_width=82, row_height=46)
-
         outer.addWidget(network_group)
-        outer.addWidget(ring_group)
         outer.addStretch(1)
         return page
 
@@ -3272,7 +3422,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.scheduleTitleEdit = QtWidgets.QLineEdit(schedule_group)
         self.scheduleBoardLabelEdit = QtWidgets.QLineEdit(schedule_group)
         self.scheduleBoardLabelEdit.setMaxLength(32)
-        self.scheduleBoardLabelEdit.setPlaceholderText("板端标签，最多 32 个 ASCII 字符；超出 8 位自动走马灯")
+        self.scheduleBoardLabelEdit.setPlaceholderText("最多 32 字，超 8 位滚动")
         self.scheduleTimeEdit = QtWidgets.QTimeEdit(schedule_group)
         self.scheduleTimeEdit.setDisplayFormat("HH:mm:ss")
         self.scheduleTimeEdit.setTime(QtCore.QTime(8, 0, 0))
@@ -3376,10 +3526,6 @@ class MainWindow(QtWidgets.QMainWindow):
                 old_block = checkbox.blockSignals(True)
                 checkbox.setChecked(value)
                 checkbox.blockSignals(old_block)
-            if hasattr(self, "autoRunTestsCheck"):
-                old_block = self.autoRunTestsCheck.blockSignals(True)
-                self.autoRunTestsCheck.setChecked(self.config.auto_run_tests_on_start)
-                self.autoRunTestsCheck.blockSignals(old_block)
             if hasattr(self, "usernameEdit"):
                 self.usernameEdit.setText(self.config.user_name or "用户")
         finally:
@@ -3538,15 +3684,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ui.sendBeepButton.clicked.connect(self.send_beep)
         self.ui.sendLedButton.clicked.connect(self.send_led_overlay)
         self.ui.sendMessageButton.clicked.connect(self.send_message)
-        self.ui.sendPresetButton.clicked.connect(
-            lambda: self.send_command(self.ui.presetCombo.currentText())
-        )
-        self.ui.abbrevDemoButton.clicked.connect(
-            lambda: self.send_command("*SET:DISP OFF")
-        )
-        self.ui.mixedCaseDemoButton.clicked.connect(
-            lambda: self.send_command("*SeT:FoRmAt RiGhT")
-        )
+        self.ui.presetCombo.currentIndexChanged.connect(self._apply_protocol_template)
+        self.ui.sendPresetButton.clicked.connect(self.send_protocol_current_command)
+        self.ui.abbrevDemoButton.clicked.connect(self.abbreviate_current_protocol_command)
+        self.ui.mixedCaseDemoButton.clicked.connect(self.randomize_current_protocol_command_case)
+        self.ui.rawCommandEdit.returnPressed.connect(self.send_protocol_current_command)
         self.ui.sendRawCommandButton.clicked.connect(self.send_raw_command)
         self.ui.clearLogButton.clicked.connect(self.ui.logTextEdit.clear)
         self.ui.exportLogButton.clicked.connect(self.export_log)
@@ -3560,8 +3702,11 @@ class MainWindow(QtWidgets.QMainWindow):
             lambda: self.sync_weather_and_apply(trigger_source="按钮", run_tests=False)
         )
         self.autoDayNightCheck.toggled.connect(self.set_auto_day_night_enabled)
+        self.themeFollowCheck.toggled.connect(lambda _checked: self.save_extension_config(log_message=False))
+        self.alarmVoiceEnabledCheck.toggled.connect(lambda _checked: self.save_extension_config(log_message=False))
+        self.quietNightCheck.toggled.connect(lambda _checked: self.save_extension_config(log_message=False))
         self.usernameSaveButton.clicked.connect(self.save_user_name)
-        self.ringPreviewButton.clicked.connect(self.preview_ring)
+        self.scheduleRingPreviewButton.clicked.connect(self.preview_schedule_ring)
         self.scheduleApplyAlarmButton.clicked.connect(self.toggle_schedule_alarm)
         self.scheduleDisableAlarmButton.clicked.connect(
             self.disable_alarm
@@ -3578,7 +3723,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self.scheduleTable.itemDoubleClicked.connect(self.toggle_schedule_enabled)
         self.scheduleTypeCombo.currentIndexChanged.connect(self._sync_schedule_type_ui)
         self.runChecksButton.clicked.connect(self.run_automated_checks)
-        self.autoRunTestsCheck.toggled.connect(lambda _checked: self.save_extension_config(log_message=False))
 
     def toggle_schedule_enabled(self, item: QtWidgets.QTableWidgetItem) -> None:
         row = item.row()
@@ -3698,8 +3842,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.config.theme_follow_mode = self.themeFollowCheck.isChecked()
         self.config.voice_enabled = self.voiceEnabledCheck.isChecked()
         self.config.quiet_night_rings = self.quietNightCheck.isChecked()
-        if hasattr(self, "autoRunTestsCheck"):
-            self.config.auto_run_tests_on_start = self.autoRunTestsCheck.isChecked()
+        self.config.auto_run_tests_on_start = False
         save_config(APP_DIR, self.config)
         self.sync_extension_widgets_from_config()
         self._refresh_theme_from_mode()
@@ -3882,44 +4025,75 @@ class MainWindow(QtWidgets.QMainWindow):
         trigger_source: str = "按钮",
         run_tests: bool | None = None,
     ) -> None:
-        self.log("INFO", "已开始更新，请稍等片刻；正在定位城市、NTP 对时并刷新天气。")
+        self.log("INFO", "已开始更新，请稍等片刻；正在后台定位城市、刷新天气，随后进行 NTP 对时写入。")
         if hasattr(self, "syncWeatherApplyButton"):
             self.syncWeatherApplyButton.setEnabled(False)
             self.syncWeatherApplyButton.setText("更新中...")
-        QtWidgets.QApplication.processEvents(QtCore.QEventLoop.ExcludeUserInputEvents)
-        self._update_active_place_from_city_input(log_message=True)
-        self.save_extension_config(log_message=False)
-        self.pending_auto_test_after_apply = (
-            self.config.auto_run_tests_on_start if run_tests is None else run_tests
+        self.pending_auto_test_after_apply = bool(run_tests)
+        self.weather_timeout_ntp_source = trigger_source
+        self.refresh_weather_and_push(
+            log_trigger=True,
+            city_text=self.cityEdit.text().strip() if hasattr(self, "cityEdit") else "",
+            resolve_city=True,
+            trigger_source=trigger_source,
+            run_ntp_after_resolve=True,
         )
-        self.sync_ntp_time(trigger_source=trigger_source)
-        self.refresh_weather_and_push(log_trigger=True)
 
-    def refresh_weather_and_push(self, log_trigger: bool = True) -> None:
+    def refresh_weather_and_push(
+        self,
+        log_trigger: bool = True,
+        *,
+        city_text: str = "",
+        resolve_city: bool = False,
+        trigger_source: str = "自动刷新",
+        run_ntp_after_resolve: bool = False,
+    ) -> None:
         if self.weather_refresh_in_progress:
+            if log_trigger:
+                self.log("WARN", "天气刷新仍在进行，已忽略本次重复请求。")
             return
         self.weather_refresh_in_progress = True
         self.weather_watchdog_token += 1
         weather_token = self.weather_watchdog_token
-        place = self._active_place()
-        city_name = place.name
-        latitude = place.latitude
-        longitude = place.longitude
-        timezone_name = place.timezone
+        base_place = SavedPlace(**self._active_place().__dict__)
+        city_name = city_text.strip() or base_place.name
+        if hasattr(self, "weatherInfoLabel"):
+            self.weatherInfoLabel.setText(f"天气: 正在更新 {city_name} ...")
+        if hasattr(self, "syncWeatherApplyButton"):
+            self.syncWeatherApplyButton.setEnabled(False)
+            self.syncWeatherApplyButton.setText("更新中...")
 
         def worker() -> None:
             snapshot = None
             error = None
+            resolved_place = SavedPlace(**base_place.__dict__)
+            resolved_ok = not resolve_city
             try:
+                if resolve_city and city_name:
+                    result = geocode_city(city_name)
+                    resolved_place = SavedPlace(
+                        name=result.name,
+                        latitude=result.latitude,
+                        longitude=result.longitude,
+                        timezone=result.timezone,
+                        utc_offset_seconds=result.utc_offset_seconds,
+                    )
+                    resolved_ok = True
                 snapshot = fetch_weather_snapshot(
-                    city_name,
-                    latitude,
-                    longitude,
-                    timezone_name,
+                    resolved_place.name,
+                    resolved_place.latitude,
+                    resolved_place.longitude,
+                    resolved_place.timezone,
                 )
             except Exception as exc:  # noqa: BLE001
                 error = exc
-            self._emit_signal_safe("weather_refresh_finished", snapshot, error, log_trigger, weather_token)
+            context = {
+                "place": resolved_place if resolved_ok else None,
+                "trigger_source": trigger_source,
+                "run_ntp_after_resolve": run_ntp_after_resolve,
+                "city_name": city_name,
+            }
+            self._emit_signal_safe("weather_refresh_finished", snapshot, error, log_trigger, weather_token, context)
 
         threading.Thread(target=worker, daemon=True).start()
         QtCore.QTimer.singleShot(
@@ -3936,22 +4110,46 @@ class MainWindow(QtWidgets.QMainWindow):
         self.log("ERROR", "天气刷新超过 14 秒未返回，已取消等待；请检查网络、代理或天气接口。")
         append_event_log(APP_DIR, "weather_timeout", "14s")
         self.refresh_dashboard()
+        timeout_source = self.weather_timeout_ntp_source
+        self.weather_timeout_ntp_source = ""
+        if timeout_source:
+            self.sync_ntp_time(trigger_source=timeout_source)
 
-    def _finish_weather_refresh(self, snapshot, error, log_trigger: bool, token: int) -> None:
+    def _finish_weather_refresh(self, snapshot, error, log_trigger: bool, token: int, context: object = None) -> None:
         if token != self.weather_watchdog_token:
             return
         self.weather_refresh_in_progress = False
+        if bool((context if isinstance(context, dict) else {}).get("run_ntp_after_resolve")):
+            self.weather_timeout_ntp_source = ""
         self._restore_sync_buttons_if_idle()
+        ctx = context if isinstance(context, dict) else {}
+        resolved_place = ctx.get("place")
+        trigger_source = str(ctx.get("trigger_source") or "天气刷新")
+        run_ntp_after_resolve = bool(ctx.get("run_ntp_after_resolve"))
+        if isinstance(resolved_place, SavedPlace):
+            self.config.saved_places[self.config.active_place_index] = resolved_place
+            save_config(APP_DIR, self.config)
+            if log_trigger:
+                self.log(
+                    "INFO",
+                    f"城市/时区已更新: {resolved_place.name} | {resolved_place.timezone} | "
+                    f"{format_utc_offset(resolved_place.utc_offset_seconds)}",
+                )
         if error is not None:
             self.pending_auto_test_after_apply = False
             self.last_weather_refresh_at = datetime.now()
             if log_trigger:
                 self.log("ERROR", f"天气刷新失败: {error}")
             append_event_log(APP_DIR, "weather_error", str(error))
+            self.sync_extension_widgets_from_config()
             self.refresh_dashboard()
+            if run_ntp_after_resolve:
+                self.sync_ntp_time(trigger_source=trigger_source)
             return
         if snapshot is None:
             self.pending_auto_test_after_apply = False
+            if run_ntp_after_resolve:
+                self.sync_ntp_time(trigger_source=trigger_source)
             return
 
         self.last_weather_refresh_at = datetime.now()
@@ -3994,6 +4192,8 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.log("WARN", f"!!! 已刷新上位机本地天气配置，未下发板端：{self.weather_summary_text} | {time_context}")
         if self.config.auto_day_night:
             self.apply_auto_day_night(self._selected_zone_now().replace(tzinfo=None), force_apply=True)
+        if run_ntp_after_resolve:
+            self.sync_ntp_time(trigger_source=trigger_source)
         self._maybe_run_pending_auto_test()
 
     def apply_auto_day_night(self, now: datetime, force_apply: bool = False) -> None:
@@ -4017,10 +4217,40 @@ class MainWindow(QtWidgets.QMainWindow):
         append_event_log(APP_DIR, "auto_mode", expected_mode)
         self.refresh_dashboard()
 
-    def preview_ring(self) -> None:
-        ring_name = self.ring_names[self.ringPreviewCombo.currentIndex()][0]
-        self._play_ring_or_fallback(ring_name, "预览铃声")
-        self.log("INFO", f"已预览铃声: {ring_name}")
+    def _resync_mode_to_board_if_conflict(self, board_mode: str, source_text: str) -> bool:
+        desired = self._normalize_mode_value(
+            self.ui.modeCombo.currentText() if hasattr(self.ui, "modeCombo") else self.last_mode,
+            self.last_mode,
+        )
+        if board_mode == desired:
+            return False
+        now = time.monotonic()
+        if now - self.last_mode_resync_monotonic < 2.5:
+            return True
+        self.last_mode_resync_monotonic = now
+        self.log("WARN", f"检测到模式不一致（{source_text}: {board_mode}，PC: {desired}），已按 PC 设置同步到板端。")
+        append_event_log(APP_DIR, "mode_resync", f"{source_text}:{board_mode}->PC:{desired}")
+        self._remember_mode_request(desired, "pc_resync")
+        self.send_command(f"*SET:MODE {desired}")
+        self._set_mode_state(desired)
+        self.refresh_dashboard()
+        return True
+
+    def _send_pc_mode_to_board(self, source_text: str) -> None:
+        if not self.is_connected:
+            return
+        desired = self._normalize_mode_value(
+            self.ui.modeCombo.currentText() if hasattr(self.ui, "modeCombo") else self.last_mode,
+            self.last_mode,
+        )
+        self._remember_mode_request(desired, "pc_resync")
+        self.send_command(f"*SET:MODE {desired}")
+        self.log("INFO", f"{source_text}：已按 PC 当前设置同步昼夜模式 {desired} 到板端。")
+
+    def preview_schedule_ring(self) -> None:
+        ring_name = self.ring_names[self.scheduleRingCombo.currentIndex()][0]
+        self._play_ring_or_fallback(ring_name, "日程铃声预览")
+        self.log("INFO", f"已预览日程铃声: {ring_name}")
 
     def reset_schedule_form(self) -> None:
         self.scheduleTable.clearSelection()
@@ -4030,6 +4260,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.scheduleTypeCombo.setCurrentIndex(0)
         self.scheduleDateEdit.setDate(QtCore.QDate.currentDate())
         self.scheduleRingCombo.setCurrentIndex(0)
+        if hasattr(self, "scheduleVoiceEnabledCheck"):
+            self.scheduleVoiceEnabledCheck.setChecked(False)
         self.scheduleVoiceEdit.clear()
         for check in self.scheduleWeekdayChecks:
             check.setChecked(False)
@@ -4068,7 +4300,11 @@ class MainWindow(QtWidgets.QMainWindow):
             ]
         target_date = self.scheduleDateEdit.date().toString("yyyy-MM-dd")
         ring_type = self.ring_names[self.scheduleRingCombo.currentIndex()][0]
-        voice_text = self.scheduleVoiceEdit.text().strip()
+        voice_text = (
+            self.scheduleVoiceEdit.text().strip()
+            if self.scheduleVoiceEnabledCheck.isChecked()
+            else ""
+        )
         existing = next(
             (item for item in self.schedules if item.item_id == existing_id),
             None,
@@ -4132,6 +4368,8 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         self.scheduleRingCombo.setCurrentIndex(ring_index)
         self.scheduleVoiceEdit.setText(item.voice_text or "")
+        if hasattr(self, "scheduleVoiceEnabledCheck"):
+            self.scheduleVoiceEnabledCheck.setChecked(bool(item.voice_text.strip()))
         self._sync_schedule_type_ui()
 
     def delete_selected_schedule(self) -> None:
@@ -4154,7 +4392,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.send_command(f"*SET:MSG {token}")
             if not (self.config.quiet_night_rings and self.last_mode == "NIGHT"):
                 self._play_ring_or_fallback(item.ring_type, f"提醒 {item.title}")
-        if self.config.voice_enabled and item.voice_text.strip():
+        if item.voice_text.strip():
             speak_text(item.voice_text.strip())
         append_event_log(APP_DIR, "schedule_fire", f"{item.title} | {item.ring_type}")
         self.log("INFO", f"提醒触发: {item.title}")
@@ -4548,6 +4786,10 @@ class MainWindow(QtWidgets.QMainWindow):
                     120,
                     lambda: self._auto_sync_time_after_connect("板端启动", query_after=False),
                 )
+                QtCore.QTimer.singleShot(
+                    360,
+                    lambda: self._send_pc_mode_to_board("板端启动"),
+                )
                 self.log("INFO", "检测到板端 RESET/启动：数字孪生优先映射板端真实显示帧，后台自动写时、NTP 对时并刷新天气。")
                 QtCore.QTimer.singleShot(1200, self._run_startup_sync_after_ready)
             return
@@ -4604,6 +4846,8 @@ class MainWindow(QtWidgets.QMainWindow):
                 return
             next_mode = self._normalize_mode_value(parsed.data, self.last_mode)
             mode_origin = self._consume_mode_request(next_mode)
+            if not mode_origin and self._resync_mode_to_board_if_conflict(next_mode, "板端事件"):
+                return
             self._set_mode_state(next_mode)
             append_event_log(APP_DIR, "mode", self.last_mode)
             if self.config.auto_day_night and mode_origin != "auto":
@@ -4634,6 +4878,11 @@ class MainWindow(QtWidgets.QMainWindow):
             if key == "USER1":
                 self.refresh_dashboard()
                 self.request_user1_time_sync("USER1")
+                return
+            if key == "USER2":
+                self.log("INFO", "USER2 按键：板端显示天气短显；若无天气数据则显示 NO WX。")
+                self._set_latest_event("USER2 -> 天气短显")
+                self.refresh_dashboard()
                 return
             self.refresh_dashboard()
             self._set_latest_event(f"按键事件 -> {key}")
@@ -4704,6 +4953,8 @@ class MainWindow(QtWidgets.QMainWindow):
                 self._save_runtime_state()
         elif query == "MODE" and data:
             if data in {"DAY", "NIGHT"}:
+                if self._resync_mode_to_board_if_conflict(data, "查询返回"):
+                    return
                 self._set_mode_state(data)
                 self.refresh_dashboard()
             else:
@@ -4840,9 +5091,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self.send_command(f"*SET:MSG {text}")
 
     def send_virtual_key(self, key_name: str) -> None:
-        if key_name.strip().upper() == "USER1":
+        key = key_name.strip().upper()
+        if key == "USER1":
             self.request_user1_time_sync("虚拟 USER1")
             return
+        if key == "USER2":
+            self.log("INFO", "虚拟 USER2：请求板端/本地显示天气短显。")
         self.send_command(f"*SET:KEY {key_name}")
 
     def send_raw_command(self) -> None:
@@ -4910,6 +5164,16 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _append_test_output_line(self, line: str) -> None:
         self.testOutputText.append(line)
+        if line.startswith("[TX] "):
+            self.log("TX", line[5:].strip())
+        elif line.startswith("[RX] "):
+            raw = line[5:].strip()
+            parsed = parse_line(raw)
+            if parsed.kind == "event":
+                self.handle_event(parsed)
+            self.log("RX", raw)
+        elif line.startswith("[INFO] "):
+            self.log("INFO", line[7:].strip())
         cursor = self.testOutputText.textCursor()
         cursor.movePosition(QtGui.QTextCursor.End)
         self.testOutputText.setTextCursor(cursor)
@@ -4925,7 +5189,11 @@ class MainWindow(QtWidgets.QMainWindow):
             if hasattr(self, "testEstimateLabel"):
                 self.testEstimateLabel.setText(f"预计耗时已结束 | 实际耗时: {elapsed:.1f} 秒")
             self.test_run_started_at = 0.0
-        self.testOutputText.setPlainText(output or ("PASS" if ok else "FAIL"))
+        self.testOutputText.append("\n--- 汇总 ---")
+        self.testOutputText.append(output or ("PASS" if ok else "FAIL"))
+        cursor = self.testOutputText.textCursor()
+        cursor.movePosition(QtGui.QTextCursor.End)
+        self.testOutputText.setTextCursor(cursor)
         if self.is_connected:
             self.poll_timer.start()
             self.ping_timer.start()

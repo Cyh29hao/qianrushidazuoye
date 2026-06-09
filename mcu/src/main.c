@@ -29,6 +29,7 @@
 #define MESSAGE_SHORT_HOLD_MS      5000UL
 #define MESSAGE_MIN_SHOW_MS        5000UL
 #define MESSAGE_SLOW_SHOW_MS       8000UL
+#define MESSAGE_FINAL_HOLD_MS      2000UL
 #define SCROLL_SLOW_MS             1000UL
 #define SCROLL_FAST_MS             500UL
 #define BOOT_STEP_SHORT_MS         1000UL
@@ -654,11 +655,13 @@ static void Tick10ms(void)
                     (g_messageEndArmed == 0U) &&
                     (g_messageDeadlineMs == 0UL)) {
                     g_messageEndArmed = 1U;
-                    g_messageDeadlineMs = g_millis + CurrentScrollIntervalMs();
+                    g_messageDeadlineMs = g_millis + CurrentScrollIntervalMs() +
+                                          MESSAGE_FINAL_HOLD_MS;
                 }
             } else if ((g_messageEndArmed == 0U) && (g_messageDeadlineMs == 0UL)) {
                 g_messageEndArmed = 1U;
-                g_messageDeadlineMs = g_millis + CurrentScrollIntervalMs();
+                g_messageDeadlineMs = g_millis + CurrentScrollIntervalMs() +
+                                      MESSAGE_FINAL_HOLD_MS;
             }
         } else if (g_viewMode == VIEW_WEEKDAY) {
             uint8_t scrollLimit = CurrentVisibleScrollLimit();
@@ -2627,7 +2630,8 @@ static void HandleSetMessage(const char *params)
     g_messageEndArmed = 0U;
     cellCount = VisibleTextToCells(g_messageText, tempCells, 32U);
     if (cellCount <= DISPLAY_WIDTH) {
-        g_messageDeadlineMs = g_millis + MESSAGE_SHORT_HOLD_MS;
+        g_messageDeadlineMs = g_millis + MESSAGE_SHORT_HOLD_MS +
+                              MESSAGE_FINAL_HOLD_MS;
         g_messageScrollLimit = 0U;
     } else {
         g_messageDeadlineMs = 0UL;

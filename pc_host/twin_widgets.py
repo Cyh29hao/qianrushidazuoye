@@ -53,18 +53,18 @@ class SevenSegmentDisplayWidget(QtWidgets.QWidget):
         super().__init__(parent)
         self._text = "________"
         self._dp_mask = 0
-        self.setMinimumHeight(92)
-        self.setMaximumHeight(118)
+        self.setMinimumHeight(62)
+        self.setMaximumHeight(78)
         self.setSizePolicy(
             QtWidgets.QSizePolicy.Expanding,
-            QtWidgets.QSizePolicy.Preferred,
+            QtWidgets.QSizePolicy.Fixed,
         )
 
     def sizeHint(self) -> QtCore.QSize:
-        return QtCore.QSize(700, 108)
+        return QtCore.QSize(500, 72)
 
     def minimumSizeHint(self) -> QtCore.QSize:
-        return QtCore.QSize(520, 92)
+        return QtCore.QSize(380, 62)
 
     def set_frame(self, token: str, dp_mask: int) -> None:
         self._text = token[:8].ljust(8, "_")
@@ -77,7 +77,7 @@ class SevenSegmentDisplayWidget(QtWidgets.QWidget):
         painter.setRenderHint(QtGui.QPainter.Antialiasing)
         painter.fillRect(self.rect(), QtGui.QColor("#0e1520"))
 
-        margin = 7
+        margin = 5
         inner = self.rect().adjusted(margin, margin, -margin, -margin)
         digit_width = inner.width() / 8.0
         on_color = QtGui.QColor("#e85d2a")
@@ -85,9 +85,9 @@ class SevenSegmentDisplayWidget(QtWidgets.QWidget):
 
         for index, ch in enumerate(self._text):
             digit_rect = QtCore.QRectF(
-                inner.left() + index * digit_width + 3,
+                inner.left() + index * digit_width + 2,
                 inner.top(),
-                digit_width - 6,
+                digit_width - 4,
                 inner.height(),
             )
             self._draw_digit(
@@ -122,7 +122,7 @@ class SevenSegmentDisplayWidget(QtWidgets.QWidget):
     ) -> None:
         w = rect.width()
         h = rect.height()
-        thickness = max(4.0, min(w, h) * 0.10)
+        thickness = max(3.2, min(w, h) * 0.105)
         slant = thickness * 0.35
 
         x0, y0 = rect.left(), rect.top()
@@ -182,14 +182,14 @@ class LedBarWidget(QtWidgets.QWidget):
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
         self._value = 0
-        self.setMinimumHeight(30)
-        self.setMaximumHeight(38)
+        self.setMinimumHeight(24)
+        self.setMaximumHeight(30)
 
     def sizeHint(self) -> QtCore.QSize:
-        return QtCore.QSize(700, 34)
+        return QtCore.QSize(500, 28)
 
     def minimumSizeHint(self) -> QtCore.QSize:
-        return QtCore.QSize(520, 30)
+        return QtCore.QSize(380, 24)
 
     def set_led_byte(self, value: int) -> None:
         self._value = value & 0xFF
@@ -200,8 +200,8 @@ class LedBarWidget(QtWidgets.QWidget):
         painter = QtGui.QPainter(self)
         painter.setRenderHint(QtGui.QPainter.Antialiasing)
         painter.fillRect(self.rect(), QtGui.QColor("#13202f"))
-        margin = 18
-        diameter = min(22, max(12, (self.width() - margin * 2) // 12))
+        margin = 12
+        diameter = min(16, max(9, (self.width() - margin * 2) // 14))
         gap = diameter * 0.55
         total = diameter * 8 + gap * 7
         start_x = (self.width() - total) / 2.0
@@ -218,7 +218,7 @@ class LedBarWidget(QtWidgets.QWidget):
                 QtCore.QRectF(x, center_y - diameter / 2.0, diameter, diameter)
             )
             painter.setPen(QtGui.QColor("#cbd5df"))
-            painter.setFont(QtGui.QFont("Consolas", 8))
+            painter.setFont(QtGui.QFont("Consolas", 7))
             painter.drawText(
                 QtCore.QRectF(x, center_y + diameter / 2.0 + 1, diameter, 14),
                 QtCore.Qt.AlignCenter,
@@ -232,7 +232,7 @@ class DigitalTwinWidget(QtWidgets.QWidget):
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
         outer = QtWidgets.QVBoxLayout(self)
-        outer.setSpacing(6)
+        outer.setSpacing(5)
         outer.setContentsMargins(0, 0, 0, 0)
 
         header_layout = QtWidgets.QHBoxLayout()
@@ -245,8 +245,7 @@ class DigitalTwinWidget(QtWidgets.QWidget):
             QtWidgets.QSizePolicy.Preferred,
             QtWidgets.QSizePolicy.Fixed,
         )
-        self.title_label = QtWidgets.QLabel("8x7SEG + 8 LED + 8 按键 + USER1 / USER2")
-        self.title_label.setText("8x7SEG + 8 LED + 10 KEY")
+        self.title_label = QtWidgets.QLabel("8x7SEG + LED + KEY")
         self.title_label.setObjectName("twinTitle")
         self.title_label.setAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
         self.title_label.setWordWrap(True)
@@ -267,19 +266,31 @@ class DigitalTwinWidget(QtWidgets.QWidget):
 
         self.grid = QtWidgets.QGridLayout()
         self.grid.setContentsMargins(0, 0, 0, 0)
-        self.grid.setHorizontalSpacing(6)
-        self.grid.setVerticalSpacing(6)
+        self.grid.setHorizontalSpacing(4)
+        self.grid.setVerticalSpacing(4)
 
         self.key_buttons: list[QtWidgets.QPushButton] = []
         self.key_button_by_name: dict[str, QtWidgets.QPushButton] = {}
         self.key_button_base_style = "padding: 2px 4px;"
+        key_tips = {
+            "USER2": "USER2: 非编辑状态显示天气短显；编辑状态作为 SUB 减一键",
+            "EXT": "SW8 / EXT: 退出编辑、取消天气短显或滚动消息",
+            "FORMAT": "SW7 / FORMAT: 切换 LEFT/RIGHT 数码管显示方向",
+            "SPEED": "SW6 / SPEED: 切换走马灯快/慢速度",
+            "DISP": "SW5 / DISP: 切换时间、日期、星期、年份页面；长按关显示和 LED",
+            "USER1": "USER1: 短按请求 PC 对时；长按切换 DAY/NIGHT",
+            "FUNC": "SW1 / FUNC: 进入编辑；长按保存当前编辑",
+            "SHIFT": "SW2 / SHIFT: 编辑时切换字段",
+            "ADD": "SW3 / ADD: 编辑时加一，长按连加",
+            "SAVE": "SW4 / SAVE: 保存编辑值",
+        }
         keys = [
-            ("USER2", "SW2\nUSER2/SUB", 0, 0),
+            ("USER2", "USER2\nSUB", 0, 0),
             ("EXT", "SW8\nEXT", 0, 1),
-            ("FORMAT", "SW7\nFORMAT", 0, 2),
-            ("SPEED", "SW6\nSPEED", 0, 3),
+            ("FORMAT", "SW7\nFMT", 0, 2),
+            ("SPEED", "SW6\nSPD", 0, 3),
             ("DISP", "SW5\nDISP", 0, 4),
-            ("USER1", "SW1\nUSER1/NTP", 1, 0),
+            ("USER1", "USER1\nNTP", 1, 0),
             ("FUNC", "SW1\nFUNC", 1, 1),
             ("SHIFT", "SW2\nSHIFT", 1, 2),
             ("ADD", "SW3\nADD", 1, 3),
@@ -288,16 +299,13 @@ class DigitalTwinWidget(QtWidgets.QWidget):
         for key_name, label, row, column in keys:
             button = QtWidgets.QPushButton(label)
             button.setObjectName("twinKeyButton")
-            if key_name == "USER1":
-                button.setToolTip("短按请求 PC 对时；板端长按切换 DAY/NIGHT")
-            if key_name == "USER2":
-                button.setToolTip("USER2: 非编辑状态显示天气短显；编辑状态作为 SUB 减一键")
-            button.setMinimumHeight(40)
-            button.setMaximumHeight(48)
+            button.setToolTip(key_tips[key_name])
+            button.setMinimumHeight(28)
+            button.setMaximumHeight(32)
             button.setMinimumWidth(0)
             button.setStyleSheet(self.key_button_base_style)
             font = button.font()
-            font.setPointSize(7)
+            font.setPointSize(6)
             font.setBold(True)
             button.setFont(font)
             button.clicked.connect(
@@ -331,10 +339,10 @@ class DigitalTwinWidget(QtWidgets.QWidget):
             + layout.spacing() * 3
             + 4
         )
-        return QtCore.QSize(700, total_height + 10)
+        return QtCore.QSize(500, total_height + 6)
 
     def minimumSizeHint(self) -> QtCore.QSize:
-        return QtCore.QSize(520, self.sizeHint().height())
+        return QtCore.QSize(380, self.sizeHint().height())
 
     def set_display_frame(self, token: str, dp_mask: int) -> None:
         self.display.set_frame(token, dp_mask)

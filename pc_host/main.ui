@@ -329,21 +329,21 @@
             <item>
              <widget class="QPushButton" name="sendPresetButton">
               <property name="text">
-               <string>发送参数组合</string>
+               <string>发送当前指令</string>
               </property>
              </widget>
             </item>
             <item>
              <widget class="QPushButton" name="abbrevDemoButton">
               <property name="text">
-               <string>缩写演示</string>
+               <string>缩写当前指令</string>
               </property>
              </widget>
             </item>
             <item>
              <widget class="QPushButton" name="mixedCaseDemoButton">
               <property name="text">
-               <string>大小写混合演示</string>
+               <string>随机混合大小写</string>
               </property>
              </widget>
             </item>

@@ -1,5 +1,6 @@
 @echo off
 setlocal
+chcp 65001 >nul
 set ROOT=%~dp0
 set PYTHON=%ROOT%\.venv\Scripts\python.exe
 if not exist "%PYTHON%" (

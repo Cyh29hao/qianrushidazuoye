@@ -1,21 +1,22 @@
 # PROJECT_CONTEXT - 智能时钟联网系统
 
-最后更新：2026-06-09（v2.1 UI/release 收口）
+最后更新：2026-06-09（v2.1 体验修复与协议测试收口）
 
 本文件给新的 AI 对话快速接手使用，只记录当前最终状态、目录结构、要求、已实现功能、已知问题和下一步计划。不要把聊天记录、推理过程或临时争论写进来。后续以最新代码和本文件为准；旧任务文档可能已经过时，需要复核当前实现。
 
-## 2026-06-09 主窗口 UI 布局稳定化
+## 2026-06-09 v2.1 体验修复与协议测试收口
 
 - 当前主版本仍为 `D:\桌面\大二下\大二下 嵌入式系统与接口技术\ARM\真正的最新版`，当前分支为 `gemini-ui-improvements`，远程仓库为 `https://github.com/Cyh29hao/qianrushidazuoye`。
-- 本轮重点修复 PC 上位机 UI 顶层布局反复被改坏的问题。`AGENT.md` 已新增“UI 修改硬性规则：禁止再犯的布局问题”，以后 UI 修改必须先读；新增 `docs/UI自检清单.md` 作为每次提交前自检标准。
-- 主窗口布局策略更新为：左侧主功能区固定在 520-600 逻辑像素范围，右侧数字孪生/日志区域通过 `QScrollArea` 包裹并获得伸展优先级，底部状态栏保持正常 `QStatusBar`，三者不允许互相覆盖。
-- 右侧数字孪生现在按正常布局流显示在上方，日志区在下方；`twinGroup` 不再用过低固定高度裁切内容。若窗口高度不足，右侧区域纵向滚动，而不是让日志盖住第二行虚拟按键。
-- `pc_host/twin_widgets.py` 收缩了 7SEG/LED 的 size hint，右上说明文字改为短标题并允许收缩，虚拟按键宽度可收缩但保留两行完整显示，解决高 DPI 下最右侧数码管/第二行按钮被裁切的问题。
-- 状态栏按钮使用更紧凑的蓝色专用样式，状态栏最大高度限制为 34px；`QGroupBox` 标题统一改成分组框底色并下移，减少标题压线。
-- 已新增/更新的文档：`AGENT.md`、`docs/UI自检清单.md`、`PROJECT_CONTEXT.md`、`CHANGELOG_AI.md`。
-- 已验证：Python 语法检查通过、host-only 自动测试通过、Windows 原生 Qt 截图覆盖 DAY/NIGHT 和 4 个页面、1366x819/1600x900/2048x1228 几何检查通过、等价 `launch_pc_host.bat` 启动路径 5 秒无 stderr/QSS parse 报错。
-- v2.1 release 已重新打包：`build_release/SmartClockHost-v2.1/SmartClockHost.exe` 与 `build_release/SmartClockHost-v2.1.zip`。`build_release/` 仍被 `.gitignore` 忽略，不提交到 Git。
-- 本轮未修改 MCU，因此不需要重新烧录。若使用 exe 演示，需要使用本轮重新打包后的 release。
+- `AGENT.md` 和 `docs/UI自检清单.md` 已补强最新硬规则：右侧数字孪生展示区禁止垂直/水平滚动，必须通过缩小 7SEG、按键、间距和日志摘要保证一屏看全；左侧页面允许纵向滚动但禁止横向滚动。
+- PC 主窗口当前布局：左侧主功能区 + 右侧数字孪生/日志区 + 底部状态栏均在正常布局流中；右侧为固定宽度面板（约 500-560 逻辑像素）而非 scroll area，8 位 7SEG、LED、两行按键和日志摘要均完整显示，不覆盖左侧内容。
+- 系统设置已瘦身：蜂鸣和 LED 掩码移到“调试与测试”；全局语音入口移到闹钟/日程各自模块；错误“用户名”小标题已移除；系统设置页无横向滚动。
+- “协议测试台”已重构：下拉模板覆盖 PING/GET/SET DATE/TIME/ALARM/DISPLAY/FORMAT/MODE/MSG/BEEP/LED/WEATHER/RING/KEY 和错误测试；`缩写当前指令`、`随机混合大小写` 均作用于当前文本框，再统一 `发送当前指令` 并在日志看 TX/RX。
+- 天气刷新/一键刷新保持后台线程执行，NTP 8 秒 watchdog、天气 14 秒 watchdog，失败写日志并恢复 UI，避免阻塞 UI、串口接收和数字孪生映射。
+- 自动测试只保留手动触发；逐项输出 OK/FAIL/SKIP，TX/RX/INFO 会写入主日志，失败项保留排查提示。
+- USER2 口径：非编辑状态显示天气短显，天气为空显示 `NO WX`；PC 日志和 hover tooltip 均说明用途。
+- MCU 本阶段仍有改动：`mcu/src/main.c` 包含 EEPROM 时间 fallback、RESET/同步保护、USER2/滚动/标签显示等改动，需要 Keil5 重新编译烧录实板验证。
+- v2.1 release 已重新打包：`build_release/SmartClockHost-v2.1/SmartClockHost.exe` 与 `build_release/SmartClockHost-v2.1.zip`。打包时通过 `C:\smartclock_latest` junction 绕开 PyInstaller/PyQt5 在中文路径下解析 Qt plugin 目录乱码的问题；`build_release/` 仍被 `.gitignore` 忽略，不提交到 Git。
+- 已验证：Python 语法检查通过、host-only 自动测试通过、源码版 6 秒启动无 stderr/QSS parse 报错、Windows 原生 Qt 截图覆盖 DAY/NIGHT 与主页/系统设置/闹钟日程/调试测试四页，所有截图左侧横向滚动最大值为 0，右侧固定 500px 且无滚动；release exe 在临时 NIGHT 状态下启动 6 秒未退出，运行态已清理并重新压缩 zip。
 
 ## 当前主版本
 

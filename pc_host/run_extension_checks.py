@@ -86,6 +86,11 @@ def _record(
         progress(_format_check_line(result))
 
 
+def _progress(progress: ProgressCallback | None, line: str) -> None:
+    if progress is not None:
+        progress(line)
+
+
 def _build_output(results: list[CheckResult], host_only: bool = False) -> tuple[bool, str]:
     failed = [item for item in results if item.status == "FAIL"]
     ok = not failed
@@ -101,14 +106,22 @@ def _build_output(results: list[CheckResult], host_only: bool = False) -> tuple[
     return ok, "\n".join(lines)
 
 
-def send_expect_ok(port: Any, command: str, timeout_s: float = 1.5) -> list[str]:
+def send_expect_ok(
+    port: Any,
+    command: str,
+    timeout_s: float = 1.5,
+    progress: ProgressCallback | None = None,
+) -> list[str]:
     clear_stale_input(port)
+    _progress(progress, f"[TX] {command.strip()}")
     port.write((command.strip() + "\r\n").encode("ascii", "ignore"))
     try:
         port.flush()
     except Exception:  # noqa: BLE001
         pass
     lines = read_lines(port, timeout_s=timeout_s)
+    for line in lines:
+        _progress(progress, f"[RX] {line}")
     if not any(parse_line(line).kind == "ok" for line in lines):
         raise RuntimeError(f"timeout {timeout_s:.1f}s waiting OK: {command} | lines={lines}")
     time.sleep(SERIAL_COMMAND_GAP_S)
@@ -116,15 +129,22 @@ def send_expect_ok(port: Any, command: str, timeout_s: float = 1.5) -> list[str]
 
 
 def send_expect_kind(
-    port: Any, command: str, expected_kind: str, timeout_s: float = 1.5
+    port: Any,
+    command: str,
+    expected_kind: str,
+    timeout_s: float = 1.5,
+    progress: ProgressCallback | None = None,
 ) -> list[str]:
     clear_stale_input(port)
+    _progress(progress, f"[TX] {command.strip()}")
     port.write((command.strip() + "\r\n").encode("ascii", "ignore"))
     try:
         port.flush()
     except Exception:  # noqa: BLE001
         pass
     lines = read_lines(port, timeout_s=timeout_s)
+    for line in lines:
+        _progress(progress, f"[RX] {line}")
     if not any(parse_line(line).kind == expected_kind for line in lines):
         raise RuntimeError(
             f"timeout {timeout_s:.1f}s waiting {expected_kind}: {command} | lines={lines}"
@@ -145,6 +165,7 @@ def execute_checks_on_open_port(
         if time.monotonic() >= hard_deadline:
             _record(results, progress, name, "FAIL", "serial test hard timeout", hint)
             return
+        _progress(progress, f"[INFO] 开始测试: {name}")
         try:
             action()
         except Exception as exc:  # noqa: BLE001
@@ -154,54 +175,54 @@ def execute_checks_on_open_port(
 
     run(
         "PING 心跳",
-        lambda: send_expect_kind(port, "*PING", "pong", timeout_s=2.0),
+        lambda: send_expect_kind(port, "*PING", "pong", timeout_s=2.0, progress=progress),
         "检查 COM 口是否选对、波特率是否 115200、板端是否已烧录并运行。",
     )
     run(
         "GET FORMAT",
-        lambda: send_expect_ok(port, "*GET:FORMAT", timeout_s=2.0),
+        lambda: send_expect_ok(port, "*GET:FORMAT", timeout_s=2.0, progress=progress),
         "检查 MCU 是否支持 *GET:FORMAT，或串口回包是否被其他程序占用。",
     )
     run(
         "GET MODE",
-        lambda: send_expect_ok(port, "*GET:MODE", timeout_s=2.0),
+        lambda: send_expect_ok(port, "*GET:MODE", timeout_s=2.0, progress=progress),
         "检查 MCU 是否支持 *GET:MODE，或 MODE 状态是否输出异常。",
     )
 
     now = datetime.now().replace(microsecond=0)
     run(
         "SET DATE",
-        lambda: send_expect_ok(port, build_set_date_command(now), timeout_s=2.5),
+        lambda: send_expect_ok(port, build_set_date_command(now), timeout_s=2.5, progress=progress),
         "检查日期参数解析、YEAR/MONTH/DATE 缩写和范围处理。",
     )
     run(
         "SET TIME",
-        lambda: send_expect_ok(port, build_set_time_command(now), timeout_s=2.5),
+        lambda: send_expect_ok(port, build_set_time_command(now), timeout_s=2.5, progress=progress),
         "检查时间参数解析、HOUR/MINUTE/SECOND 缩写和范围处理。",
     )
     run(
         "SET MODE NIGHT",
-        lambda: send_expect_ok(port, "*SET:MODE NIGHT", timeout_s=2.0),
+        lambda: send_expect_ok(port, "*SET:MODE NIGHT", timeout_s=2.0, progress=progress),
         "检查 DAY/NIGHT 指令解析和板端模式切换。",
     )
     run(
         "SET MODE DAY",
-        lambda: send_expect_ok(port, "*SET:MODE DAY", timeout_s=2.0),
+        lambda: send_expect_ok(port, "*SET:MODE DAY", timeout_s=2.0, progress=progress),
         "检查 DAY/NIGHT 指令解析和板端模式恢复。",
     )
     run(
         "SET WEATHER",
-        lambda: send_expect_ok(port, build_set_weather_command("SUN29C__", 0x05), timeout_s=2.0),
+        lambda: send_expect_ok(port, build_set_weather_command("SUN29C__", 0x05), timeout_s=2.0, progress=progress),
         "检查 *SET:WEATHER DISP <8字符> LED <hex> 参数顺序和 LED 十六进制解析。",
     )
     run(
         "SET RING DEFAULT",
-        lambda: send_expect_ok(port, build_set_ring_command("DEFAULT"), timeout_s=2.0),
+        lambda: send_expect_ok(port, build_set_ring_command("DEFAULT"), timeout_s=2.0, progress=progress),
         "检查 *SET:RING DEFAULT 扩展铃声指令是否被当前固件支持。",
     )
     run(
         "SIM KEY USER2",
-        lambda: send_expect_ok(port, "*SET:KEY USER2", timeout_s=2.0),
+        lambda: send_expect_ok(port, "*SET:KEY USER2", timeout_s=2.0, progress=progress),
         "检查 *SET:KEY USER2 是否支持，注意模拟按键不应回环上报 *EVT:KEY。",
     )
     return _build_output(results, host_only=False)

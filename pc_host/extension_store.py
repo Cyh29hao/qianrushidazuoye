@@ -43,7 +43,7 @@ class AppConfig:
     weather_refresh_minutes: int = 30
     saved_places: list[SavedPlace] = field(default_factory=_default_saved_places)
     active_place_index: int = 0
-    auto_run_tests_on_start: bool = True
+    auto_run_tests_on_start: bool = False
     app_version: str = "2.1"
 
 
@@ -350,9 +350,7 @@ def _normalize_config(payload: dict[str, Any]) -> AppConfig:
         active_place_index=int(
             payload.get("active_place_index", defaults.active_place_index)
         ),
-        auto_run_tests_on_start=bool(
-            payload.get("auto_run_tests_on_start", defaults.auto_run_tests_on_start)
-        ),
+        auto_run_tests_on_start=False,
         app_version=str(payload.get("app_version", defaults.app_version) or defaults.app_version),
     )
     raw_places = payload.get("saved_places")
