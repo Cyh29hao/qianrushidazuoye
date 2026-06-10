@@ -249,6 +249,7 @@ static void HandleDisplayLongPress(void);
 static void ToggleDayNightMode(void);
 static void AdvanceEditField(void);
 static void IncrementEditField(void);
+static void DisableAlarmFromKey(void);
 static void SaveEditState(void);
 static void EnterEditMode(EditMode mode);
 static void ExitEditMode(bool saveChanges);
@@ -1839,6 +1840,12 @@ static void HandleKeyPress(KeyCode key, bool emitEvent)
         break;
     case KEY_DISP:
         if (g_editMode == EDIT_NONE) {
+            g_displayEnabled = 1U;
+            g_weatherForcedDisplayOn = 0U;
+            FinishWeatherShortDisplay();
+            if (g_messageActive != 0U) {
+                ClearMessageState();
+            }
             g_viewMode = (ViewMode)(((uint8_t)g_viewMode + 1U) % 4U);
             g_scrollOffset = 0U;
             g_viewScrollCompleted = 0U;
@@ -1856,6 +1863,10 @@ static void HandleKeyPress(KeyCode key, bool emitEvent)
         break;
     case KEY_EXT:
         if (g_editMode != EDIT_NONE) {
+            if (g_editMode == EDIT_ALARM) {
+                DisableAlarmFromKey();
+                return;
+            }
             ExitEditMode(false);
             return;
         }
@@ -1986,6 +1997,18 @@ static void IncrementEditField(void)
     }
 
     g_editDeadlineMs = g_millis + EDIT_TIMEOUT_MS;
+    RefreshDisplayAndLeds(true);
+}
+
+static void DisableAlarmFromKey(void)
+{
+    g_alarm.enabled = 0U;
+    g_editAlarm.enabled = 0U;
+    g_editMode = EDIT_NONE;
+    g_editField = 0U;
+    g_editDeadlineMs = 0UL;
+    StopBuzzer();
+    EmitEditEvent(EDIT_ALARM);
     RefreshDisplayAndLeds(true);
 }
 
@@ -2590,6 +2613,7 @@ static void HandleSetAlarm(const char *params)
         g_alarm.enabled = 0U;
         StopBuzzer();
         RefreshDisplayAndLeds(true);
+        EmitEditEvent(EDIT_ALARM);
         UART_ReplyOk(NULL);
         return;
     }
@@ -2640,6 +2664,7 @@ static void HandleSetAlarm(const char *params)
     nextValue.enabled = 1U;
     g_alarm = nextValue;
     RefreshDisplayAndLeds(true);
+    EmitEditEvent(EDIT_ALARM);
     UART_ReplyOk(NULL);
 }
 

@@ -4,6 +4,34 @@
 
 ## 2026-06-10
 
+### v2.1 单次闹钟同步、DISP 星期页与 LED 位义
+
+#### 已完成修改
+- MCU `DISP` 短按现在会在显示关闭时先恢复显示，并清掉天气/滚动临时画面后再切换 `时间 -> 日期 -> 星期 -> 年份`，避免星期页看似无效或空白。
+- MCU 在 `ALARM` 编辑页新增 `EXT` 关闭板载单次闹钟入口；`*SET:ALARM OFF` 和设置新闹钟都会上报 `*EVT:EDIT ALARM ...`，方便 PC 即时刷新。
+- PC 将 `GET:ALARM`、`*EVT:EDIT ALARM`、`*EVT:ALARM`、`*EVT:ALARM_OFF` 统一到同一套状态更新逻辑，并兼容 RIGHT 方向反向闹钟字符串。
+- PC 收到或发送影响单次闹钟的物理/虚拟按键后，会自动延迟补查 `*GET:ALARM`，不再要求用户手动点“查询”。
+- PC 右侧镜像区增加 LED 位义说明和当前点亮位短写；README 补充 D1-D8 功能分配表和单次闹钟关闭方法。
+
+#### 关键文件
+- `mcu/src/main.c`
+- `pc_host/app.py`
+- `pc_host/twin_widgets.py`
+- `README.md`
+- `PROJECT_CONTEXT.md`
+- `CHANGELOG_AI.md`
+- `docs/screenshots/*.png`
+
+#### 验证结果
+- `pc_host/.venv/Scripts/python.exe -m py_compile pc_host/app.py pc_host/protocol.py pc_host/twin_widgets.py pc_host/extension_services.py pc_host/extension_store.py pc_host/run_extension_checks.py` 通过。
+- `gcc -fsyntax-only -std=c99 -DPART_TM4C1294NCPDT -DTARGET_IS_TM4C129_RA0 -I mcu/Inc -I mcu/Driverlib mcu/src/main.c` 通过。
+- PyQt 小型断言通过：RIGHT 方向 `54.03.21` 可反解为 `12:30:45`，显示关闭时虚拟 `DISP` 会恢复显示并切到 `WEEKDAY`，LED 位义控件存在。
+- `pc_host/.venv/Scripts/python.exe pc_host/run_extension_checks.py --host-only --full` 通过。
+- 真实 Qt 窗口重新截图四页，右侧数字孪生和 LED 位义未被裁切。
+
+#### 未解决问题
+- MCU 已改源码，仍需 Keil5 编译并烧录实板后验证物理 `DISP` 星期页、`ALARM` 编辑页 `EXT` 关闭、`*EVT:EDIT ALARM` 回传和 PC 自动补查。
+
 ### v2.1 USER2 天气短显与板端显示区收口
 
 #### 已完成修改

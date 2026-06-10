@@ -25,6 +25,16 @@ GITHUB_URL = "https://github.com/Cyh29hao"
 LOGO_PATH = BUNDLE_DIR / "assets" / "clock_logo.svg"
 ICON_PATH = BUNDLE_DIR / "assets" / "clock_logo.ico"
 LOCAL_MODE_LABEL = "不使用串口"
+LED_BIT_LABELS = [
+    ("D1", "心跳"),
+    ("D2", "闹钟"),
+    ("D3", "编辑"),
+    ("D4", "串口RX"),
+    ("D5", "串口TX"),
+    ("D6", "夜间"),
+    ("D7", "RIGHT"),
+    ("D8", "手动覆盖"),
+]
 
 import serial
 from PyQt5 import QtCore, QtGui, QtWidgets
@@ -250,6 +260,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.pending_user2_display_text = ""
         self.pending_user2_display_deadline = 0.0
         self.pending_user2_display_fallback_done = False
+        self.single_alarm_query_generation = 0
         self.latest_display_text = "--"
         self.latest_led_text = "--"
         self.latest_event_text = "等待数据"
@@ -855,11 +866,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.twin.set_display_frame(token, dp_mask)
         self.twin.set_led_byte(led_mask)
         self.latest_display_text = f"{token} / {dp_mask:02X}"
-        self.latest_led_text = f"{led_mask:02X}"
         if hasattr(self, "latestDisplayLabel"):
             self.latestDisplayLabel.setText(f"最新显示: {self.latest_display_text}")
-        if hasattr(self, "latestLedLabel"):
-            self.latestLedLabel.setText(f"最新 LED: {self.latest_led_text}")
+        self._update_latest_led_label(led_mask)
 
     def _start_boot_mirror_playback(self) -> None:
         self.boot_mirror_generation += 1
@@ -899,11 +908,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.twin.set_display_frame(token, dp_mask)
         self.twin.set_led_byte(led_mask)
         self.latest_display_text = f"{token} / {dp_mask:02X}"
-        self.latest_led_text = f"{led_mask:02X}"
         if hasattr(self, "latestDisplayLabel"):
             self.latestDisplayLabel.setText(f"最新显示: {self.latest_display_text}")
-        if hasattr(self, "latestLedLabel"):
-            self.latestLedLabel.setText(f"最新 LED: {self.latest_led_text}")
+        self._update_latest_led_label(led_mask)
 
     def _finish_boot_mirror_playback(self, generation: int) -> None:
         if generation != self.boot_mirror_generation:
@@ -915,6 +922,123 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _local_query_notice(self, action: str) -> None:
         self.log("WARN", f"!!! 当前为本地模式，显示的是上位机保存状态，并非板端实时返回：{action}")
+
+    def _parse_alarm_time_text(self, text: str) -> QtCore.QTime:
+        normalized = (text or "").strip().replace(".", ":")
+        alarm_time = QtCore.QTime.fromString(normalized, "HH:mm:ss")
+        if alarm_time.isValid():
+            return alarm_time
+        reversed_text = normalized[::-1]
+        return QtCore.QTime.fromString(reversed_text, "HH:mm:ss")
+
+    def _apply_alarm_state_from_text(self, text: str, source: str = "") -> None:
+        value = (text or "").strip()
+        upper = value.upper()
+        if not value or upper == "OFF":
+            self.runtime_state.alarm_enabled = False
+            self.last_alarm = "OFF"
+            self._save_runtime_state()
+            self._refresh_single_alarm_ui()
+            return
+        if upper == "RINGING":
+            self.last_alarm = "RINGING"
+            self.runtime_state.alarm_enabled = True
+            self._save_runtime_state()
+            self._refresh_single_alarm_ui()
+            return
+
+        alarm_time = self._parse_alarm_time_text(value)
+        if not alarm_time.isValid():
+            if source:
+                self.log("WARN", f"{source} 返回的闹钟时间无法解析: {value}")
+            return
+        self.ui.alarmTimeEdit.setTime(alarm_time)
+        if hasattr(self, "scheduleAlarmTimeEdit"):
+            self.scheduleAlarmTimeEdit.setTime(alarm_time)
+        self.runtime_state.alarm_enabled = True
+        self.runtime_state.alarm_time = alarm_time.toString("HH:mm:ss")
+        self.last_alarm = self.runtime_state.alarm_time
+        self._save_runtime_state()
+        self._refresh_single_alarm_ui()
+
+    def _schedule_single_alarm_query(self, reason: str, delay_ms: int = 420) -> None:
+        if self._is_local_mode_active():
+            self._refresh_single_alarm_ui()
+            return
+        self.single_alarm_query_generation += 1
+        generation = self.single_alarm_query_generation
+        QtCore.QTimer.singleShot(
+            max(80, delay_ms),
+            lambda generation=generation, reason=reason: self._run_single_alarm_query(
+                generation, reason
+            ),
+        )
+
+    def _run_single_alarm_query(self, generation: int, reason: str) -> None:
+        if generation != self.single_alarm_query_generation:
+            return
+        if not self.is_connected:
+            return
+        if (
+            self.sync_in_progress
+            or self.ntp_fetch_in_progress
+            or self.weather_refresh_in_progress
+            or self.test_run_in_progress
+            or self.pending_queries
+            or self._serial_auto_quiet_active()
+        ):
+            delay_ms = self._serial_auto_quiet_delay_ms(220) if self._serial_auto_quiet_active() else 520
+            QtCore.QTimer.singleShot(
+                delay_ms,
+                lambda generation=generation, reason=reason: self._run_single_alarm_query(
+                    generation, reason
+                ),
+            )
+            return
+        self.log("INFO", f"{reason}：自动查询板载单次闹钟状态。")
+        self.send_command("*GET:ALARM", "ALARM")
+
+    def _advance_local_display_view_from_disp_key(self) -> None:
+        modes = ["TIME", "DATE", "WEEKDAY", "YEAR"]
+        current = self.runtime_state.view_mode if self.runtime_state.view_mode in modes else "TIME"
+        self.runtime_state.display_on = True
+        self.runtime_state.view_mode = modes[(modes.index(current) + 1) % len(modes)]
+        self.local_display_override_text = ""
+        self.local_display_override_started = 0.0
+        self.local_display_override_until = 0.0
+        self.local_display_override_led_mask = None
+        self.local_view_scroll_key = ""
+        self.ui.displayToggleCombo.setCurrentText("ON")
+        self._save_runtime_state()
+        self._refresh_local_twin_frame()
+
+    def _led_active_description(self, value: int) -> str:
+        compact_names = {
+            "串口RX": "RX",
+            "串口TX": "TX",
+            "手动覆盖": "手动",
+        }
+        active = [
+            f"{label}{compact_names.get(name, name)}"
+            for bit, (label, name) in enumerate(LED_BIT_LABELS)
+            if value & (1 << bit)
+        ]
+        return "、".join(active) if active else "全灭"
+
+    def _led_legend_text(self) -> str:
+        return "LED 位义：" + "  ".join(
+            f"{label}{name}" for label, name in LED_BIT_LABELS
+        ) + "；天气短显时按天气掩码临时覆盖整组 LED"
+
+    def _update_latest_led_label(self, value: int) -> None:
+        value &= 0xFF
+        self.latest_led_text = f"{value:02X}"
+        if hasattr(self, "latestLedLabel"):
+            self.latestLedLabel.setText(
+                f"最新 LED: {self.latest_led_text} | {self._led_active_description(value)}"
+            )
+        if hasattr(self, "ledLegendLabel"):
+            self.ledLegendLabel.setText(self._led_legend_text())
 
     def _apply_runtime_state_to_ui(self) -> None:
         self.ui.displayToggleCombo.setCurrentText("ON" if self.runtime_state.display_on else "OFF")
@@ -2475,12 +2599,20 @@ class MainWindow(QtWidgets.QMainWindow):
             self.latestLedLabel.setObjectName("latestLedLabel")
             self.latestLedLabel.setProperty("class", "infoChip")
             self.latestLedLabel.setStyleSheet("")
+            self.latestLedLabel.setWordWrap(True)
+            self.latestLedLabel.setToolTip(self._led_legend_text())
 
             self.latestEventLabel = QtWidgets.QLabel("最近事件: 等待数据", summary_widget)
             self.latestEventLabel.setObjectName("latestEventLabel")
             self.latestEventLabel.setProperty("class", "infoChip")
             self.latestEventLabel.setWordWrap(True)
             self.latestEventLabel.setStyleSheet("")
+
+            self.ledLegendLabel = QtWidgets.QLabel(self._led_legend_text(), summary_widget)
+            self.ledLegendLabel.setObjectName("ledLegendLabel")
+            self.ledLegendLabel.setProperty("class", "infoChip")
+            self.ledLegendLabel.setWordWrap(True)
+            self.ledLegendLabel.setStyleSheet("")
 
             self.showHeartbeatCheck = QtWidgets.QCheckBox("显示心跳日志", summary_widget)
             self.showHeartbeatCheck.setChecked(False)
@@ -2492,6 +2624,7 @@ class MainWindow(QtWidgets.QMainWindow):
             summary_layout.addWidget(self.showHeartbeatCheck, 0, 2)
             summary_layout.addWidget(self.autoScrollCheck, 0, 3)
             summary_layout.addWidget(self.latestEventLabel, 1, 0, 1, 4)
+            summary_layout.addWidget(self.ledLegendLabel, 2, 0, 1, 4)
 
             log_layout.insertWidget(0, summary_widget)
 
@@ -2697,12 +2830,20 @@ class MainWindow(QtWidgets.QMainWindow):
             self.latestLedLabel.setObjectName("latestLedLabel")
             self.latestLedLabel.setProperty("class", "infoChip")
             self.latestLedLabel.setStyleSheet("")
+            self.latestLedLabel.setWordWrap(True)
+            self.latestLedLabel.setToolTip(self._led_legend_text())
 
             self.latestEventLabel = QtWidgets.QLabel("最近事件: 等待数据", summary_widget)
             self.latestEventLabel.setObjectName("latestEventLabel")
             self.latestEventLabel.setProperty("class", "infoChip")
             self.latestEventLabel.setWordWrap(True)
             self.latestEventLabel.setStyleSheet("")
+
+            self.ledLegendLabel = QtWidgets.QLabel(self._led_legend_text(), summary_widget)
+            self.ledLegendLabel.setObjectName("ledLegendLabel")
+            self.ledLegendLabel.setProperty("class", "infoChip")
+            self.ledLegendLabel.setWordWrap(True)
+            self.ledLegendLabel.setStyleSheet("")
 
             self.showHeartbeatCheck = QtWidgets.QCheckBox("心跳日志", summary_widget)
             self.showHeartbeatCheck.setChecked(False)
@@ -2720,6 +2861,7 @@ class MainWindow(QtWidgets.QMainWindow):
             summary_layout.addWidget(self.autoScrollCheck, 0, 3)
             summary_layout.addWidget(self.latestEventLabel, 1, 0, 1, 4)
             summary_layout.addWidget(self.autoModeNoticeLabel, 2, 0, 1, 4)
+            summary_layout.addWidget(self.ledLegendLabel, 3, 0, 1, 4)
             log_layout.insertWidget(1, summary_widget)
 
         if self.ui.horizontalLayout_2.indexOf(self.ui.connectButton) == -1:
@@ -5204,11 +5346,10 @@ class MainWindow(QtWidgets.QMainWindow):
         elif query == "MODE":
             self._set_mode_state(self.runtime_state.mode)
         elif query == "ALARM":
-            alarm_time = QtCore.QTime.fromString(self.runtime_state.alarm_time, "HH:mm:ss")
-            if alarm_time.isValid():
-                self.ui.alarmTimeEdit.setTime(alarm_time)
-                if hasattr(self, "scheduleAlarmTimeEdit"):
-                    self.scheduleAlarmTimeEdit.setTime(alarm_time)
+            self._apply_alarm_state_from_text(
+                self.runtime_state.alarm_time if self.runtime_state.alarm_enabled else "OFF",
+                "本地 ALARM 查询",
+            )
         elif query == "DISPLAY":
             self.ui.displayToggleCombo.setCurrentText("ON" if self.runtime_state.display_on else "OFF")
         self._local_query_notice(query)
@@ -5264,9 +5405,7 @@ class MainWindow(QtWidgets.QMainWindow):
             except Exception:
                 action = command
         elif upper == "*SET:ALARM OFF":
-            self.runtime_state.alarm_enabled = False
-            self.last_alarm = "OFF"
-            self._save_runtime_state()
+            self._apply_alarm_state_from_text("OFF", "本地关闭单闹钟")
             action = "关闭单闹钟"
         elif upper.startswith("*SET:ALARM "):
             parts = upper.split()
@@ -5274,14 +5413,10 @@ class MainWindow(QtWidgets.QMainWindow):
                 hour = int(parts[parts.index("HOUR") + 1])
                 minute = int(parts[parts.index("MINUTE") + 1])
                 second = int(parts[parts.index("SECOND") + 1])
-                self.runtime_state.alarm_enabled = True
-                self.runtime_state.alarm_time = f"{hour:02d}:{minute:02d}:{second:02d}"
-                self.last_alarm = self.runtime_state.alarm_time
-                self._save_runtime_state()
-                alarm_time = QtCore.QTime(hour, minute, second)
-                self.ui.alarmTimeEdit.setTime(alarm_time)
-                if hasattr(self, "scheduleAlarmTimeEdit"):
-                    self.scheduleAlarmTimeEdit.setTime(alarm_time)
+                self._apply_alarm_state_from_text(
+                    f"{hour:02d}:{minute:02d}:{second:02d}",
+                    "本地设置单闹钟",
+                )
                 action = f"单闹钟 -> {self.runtime_state.alarm_time}"
             except Exception:
                 action = command
@@ -5348,11 +5483,10 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.ui.formatCombo.setCurrentText(self.runtime_state.format)
                 action = f"虚拟按键 FORMAT -> {self.runtime_state.format}"
             elif key == "DISP":
-                modes = ["TIME", "DATE", "WEEKDAY", "YEAR"]
-                current = self.runtime_state.view_mode if self.runtime_state.view_mode in modes else "TIME"
-                self.runtime_state.view_mode = modes[(modes.index(current) + 1) % len(modes)]
-                self.local_view_scroll_key = ""
+                self._advance_local_display_view_from_disp_key()
                 action = f"虚拟按键 DISP -> {self.runtime_state.view_mode}"
+            elif key in {"FUNC", "SHIFT", "ADD", "SAVE", "EXT"}:
+                self._schedule_single_alarm_query(f"本地虚拟按键 {key}", delay_ms=650)
             self._save_runtime_state()
         elif upper.startswith("*SET:RING "):
             action = f"铃声预览 -> {upper.removeprefix('*SET:RING ').strip()}"
@@ -5582,10 +5716,9 @@ class MainWindow(QtWidgets.QMainWindow):
                 return
             self.twin.set_led_byte(value)
             self.last_led_event = value
-            self.latest_led_text = parsed.data.upper()
             self.runtime_state.led_mask = value & 0xFF
             self._save_runtime_state()
-            self.latestLedLabel.setText(f"最新 LED: {self.latest_led_text}")
+            self._update_latest_led_label(value)
             return
 
         if parsed.name == "MODE":
@@ -5651,12 +5784,19 @@ class MainWindow(QtWidgets.QMainWindow):
                     )
                 self.refresh_dashboard()
                 return
+            if key == "DISP":
+                self._advance_local_display_view_from_disp_key()
+                self._set_latest_event(f"DISP -> {self.runtime_state.view_mode}")
+                self.refresh_dashboard()
+                return
+            if key in {"FUNC", "SHIFT", "ADD", "SAVE", "EXT"}:
+                self._schedule_single_alarm_query(f"板端按键 {key}", delay_ms=650)
             self.refresh_dashboard()
             self._set_latest_event(f"按键事件 -> {key}")
             return
 
         if parsed.name == "ALARM":
-            self.last_alarm = "RINGING"
+            self._apply_alarm_state_from_text("RINGING", "闹钟事件")
             append_event_log(APP_DIR, "alarm", "RINGING")
             if self.config.voice_enabled:
                 speak_text("基础闹钟已触发")
@@ -5665,7 +5805,7 @@ class MainWindow(QtWidgets.QMainWindow):
             return
 
         if parsed.name == "ALARM_OFF":
-            self.last_alarm = "OFF"
+            self._apply_alarm_state_from_text("OFF", "闹钟停止事件")
             append_event_log(APP_DIR, "alarm", "OFF")
             self.refresh_dashboard()
             self._set_latest_event("闹钟停止")
@@ -5674,6 +5814,9 @@ class MainWindow(QtWidgets.QMainWindow):
         if parsed.name == "EDIT" and parsed.extra:
             self.log("INFO", f"板端保存 {parsed.data}: {parsed.extra[0]}")
             append_event_log(APP_DIR, "edit", f"{parsed.data}: {parsed.extra[0]}")
+            if parsed.data.strip().upper() == "ALARM":
+                self._apply_alarm_state_from_text(parsed.extra[0], "板端保存 ALARM")
+                self._schedule_single_alarm_query("板端保存单次闹钟", delay_ms=260)
             self.refresh_dashboard()
             self._set_latest_event(f"保存 {parsed.data}: {parsed.extra[0]}")
 
@@ -5729,19 +5872,7 @@ class MainWindow(QtWidgets.QMainWindow):
             else:
                 self.log("WARN", f"忽略无效 MODE 查询返回: {data}")
         elif query == "ALARM":
-            self.last_alarm = data or "OFF"
-            if data and data != "OFF":
-                alarm_time = QtCore.QTime.fromString(data.replace(".", ":"), "HH:mm:ss")
-                if alarm_time.isValid():
-                    self.ui.alarmTimeEdit.setTime(alarm_time)
-                    if hasattr(self, "scheduleAlarmTimeEdit"):
-                        self.scheduleAlarmTimeEdit.setTime(alarm_time)
-                        self.runtime_state.alarm_enabled = True
-                        self.runtime_state.alarm_time = alarm_time.toString("HH:mm:ss")
-                        self._save_runtime_state()
-            else:
-                self.runtime_state.alarm_enabled = False
-                self._save_runtime_state()
+            self._apply_alarm_state_from_text(data or "OFF", "GET:ALARM")
         elif query == "DISPLAY" and data in {"ON", "OFF"}:
             self.ui.displayToggleCombo.setCurrentText(data)
             self.runtime_state.display_on = data == "ON"
@@ -5779,13 +5910,12 @@ class MainWindow(QtWidgets.QMainWindow):
             f"MINUTE {time_value.minute():02d} SECOND {time_value.second():02d}"
         )
         self.send_command(command)
+        self._schedule_single_alarm_query("上位机启用单次闹钟", delay_ms=360)
 
     def disable_alarm(self) -> None:
-        self.runtime_state.alarm_enabled = False
-        self.last_alarm = "OFF"
-        self._save_runtime_state()
-        self._refresh_single_alarm_ui()
+        self._apply_alarm_state_from_text("OFF", "上位机关闭单次闹钟")
         self.send_command("*SET:ALARM OFF")
+        self._schedule_single_alarm_query("上位机关闭单次闹钟", delay_ms=360)
 
     def sync_host_time(self) -> None:
         self.sync_ntp_time(trigger_source="按钮")
@@ -5882,6 +6012,11 @@ class MainWindow(QtWidgets.QMainWindow):
             self._set_latest_event(f"虚拟 USER2 -> 天气短显 {display_text}")
             self._trigger_user2_weather_short_display("虚拟 USER2")
             return
+        if key == "DISP":
+            self._advance_local_display_view_from_disp_key()
+            self._set_latest_event(f"虚拟 DISP -> {self.runtime_state.view_mode}")
+        if key in {"FUNC", "SHIFT", "ADD", "SAVE", "EXT"}:
+            self._schedule_single_alarm_query(f"虚拟按键 {key}", delay_ms=750)
         self.send_command(f"*SET:KEY {key_name}")
 
     def send_raw_command(self) -> None:

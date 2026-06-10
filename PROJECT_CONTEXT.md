@@ -1,5 +1,13 @@
 # PROJECT_CONTEXT - 智能时钟联网系统
 
+## 2026-06-10 v2.1 单次闹钟同步、DISP 星期页与 LED 位义说明
+- MCU `mcu/src/main.c` 修复 `DISP` 短按体验：如果显示被长按关闭，短按 `DISP` 会先恢复显示、清理天气/滚动临时画面，再按 `TIME -> DATE -> WEEKDAY -> YEAR` 切页；`WEEKDAY` 页继续显示 `MONDAY` 到 `SUNDAY`。
+- MCU 新增板端关闭单次闹钟入口：进入 `ALARM` 编辑页后按 `EXT` 会关闭板载单次闹钟并退出编辑；`*SET:ALARM OFF` 和 `*SET:ALARM ...` 现在也会上报 `*EVT:EDIT ALARM ...`，便于 PC 即时同步。
+- PC `pc_host/app.py` 将单次闹钟状态更新集中到 `_apply_alarm_state_from_text()`，支持正向 `12.30.45` 与 RIGHT 方向物理字符串 `54.03.21` 反解；收到 `*EVT:EDIT ALARM`、`*EVT:ALARM`、`*EVT:ALARM_OFF` 或板端/虚拟 `FUNC/SHIFT/ADD/SAVE/EXT` 相关按键后，会自动补发 `*GET:ALARM` 刷新界面，不再要求用户手动点查询。
+- PC 离线/虚拟 `DISP` 同步改为先确保显示开，再清除本地临时覆盖并切到下一页；右侧数字孪生 tooltip 说明 `EXT` 在 `ALARM` 编辑页可关闭单次闹钟。
+- PC 右侧日志摘要新增 LED 位义说明，`最新 LED` 同时显示十六进制和当前点亮位短写；README 新增 D1-D8 分配表：D1 心跳、D2 闹钟、D3 编辑、D4 RX、D5 TX、D6 夜间、D7 RIGHT、D8 手动覆盖，天气短显期间按天气掩码临时覆盖整组 LED。
+- 本轮截图已重新生成到 `docs/screenshots/*.png`，真实 Qt 窗口检查右侧数字孪生、两行按键、LED 位义和日志摘要未被裁切。仍需要 Keil5 重新编译烧录后实板验证物理 `DISP`、`ALARM` 编辑页 `EXT` 关闭和 `*EVT:EDIT ALARM` 回传。
+
 ## 2026-06-10 v2.1 USER2 与板端显示区收口
 - USER2 已彻底收口为天气短显专用键：MCU `mcu/src/main.c` 删除 `DecrementEditField()`，编辑态按 USER2 会先退出编辑再显示天气或 `NO WX`；PC 右侧数字孪生按钮改为 `USER2 / WX`，tooltip/README/扩展路线文档不再把 USER2 描述为 `SUB`/减一。
 - PC `pc_host/app.py` 的虚拟 USER2 会先下发 `*SET:WEATHER DISP <token8> LED <hex>`，再触发 `*SET:KEY USER2`；无天气缓存时下发 `NO_WX___`，保证板端固件收到的是可读的 `NO WX`。

@@ -262,6 +262,10 @@ class DigitalTwinWidget(QtWidgets.QWidget):
         outer.addWidget(self.display)
 
         self.leds = LedBarWidget(self)
+        self.leds.setToolTip(
+            "LED 位义：D1心跳，D2闹钟，D3编辑，D4串口RX，D5串口TX，"
+            "D6夜间，D7RIGHT显示，D8手动覆盖；天气短显时按天气掩码临时覆盖整组 LED"
+        )
         outer.addWidget(self.leds)
 
         self.grid = QtWidgets.QGridLayout()
@@ -274,7 +278,7 @@ class DigitalTwinWidget(QtWidgets.QWidget):
         self.key_button_base_style = "padding: 2px 4px;"
         key_tips = {
             "USER2": "USER2: 天气短显专用键；没有天气缓存时显示 NO WX",
-            "EXT": "SW8 / EXT: 退出编辑、取消天气短显或滚动消息",
+            "EXT": "SW8 / EXT: 退出编辑、取消天气短显或滚动消息；在 ALARM 编辑页关闭单次闹钟",
             "FORMAT": "SW7 / FORMAT: 切换 LEFT/RIGHT 数码管显示方向",
             "SPEED": "SW6 / SPEED: 切换走马灯快/慢速度",
             "DISP": "SW5 / DISP: 切换时间、日期、星期、年份页面；长按关显示和 LED",
