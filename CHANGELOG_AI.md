@@ -4,6 +4,28 @@
 
 ## 2026-06-10
 
+### v2.1 COM5 reset 后 USER2 与调试页收口
+
+#### 已完成修改
+- “调试与测试 -> 板端硬件测试”重排为两行清晰表单，并上移到协议台前方；蜂鸣输入框/触发按钮、LED 掩码输入框/设置按钮在 1280x720 窗口截图中均可见。
+- 手动协议台发送 `*PING` 时，即使关闭“心跳日志”，仍会记录手动 TX `*PING` 和 RX `*PONG`；后台心跳 PING 仍保持隐藏，避免日志刷屏。
+- PC 虚拟 USER2、协议台 USER2、RAW USER2 均不再裸发 `*SET:KEY USER2`，改为安全天气短显：发送 `*SET:LED <mask>` + `*SET:MSG <weather token>` 并等待真实 `*EVT:DISP`，避免旧/当前实板 USER2 内部路径把状态机打挂。
+- PC 收到实体 `*EVT:KEY USER2` 后，会立即用同一安全天气消息辅助覆盖显示，避免板端短暂异常帧长期停留；fallback 文案不再错误提示“请重新烧录最新 MCU”，改为检查临时状态和显示帧回传。
+- MCU 源码同步加固：模拟/连续 USER2 也走同一冷却；`*SET:WEATHER` 仅更新缓存时不再强制刷新正常时间帧，只有正在等待 PC 天气或已经处于天气短显时才刷新显示，减少 USER2 前 0.2 秒闪时间帧。
+- 自动测试脚本 USER2 项改为“USER2 安全天气短显”，通过 `EXT + LED + MSG` 观察 `SUN29C` 显示帧，不再用当前危险的裸 `*SET:KEY USER2` 路径。
+
+#### 验证结果
+- `pc_host/.venv/Scripts/python.exe -m py_compile pc_host/app.py pc_host/protocol.py pc_host/twin_widgets.py pc_host/extension_services.py pc_host/extension_store.py pc_host/run_extension_checks.py` 通过。
+- `gcc -fsyntax-only -std=c99 -DPART_TM4C1294NCPDT -DTARGET_IS_TM4C129_RA0 -I mcu/Inc -I mcu/Driverlib mcu/src/main.c` 通过。
+- `pc_host/.venv/Scripts/python.exe pc_host/run_extension_checks.py --host-only --full` 通过。
+- COM5 原始复现：当前已烧实板收到 `*SET:WEATHER DISP SUN29C__ LED 05` 后再裸发 `*SET:KEY USER2` 会显示异常 `bE______`，说明不能继续让 PC 自动走裸 USER2 路径。
+- 更新后的 `pc_host/run_extension_checks.py --port COM5 --full` 通过，覆盖 PING、GET、SET DATE/TIME、DAY/NIGHT、WEATHER、RING、安全 USER2、跑马灯、DISP/SPEED/FORMAT/EXT、ERROR LEN/SYNTAX/PARAM/RANGE。
+- 源码窗口直连 COM5 验证：隐藏心跳日志时手动 `*PING` 仍显示 TX/RX；虚拟 USER2 日志中没有 `*SET:KEY USER2`，有 `*SET:MSG SUN29C`，并收到 `SUN29C` 显示帧。
+- 重新打包 `build_release/SmartClockHost-v2.1/SmartClockHost.exe` 和 zip；exe 启动 8 秒未退出，烟测运行态已清理；安全联测后 COM5 仍能回 `*PONG`。
+
+#### 未解决问题
+- 当前实板裸 `*SET:KEY USER2` 仍会显示异常 `bE______`，PC 端已避开该危险路径；要根治实体 USER2 内部显示逻辑，需要用 Keil5 重新编译并烧录本轮最新 `mcu/src/main.c`。
+
 ### v2.1 COM5 实串口 USER2 卡死复盘与测试恢复
 
 #### 已完成修改

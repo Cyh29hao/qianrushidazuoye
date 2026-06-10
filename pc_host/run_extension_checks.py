@@ -221,19 +221,28 @@ def send_user2_expect_weather_display(
 ) -> list[str]:
     expected = "SUN29C"
     lines: list[str] = []
+    _progress(progress, "[INFO] USER2 safe weather display uses EXT + LED + MSG to avoid wedging old USER2 firmware")
     lines.extend(
         send_expect_ok(
             port,
-            build_set_weather_command("SUN29C__", 0x05),
-            timeout_s=2.0,
+            "*SET:KEY EXT",
+            timeout_s=1.2,
             progress=progress,
         )
     )
     lines.extend(
         send_expect_ok(
             port,
-            "*SET:KEY USER2",
-            timeout_s=2.0,
+            "*SET:LED 05",
+            timeout_s=1.2,
+            progress=progress,
+        )
+    )
+    lines.extend(
+        send_expect_ok(
+            port,
+            "*SET:MSG SUN29C",
+            timeout_s=1.5,
             progress=progress,
         )
     )
@@ -246,32 +255,9 @@ def send_user2_expect_weather_display(
         if parsed.kind == "event" and parsed.name == "DISP":
             compact = parsed.data.replace("_", "").replace(" ", "").replace("~", "_").upper()
             if expected in compact:
-                _progress(progress, f"[INFO] USER2 weather display observed: {parsed.data}")
+                _progress(progress, f"[INFO] USER2 safe weather display observed: {parsed.data}")
                 return lines
-    _progress(progress, "[WARN] USER2 weather display not observed; try EXT/MSG recovery")
-    try:
-        lines.extend(
-            send_expect_ok(
-                port,
-                "*SET:KEY EXT",
-                timeout_s=1.2,
-                progress=progress,
-            )
-        )
-    except Exception as exc:  # noqa: BLE001
-        _progress(progress, f"[WARN] EXT recovery failed: {exc}")
-    try:
-        lines.extend(
-            send_expect_ok(
-                port,
-                "*SET:MSG SUN29C",
-                timeout_s=1.5,
-                progress=progress,
-            )
-        )
-    except Exception as exc:  # noqa: BLE001
-        _progress(progress, f"[WARN] MSG fallback failed: {exc}")
-    raise RuntimeError(f"USER2 weather display {expected} not observed; lines={lines}")
+    raise RuntimeError(f"USER2 safe weather display {expected} not observed; lines={lines}")
 
 
 def execute_checks_on_open_port(
@@ -350,9 +336,9 @@ def execute_checks_on_open_port(
         "检查 *SET:RING DEFAULT 扩展铃声指令是否被当前固件支持。",
     )
     run(
-        "USER2 天气短显",
+        "USER2 安全天气短显",
         lambda: send_user2_expect_weather_display(port, progress=progress),
-        "检查 *SET:WEATHER 与 USER2 短显状态机；若失败，确认 MCU 已烧录最新固件并能上报 *EVT:DISP。",
+        "检查 PC 辅助 USER2 天气显示路径：EXT 退出临时态、LED 掩码、MSG 显示天气 token，并观察 *EVT:DISP。",
     )
     if full:
         run(

@@ -1819,7 +1819,7 @@ static void Keys_Scan(void)
 
 static void HandleKeyPress(KeyCode key, bool emitEvent)
 {
-    if ((key == KEY_USER2) && (emitEvent != false)) {
+    if (key == KEY_USER2) {
         if ((g_lastUser2ShortMs != 0UL) &&
             ((uint32_t)(g_millis - g_lastUser2ShortMs) < USER2_SHORT_COOLDOWN_MS)) {
             return;
@@ -2840,6 +2840,7 @@ static void HandleSetWeather(const char *params)
     uint8_t nextLedMask = 0U;
     uint8_t sawDisplay = 0U;
     uint8_t sawLed = 0U;
+    uint8_t shouldRefreshDisplay;
 
     params = SkipSpaces(params);
     while (*params != '\0') {
@@ -2885,10 +2886,14 @@ static void HandleSetWeather(const char *params)
     }
     snprintf(g_weatherText, sizeof(g_weatherText), "%s", nextWeather);
     g_weatherLedMask = nextLedMask;
+    shouldRefreshDisplay =
+        ((g_weatherAwaitingPcUntilMs != 0UL) || (g_weatherShowUntilMs > g_millis)) ? 1U : 0U;
     if ((g_weatherAwaitingPcUntilMs != 0UL) || (g_weatherShowUntilMs > g_millis)) {
         StartWeatherShortDisplay();
     }
-    RefreshDisplayAndLeds(true);
+    if (shouldRefreshDisplay != 0U) {
+        RefreshDisplayAndLeds(true);
+    }
     UART_ReplyOk(NULL);
 }
 

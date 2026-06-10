@@ -1,5 +1,12 @@
 # PROJECT_CONTEXT - 智能时钟联网系统
 
+## 2026-06-10 v2.1 COM5 reset 后 USER2 安全短显与调试页修复
+- COM5 reset 后重新实测，确认当前已烧实板裸 `*SET:KEY USER2` 仍会把 `SUN29C` 显示成异常 `bE______`，说明实体 USER2 内部路径在当前固件上仍不稳定；PC 端已不再从虚拟按钮、协议台或 RAW 入口裸发 `*SET:KEY USER2`。
+- PC USER2 统一改为“安全天气短显”：使用 `*SET:LED <mask>` + `*SET:MSG <weather token>` 直接显示天气 token；收到实体 `*EVT:KEY USER2` 后也会立即辅助覆盖显示，避免异常帧停留和串口状态机卡死。
+- MCU `mcu/src/main.c` 已同步加固 USER2 冷却和 `*SET:WEATHER` 缓存刷新逻辑：模拟 USER2 也节流，缓存更新不再强制刷新正常时间帧；但这部分必须重新 Keil5 编译烧录后才会体现在实体 USER2 内部路径上。
+- 调试页“板端硬件测试”已上移到协议台前，蜂鸣/LED 掩码输入框和按钮在 1280x720 真实 Qt 截图中可见；手动协议 `*PING` 在隐藏心跳日志时仍显示手动 TX/RX。
+- 本轮验证：Python `py_compile` 通过，MCU `gcc -fsyntax-only` 通过，host-only full 通过，`run_extension_checks.py --port COM5 --full` 通过；源码窗口直连 COM5 验证手动 PING 日志和虚拟 USER2 安全短显通过；v2.1 exe/zip 已重新打包，exe 启动 8 秒未退出。
+
 ## 2026-06-10 v2.1 COM5 实串口复测与 USER2 旧固件挂死记录
 - 按用户要求使用 COM5 做实串口全面测试：第一轮 `run_extension_checks.py --port COM5 --full` 已实际执行，PING、GET FORMAT/MODE、SET DATE/TIME、DAY/NIGHT、SET WEATHER、铃声、跑马灯下划线、DISP/SPEED/FORMAT/EXT、ERROR LEN/SYNTAX 均通过；USER2 天气短显没有观察到期望 `SUN29C` 显示帧。
 - 原始串口探测显示当前已烧板端固件在 `*SET:WEATHER DISP SUN29C__ LED 05` 后触发 `*SET:KEY USER2`，会输出异常 `*EVT:DISP` 字节，随后 COM5 可打开但不再响应 `*PING`、`*SET:KEY EXT`、`*RST`。这说明实板当前状态已经被 USER2 旧固件路径卡住，软件无法继续完成第二轮真实串口全量测试。

@@ -261,6 +261,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.pending_user2_display_text = ""
         self.pending_user2_display_deadline = 0.0
         self.pending_user2_display_fallback_done = False
+        self.board_weather_cache_token = ""
+        self.board_weather_cache_led_mask = -1
+        self.board_weather_cache_synced_monotonic = 0.0
+        self.manual_ping_log_until = 0.0
         self.single_alarm_query_generation = 0
         self.latest_display_text = "--"
         self.latest_led_text = "--"
@@ -3378,21 +3382,33 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _build_debug_hardware_group(self, parent: QtWidgets.QWidget) -> QtWidgets.QGroupBox:
         group = QtWidgets.QGroupBox("板端硬件测试", parent)
-        layout = QtWidgets.QGridLayout(group)
-        layout.setContentsMargins(12, 22, 12, 12)
-        layout.setHorizontalSpacing(10)
-        layout.setVerticalSpacing(8)
-        layout.setColumnStretch(1, 1)
+        layout = QtWidgets.QVBoxLayout(group)
+        layout.setContentsMargins(14, 26, 14, 12)
+        layout.setSpacing(8)
         self.ui.sendLedButton.setText("设置 LED")
         self.ui.beepSpinBox.setAlignment(QtCore.Qt.AlignCenter)
         self.ui.ledHexEdit.setAlignment(QtCore.Qt.AlignCenter)
         self.ui.ledHexEdit.setClearButtonEnabled(False)
-        layout.addWidget(QtWidgets.QLabel("蜂鸣(ms)", group), 0, 0)
-        layout.addWidget(self.ui.beepSpinBox, 0, 1)
-        layout.addWidget(self.ui.sendBeepButton, 0, 2)
-        layout.addWidget(QtWidgets.QLabel("LED 掩码", group), 1, 0)
-        layout.addWidget(self.ui.ledHexEdit, 1, 1)
-        layout.addWidget(self.ui.sendLedButton, 1, 2)
+        self.ui.beepSpinBox.setMinimumWidth(104)
+        self.ui.ledHexEdit.setMinimumWidth(104)
+        self.ui.sendBeepButton.setMinimumWidth(96)
+        self.ui.sendLedButton.setMinimumWidth(96)
+
+        def add_hardware_row(label_text: str, editor: QtWidgets.QWidget, button: QtWidgets.QPushButton) -> None:
+            row = QtWidgets.QWidget(group)
+            row_layout = QtWidgets.QHBoxLayout(row)
+            row_layout.setContentsMargins(0, 0, 0, 0)
+            row_layout.setSpacing(8)
+            label = QtWidgets.QLabel(label_text, row)
+            label.setMinimumWidth(76)
+            label.setAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
+            row_layout.addWidget(label)
+            row_layout.addWidget(editor, 1)
+            row_layout.addWidget(button, 0)
+            layout.addWidget(row)
+
+        add_hardware_row("蜂鸣(ms)", self.ui.beepSpinBox, self.ui.sendBeepButton)
+        add_hardware_row("LED 掩码", self.ui.ledHexEdit, self.ui.sendLedButton)
         hint = QtWidgets.QLabel(
             "蜂鸣用于快速听测板载蜂鸣器；LED 掩码输入 00-FF，发送 *SET:LED XX 后会短时手动覆盖 8 位 LED，便于验收逐位点亮，随后自动恢复系统状态。",
             group,
@@ -3407,18 +3423,17 @@ class MainWindow(QtWidgets.QMainWindow):
         led_map_hint.setWordWrap(True)
         led_map_hint.setProperty("class", "infoChip")
         led_map_hint.setStyleSheet("")
-        layout.addWidget(hint, 2, 0, 1, 3)
-        layout.addWidget(led_map_hint, 3, 0, 1, 3)
-        self._style_form_grid(layout, label_width=82, row_height=42)
+        layout.addWidget(hint)
+        layout.addWidget(led_map_hint)
         return group
 
     def _build_debug_test_page(self) -> QtWidgets.QScrollArea:
         page, host, outer = self._create_scroll_page()
         self._configure_sync_clock_group()
         outer.addWidget(self.ui.clockGroup)
+        outer.addWidget(self._build_debug_hardware_group(host))
         self.ui.demoGroup.setTitle("调试与协议")
         outer.addWidget(self.ui.demoGroup)
-        outer.addWidget(self._build_debug_hardware_group(host))
 
         test_group = QtWidgets.QGroupBox("自动化测试", host)
         test_layout = QtWidgets.QVBoxLayout(test_group)
@@ -3436,14 +3451,14 @@ class MainWindow(QtWidgets.QMainWindow):
         self.testEstimateLabel.setProperty("class", "infoChip")
         self.testEstimateLabel.setStyleSheet("")
         self.testExplainLabel = QtWidgets.QLabel(
-            "快速测试：串口心跳、FORMAT/MODE 查询、日期时间写入、昼夜模式切到另一侧再切回、铃声，以及 USER2 天气短显实测。",
+            "快速测试：串口心跳、FORMAT/MODE 查询、日期时间写入、昼夜模式切到另一侧再切回、铃声，以及 USER2 安全天气短显实测。",
             test_group,
         )
         self.testExplainLabel.setWordWrap(True)
         self.testExplainLabel.setProperty("class", "infoChip")
         self.testExplainLabel.setStyleSheet("")
         self.boardShortcutLabel = QtWidgets.QLabel(
-            "全面测试：在快速测试基础上追加城市/NTP入口检查、跑马灯下划线、DISP/SPEED/FORMAT/EXT 按键、全部 ERROR 类型格式；USER2 会等待实际显示帧，测试不会改动自动昼夜开关最终状态。",
+            "全面测试：在快速测试基础上追加城市/NTP入口检查、跑马灯下划线、DISP/SPEED/FORMAT/EXT 按键、全部 ERROR 类型格式；USER2 安全短显会等待实际显示帧，测试不会改动自动昼夜开关最终状态。",
             test_group,
         )
         self.boardShortcutLabel.setWordWrap(True)
@@ -3657,6 +3672,10 @@ class MainWindow(QtWidgets.QMainWindow):
     def send_protocol_current_command(self) -> None:
         command = self.ui.rawCommandEdit.text().strip()
         if not command:
+            return
+        if command.strip().upper() == "*SET:KEY USER2":
+            self.log("INFO", "协议台 USER2 已改走安全天气短显，不裸发 *SET:KEY USER2，避免旧固件卡死。")
+            self._trigger_user2_weather_short_display("协议台 USER2")
             return
         if command.upper() == "*RST" and (self.sync_in_progress or self.test_run_in_progress):
             self.send_command(command)
@@ -4488,6 +4507,41 @@ class MainWindow(QtWidgets.QMainWindow):
             return "NO_WX___", 0
         return token, led_mask & 0xFF
 
+    def _mark_board_weather_cache_dirty(self) -> None:
+        self.board_weather_cache_token = ""
+        self.board_weather_cache_led_mask = -1
+        self.board_weather_cache_synced_monotonic = 0.0
+
+    def _mark_board_weather_cache_synced(self, token: str, led_mask: int) -> None:
+        self.board_weather_cache_token = token
+        self.board_weather_cache_led_mask = led_mask & 0xFF
+        self.board_weather_cache_synced_monotonic = time.monotonic()
+
+    def _board_weather_cache_is_fresh(self, token: str, led_mask: int) -> bool:
+        if not token:
+            return False
+        if self.board_weather_cache_token != token:
+            return False
+        if self.board_weather_cache_led_mask != (led_mask & 0xFF):
+            return False
+        return (time.monotonic() - self.board_weather_cache_synced_monotonic) < 600.0
+
+    def _has_real_weather_cache(self) -> bool:
+        return bool((self.cached_weather_text or self.runtime_state.weather_token or "").strip())
+
+    def _push_weather_cache_to_board_if_available(self, source_text: str) -> None:
+        if not self._has_real_weather_cache():
+            return
+        self._push_weather_cache_to_board(source_text)
+
+    def _send_user2_weather_message(self, source_text: str, visible_text: str, led_mask: int) -> None:
+        message_text = visible_text.replace("_", " ").strip() or "NO WX"
+        self._mark_manual_serial_window(source_text, duration_s=0.9)
+        self._mark_user2_display_pending(message_text)
+        if led_mask:
+            self.send_command(f"*SET:LED {led_mask & 0xFF:02X}")
+        self.send_command(f"*SET:MSG {message_text}")
+
     def _compact_display_text(self, text: str) -> str:
         return "".join(ch for ch in text.upper() if ch.isalnum())
 
@@ -4521,7 +4575,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.pending_user2_display_deadline = 0.0
         self.log(
             "WARN",
-            f"USER2 触发后未检测到天气短显帧，已用滚动消息兜底显示 {fallback_text}；建议重新烧录最新 MCU 固件。",
+            f"USER2 触发后未检测到天气短显帧，已用滚动消息兜底显示 {fallback_text}；请检查板端是否已退出临时状态或串口是否持续回传显示帧。",
         )
         self._write_serial_recovery_command("*SET:KEY EXT")
         QtCore.QTimer.singleShot(180, lambda: self.send_command(f"*SET:MSG {fallback_text}"))
@@ -4549,6 +4603,7 @@ class MainWindow(QtWidgets.QMainWindow):
         token, led_mask = self._current_weather_short_token()
         self._mark_manual_serial_window(source_text, duration_s=0.8)
         self.send_command(build_set_weather_command(token, led_mask))
+        self._mark_board_weather_cache_synced(token, led_mask)
 
     def _trigger_user2_weather_short_display(
         self,
@@ -4601,15 +4656,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self.last_user2_trigger_monotonic = now
         self.pending_queries.clear()
         self.last_ping_monotonic = None
-        self._mark_manual_serial_window(source_text, duration_s=1.2)
-        weather_command = build_set_weather_command(token, led_mask)
         if has_weather_cache:
-            self.log("INFO", f"{source_text}：下发天气缓存并触发 USER2 显示 {visible}。")
+            self.log("INFO", f"{source_text}：使用安全天气短显显示 {visible}，避免重复触发板端 USER2 状态机。")
         else:
-            self.log("WARN", f"{source_text}：当前没有天气缓存，触发 USER2 显示 NO WX。")
-        self.send_command(weather_command)
-        self._mark_user2_display_pending(visible)
-        QtCore.QTimer.singleShot(240, lambda: self.send_command("*SET:KEY USER2"))
+            self.log("WARN", f"{source_text}：当前没有天气缓存，使用安全天气短显显示 NO WX。")
+        self._send_user2_weather_message(source_text, visible, led_mask)
         QtCore.QTimer.singleShot(1000, self.query_runtime_state)
 
     def _schedule_lifecycle_ntp(
@@ -5324,6 +5375,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.last_serial_rx_monotonic = now_perf
         self.last_tx_monotonic = 0.0
         self.serial_recovery_stage = 0
+        self._mark_board_weather_cache_dirty()
         self.poll_timer.start()
         self.ping_timer.start()
         self.board_ready_seen = False
@@ -5357,6 +5409,10 @@ class MainWindow(QtWidgets.QMainWindow):
             fallback_on_fail=True,
             query_after=True,
         )
+        QtCore.QTimer.singleShot(
+            900,
+            lambda: self._push_weather_cache_to_board_if_available("串口连接同步天气缓存"),
+        )
         return True
 
     def connect_and_apply_port(self) -> None:
@@ -5374,6 +5430,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.last_serial_rx_monotonic = 0.0
         self.last_serial_recovery_monotonic = 0.0
         self.serial_recovery_stage = 0
+        self._mark_board_weather_cache_dirty()
+        self.manual_ping_log_until = 0.0
         if self.serial_port is not None:
             try:
                 if self.serial_port.is_open:
@@ -5597,7 +5655,7 @@ class MainWindow(QtWidgets.QMainWindow):
         ):
             return
         self.last_ping_monotonic = time.perf_counter()
-        self.send_command("*PING")
+        self.send_command("*PING", heartbeat=True)
 
     @property
     def is_connected(self) -> bool:
@@ -5632,6 +5690,7 @@ class MainWindow(QtWidgets.QMainWindow):
         *,
         allow_during_sync: bool = False,
         allow_during_test: bool = False,
+        heartbeat: bool = False,
     ) -> None:
         cleaned = command.strip()
         if not cleaned:
@@ -5661,7 +5720,9 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         self.last_tx_command = cleaned
         self.last_tx_monotonic = time.perf_counter()
-        if not (cleaned == "*PING" and self.showHeartbeatCheck.isChecked() is False):
+        if cleaned == "*PING" and not heartbeat:
+            self.manual_ping_log_until = time.monotonic() + 2.5
+        if not (heartbeat and cleaned == "*PING" and self.showHeartbeatCheck.isChecked() is False):
             self.log("TX", cleaned)
 
     def poll_serial(self) -> None:
@@ -5721,6 +5782,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.read_buffer = ""
             self.last_board_display_monotonic = 0.0
             self.mode_resync_guard_until = time.monotonic() + 5.0
+            self._mark_board_weather_cache_dirty()
             self._set_latest_event("板端启动，等待真实显示帧")
             if not self.is_connected:
                 self._start_boot_mirror_playback()
@@ -5738,6 +5800,10 @@ class MainWindow(QtWidgets.QMainWindow):
                 QtCore.QTimer.singleShot(
                     360,
                     lambda: self._send_pc_mode_to_board("板端启动"),
+                )
+                QtCore.QTimer.singleShot(
+                    760,
+                    lambda: self._push_weather_cache_to_board_if_available("板端启动同步天气缓存"),
                 )
                 self.log("INFO", "检测到板端 RESET/启动：数字孪生优先映射板端真实显示帧，后台自动执行 NTP 对时并刷新天气。")
                 QtCore.QTimer.singleShot(1200, self._run_startup_sync_after_ready)
@@ -5860,8 +5926,12 @@ class MainWindow(QtWidgets.QMainWindow):
                 ):
                     self.last_user2_replay_monotonic = time.monotonic()
                     QtCore.QTimer.singleShot(
-                        90,
-                        lambda: self._trigger_user2_weather_short_display("板端 USER2 补发天气缓存"),
+                        20,
+                        lambda text=weather_text, mask=(self.cached_weather_led_mask or self.runtime_state.weather_led_mask): self._send_user2_weather_message(
+                            "板端 USER2 辅助显示",
+                            text,
+                            mask,
+                        ),
                     )
                 self.refresh_dashboard()
                 return
@@ -6103,6 +6173,10 @@ class MainWindow(QtWidgets.QMainWindow):
     def send_raw_command(self) -> None:
         command = self.ui.rawCommandEdit.text().strip()
         if not command:
+            return
+        if command.strip().upper() == "*SET:KEY USER2":
+            self.log("INFO", "RAW USER2 已改走安全天气短显，不裸发 *SET:KEY USER2，避免旧固件卡死。")
+            self._trigger_user2_weather_short_display("RAW USER2")
             return
         if command.upper() == "*RST" and (self.sync_in_progress or self.test_run_in_progress):
             self.send_command(command)
@@ -6380,6 +6454,8 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _should_suppress_rx_log(self, parsed: ParsedLine, raw_line: str) -> bool:
         if parsed.kind == "pong":
+            if time.monotonic() < self.manual_ping_log_until:
+                return False
             return self.showHeartbeatCheck.isChecked() is False
 
         if parsed.kind != "event":
