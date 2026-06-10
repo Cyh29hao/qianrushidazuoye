@@ -141,7 +141,7 @@ def _fetch_http_date_time(url: str, timeout: float) -> datetime:
     try:
         request = Request(
             url,
-            headers={"User-Agent": "SmartClockHost/2.1"},
+            headers={"User-Agent": "SmartClockHost/2.2"},
             method="HEAD",
         )
         with _open_url(request, timeout=timeout, prefer_proxy=False, allow_proxy=False) as response:
@@ -149,7 +149,7 @@ def _fetch_http_date_time(url: str, timeout: float) -> datetime:
     except Exception:
         header = ""
     if not header:
-        request = Request(url, headers={"User-Agent": "SmartClockHost/2.1"})
+        request = Request(url, headers={"User-Agent": "SmartClockHost/2.2"})
         with _open_url(request, timeout=timeout, prefer_proxy=False, allow_proxy=False) as response:
             header = response.headers.get("Date")
     if not header:
@@ -595,7 +595,7 @@ def _fetch_json(url: str, timeout: float, prefer_proxy: bool = True) -> dict[str
     request = Request(
         url,
         headers={
-            "User-Agent": "SmartClockHost/2.1 (+https://github.com/Cyh29hao)",
+            "User-Agent": "SmartClockHost/2.2 (+https://github.com/Cyh29hao)",
             "Accept": "application/json",
         },
     )

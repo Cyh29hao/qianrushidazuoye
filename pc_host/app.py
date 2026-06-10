@@ -20,7 +20,7 @@ APP_DIR = (
 )
 BUNDLE_DIR = Path(getattr(sys, "_MEIPASS", APP_DIR))
 QT_RUNTIME = configure_qt_runtime(APP_DIR)
-APP_VERSION = "v2.1"
+APP_VERSION = "v2.2"
 GITHUB_URL = "https://github.com/Cyh29hao"
 LOGO_PATH = BUNDLE_DIR / "assets" / "clock_logo.svg"
 ICON_PATH = BUNDLE_DIR / "assets" / "clock_logo.ico"
@@ -43,7 +43,7 @@ def _set_windows_app_user_model_id() -> None:
     try:
         ctypes = __import__("ctypes")
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
-            "Cyh29hao.SmartClockHost.v21"
+            "Cyh29hao.SmartClockHost.v22"
         )
     except Exception:
         pass
@@ -419,10 +419,10 @@ class MainWindow(QtWidgets.QMainWindow):
     def _footer_feature_text(self) -> str:
         if self.width() >= 1500:
             return (
-                "智能联网时钟系统 | 串口同步·数字孪生 | NTP天气·全球时区 | "
-                "板载闹钟·PC日程管理 | 个性化界面·清晰面板 | 自动测试·稳定鲁棒"
+                "串口同步·数字孪生 | NTP天气·全球时区 | 板载闹钟·PC日程管理 | "
+                "个性化界面·清晰面板 | 自动测试·稳定鲁棒"
             )
-        return "智能联网时钟系统 | 串口孪生 | NTP天气 | 全球时区 | 闹钟日程 | 个性面板 | 自动测试"
+        return "串口孪生 | NTP天气 | 全球时区 | 闹钟日程 | 个性面板 | 自动测试"
 
     def _restore_footer_features(self) -> None:
         if hasattr(self, "status_features"):
@@ -476,7 +476,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def _build_statusbar(self) -> None:
         self.ui.statusbar.setSizeGripEnabled(False)
         self.ui.statusbar.setMaximumHeight(34)
-        self.status_project = QtWidgets.QLabel("智能时钟")
+        self.status_project = QtWidgets.QLabel("智能联网时钟系统")
         self.status_project.setContentsMargins(4, 0, 8, 0)
         self.status_project_icon = QtWidgets.QLabel()
         if LOGO_PATH.exists():
@@ -3284,7 +3284,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.scheduleVoiceEnabledCheck = QtWidgets.QCheckBox("启用语音播报", schedule_group)
         self.scheduleVoiceEdit = QtWidgets.QLineEdit(schedule_group)
         self.scheduleVoiceEdit.setPlaceholderText("语音播报文案，留空则不播报")
-        self.quietNightCheck = QtWidgets.QCheckBox("夜间抑制日程铃声", schedule_group)
+        self.quietNightCheck = QtWidgets.QCheckBox("夜间抑制语音播报（铃声仍响）", schedule_group)
         self.scheduleWeekdayChecks: list[QtWidgets.QCheckBox] = []
 
         weekday_host = QtWidgets.QWidget(schedule_group)
@@ -5476,23 +5476,28 @@ class MainWindow(QtWidgets.QMainWindow):
     def trigger_schedule(self, item: ScheduleItem) -> None:
         token = normalize_board_message(item.board_label or item.title)
         ring_name = (item.ring_type or "DEFAULT").strip().upper()
-        should_ring = not (self.config.quiet_night_rings and self.last_mode == "NIGHT")
+        suppress_voice = self.config.quiet_night_rings and self.last_mode == "NIGHT"
+        confirm_beep_ms = max(650, min(1200, self._ring_fallback_duration(ring_name)))
         if self.is_connected:
             self._mark_manual_serial_window(f"提醒 {item.title}", duration_s=3.0)
             commands = ["*SET:DISPLAY ON", f"*SET:MSG {self._board_message_payload(token)}"]
-            if should_ring:
-                if self.ring_command_supported is False:
-                    commands.append(f"*SET:BEEP {self._ring_fallback_duration(ring_name)}")
-                else:
-                    commands.append(build_set_ring_command(ring_name))
-                self.log("INFO", f"日程提醒铃声: {item.title} -> {ring_name}")
+            if self.ring_command_supported is False:
+                commands.append(f"*SET:BEEP {confirm_beep_ms}")
+                self.log("INFO", f"日程提醒铃声: {item.title} -> BEEP {confirm_beep_ms}ms（兼容模式）")
             else:
-                self.log("INFO", f"日程提醒处于 NIGHT 且已启用夜间抑制，未触发铃声: {item.title}")
-            self._send_serial_sequence(commands, gap_ms=220)
-        if item.voice_text.strip():
+                commands.append(build_set_ring_command(ring_name))
+                commands.append(f"*SET:BEEP {confirm_beep_ms}")
+                self.log(
+                    "INFO",
+                    f"日程提醒铃声: {item.title} -> {ring_name}，并追加 BEEP {confirm_beep_ms}ms 确认",
+                )
+            self._send_serial_sequence(commands, gap_ms=260, allow_during_sync=True)
+        if item.voice_text.strip() and not suppress_voice:
             speak_text(item.voice_text.strip())
+        elif item.voice_text.strip() and suppress_voice:
+            self.log("INFO", f"日程提醒处于 NIGHT，已按设置抑制语音播报但保留板端铃声: {item.title}")
         append_event_log(APP_DIR, "schedule_fire", f"{item.title} | {ring_name}")
-        self.log("INFO", f"提醒触发: {item.title} | 铃声 {ring_name if should_ring else 'NIGHT_SUPPRESSED'}")
+        self.log("INFO", f"提醒触发: {item.title} | 铃声 {ring_name}")
         self.refresh_dashboard()
 
     def refresh_ports(self) -> None:

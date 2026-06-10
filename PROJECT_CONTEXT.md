@@ -1,5 +1,12 @@
 # PROJECT_CONTEXT - 智能时钟联网系统
 
+## 2026-06-10 v2.2 最终演示收口
+- 当前主线版本升为 `v2.2`。PC `APP_VERSION`、默认配置 `app_version`、HTTP User-Agent、README、当前状态总览、逐条验收对照和 MCU 开机版本显示均已同步到 v2.2 / `V2.2`。
+- 底部状态栏修复重复项目名：左侧固定项目名为 `智能联网时钟系统`，后续 feature 文案去掉重复前缀，避免再出现 `智能时钟 | 智能联网时钟系统 | ...`。
+- 日程提醒铃声修复为“必响”策略：PC 日程触发时会下发 `DISPLAY ON`、`SET MSG`、`SET RING`，并追加短 `SET BEEP` 作为可听确认；NIGHT 模式不再抑制板端铃声，只会按设置抑制语音播报。
+- Windows 图标路径再次加固：AppUserModelID 改为 `Cyh29hao.SmartClockHost.v22`，源码和打包版都优先使用 `pc_host/assets/clock_logo.ico`；v2.2 exe 需要重新打包并用图标抽取验证。
+- 本轮改动触及 PC 和 MCU：PC 需要重新打包 v2.2 exe；MCU 需要 Keil5 重新编译烧录后才能看到开机 `V2.2` 和最终板端行为。
+
 ## 2026-06-10 v2.1 USER2 串口序列化与 COM5 联机回归
 - 本轮继续使用 COM5 实机测试，重点复测用户反复指出的 USER2、隐藏心跳下手动 PING、自动测试、跑马灯下划线、连续 NTP/串口恢复和调试页蜂鸣/LED 掩码可见性。
 - PC USER2 天气短显现在走间隔串口序列：`DISPLAY ON -> FORMAT LEFT -> LED -> MSG`，不再裸发 `*SET:KEY USER2`，也不再把多条命令瞬间塞给 MCU；USER2 期间延长串口安静窗口，后台天气/NTP/GET 查询不会插队抢显示。

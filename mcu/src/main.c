@@ -1128,7 +1128,7 @@ static void BuildVisibleText(char *out, uint8_t outSize)
         return;
     }
     if (g_bootPhase == BOOT_VERSION) {
-        snprintf(out, outSize, "V2.1");
+        snprintf(out, outSize, "V2.2");
         return;
     }
 

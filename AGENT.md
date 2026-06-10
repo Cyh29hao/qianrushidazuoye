@@ -96,7 +96,7 @@
 
 ## Release 打包硬规则
 
-- 用户默认检查打包版 exe。任何一轮修改只要触及 `pc_host/app.py`、`pc_host/twin_widgets.py`、`pc_host/protocol.py`、UI 布局、主题、配置默认值、资源文件或打包相关文档，完成验证后都必须重新生成 `build_release/SmartClockHost-v2.1/SmartClockHost.exe` 和 zip。
+- 用户默认检查打包版 exe。任何一轮修改只要触及 `pc_host/app.py`、`pc_host/twin_widgets.py`、`pc_host/protocol.py`、UI 布局、主题、配置默认值、资源文件或打包相关文档，完成验证后都必须重新生成当前版本的 `build_release/SmartClockHost-v*/SmartClockHost.exe` 和 zip（本轮为 `build_release/SmartClockHost-v2.2/SmartClockHost.exe`）。
 - 打包前先运行源码版或等价脚本做真实窗口/截图检查；打包后必须再启动 exe 做烟测，确认窗口能打开、图标不是默认占位图、无明显 QSS parse/Traceback、主要页面布局没有被打包环境改坏。
 - `build_release/` 仍然不提交到 Git；只在汇报中说明本地 exe/zip 路径。如需 GitHub Release 附件，另行上传 zip，不把大型打包产物混进普通 commit。
 - 每版 release 文件夹和 zip 都必须包含当前最新的 MCU 工程副本，至少包括 `mcu/src/`、`mcu/Inc/`、`mcu/Driverlib/`、`mcu/RTE/`、`mcu/clock.uvprojx`、`mcu/clock.uvoptx`，方便用户直接打开 Keil5 编译烧录；仍然不要提交 `build_release/`。

@@ -4,6 +4,23 @@
 
 ## 2026-06-10
 
+### v2.2 状态栏、图标与日程铃声收口
+
+#### 已完成修改
+- PC 端版本升为 `v2.2`，默认配置、HTTP User-Agent、README、当前状态总览和逐条验收对照同步更新；MCU 开机版本显示同步改为 `V2.2`。
+- 底部状态栏左侧项目名改为 `智能联网时钟系统`，feature 文案去掉重复项目名前缀，最终显示形如 `智能联网时钟系统 | 串口孪生 | NTP天气 | ...`。
+- 日程触发逻辑改为演示优先：无论 DAY/NIGHT 都会向板端下发铃声；若命名铃声可用，先下发 `*SET:RING <type>`，再追加短 `*SET:BEEP <ms>` 做可听确认；若旧固件不支持 `RING`，直接使用 BEEP 兼容模式。夜间抑制选项改为只抑制语音播报，铃声仍响。
+- Windows AppUserModelID 更新到 v2.2，Qt 应用级图标和窗口图标仍优先使用 `pc_host/assets/clock_logo.ico`；v2.2 release 打包时会重新嵌入 ico。
+
+#### 验证结果
+- `python -m py_compile pc_host/app.py pc_host/run_extension_checks.py pc_host/protocol.py pc_host/twin_widgets.py pc_host/extension_services.py pc_host/extension_store.py` 通过。
+- `gcc -fsyntax-only -std=c99 -DPART_TM4C1294NCPDT -DTARGET_IS_TM4C129_RA0 -I mcu/Inc -I mcu/Driverlib mcu/src/main.c` 通过。
+- `pc_host/run_extension_checks.py --host-only --full` 通过；离屏 UI 探针确认状态栏左侧为 `智能联网时钟系统`、feature 文案不再重复项目名、版本显示 `v2.2`。
+- 离屏日程触发探针确认 NIGHT + 夜间抑制开启 + sync 占用情况下仍会排队 `*SET:DISPLAY ON`、`*SET:MSG`、`*SET:RING WAKE`、`*SET:BEEP 1200`，且允许对时期间下发提醒。
+- COM5 短探针确认 `*SET:RING WAKE` 和 `*SET:BEEP 900` 均返回 `OK`。
+- PyInstaller clean build 已重新生成 `build_release/SmartClockHost-v2.2/SmartClockHost.exe` 和 zip；exe 启动 8 秒未退出；从 exe 抽取的关联图标为项目橙色数码管图标。
+- 因 MCU 开机版本改为 `V2.2`，正式演示前需要 Keil5 重新编译烧录。
+
 ### v2.1 USER2 串口序列化与 COM5 联机回归
 
 #### 已完成修改

@@ -1,6 +1,6 @@
 # 智能联网时钟系统
 
-这个仓库是 ARM 大作业智能联网时钟系统当前主版本，已进入 `v2.1` 提交准备阶段。项目由 S800/TM4C1294 板端程序和 PyQt5 PC 上位机构成，覆盖：
+这个仓库是 ARM 大作业智能联网时钟系统当前主版本，已进入 `v2.2` 提交准备阶段。项目由 S800/TM4C1294 板端程序和 PyQt5 PC 上位机构成，覆盖：
 
 - `§3` S800 板本地基础功能；
 - `§4.1` PC 上位机核心功能；
@@ -66,7 +66,7 @@
 - 技术栈：`Python 3.12 + PyQt5 + pyserial`
 - GUI 入口：`pc_host/app.py`
 - 推荐启动入口：`pc_host/launch_pc_host.ps1`
-- 当前上位机版本：`v2.1`
+- 当前上位机版本：`v2.2`
 - Qt 运行时自检：`pc_host/diagnose_qt_runtime.py`
 
 ## 快速开始
@@ -94,12 +94,12 @@ python -m PyQt5.uic.pyuic -o ui_main.py main.ui
 
 ## 当前状态
 
-- 当前主版本：`v2.1`。
+- 当前主版本：`v2.2`。
 - MCU 侧已完成：
   - `mcu/src/main.c` 主逻辑落地，覆盖开机画面、时钟/日期/周几显示、滚动、闹钟、编辑状态机、LED、蜂鸣、串口协议和事件上报。
   - 已生成 `mcu/obj/s800_clock.axf`，但昨晚又修改了 USER1/I2C/串口稳定性保护，正式提交前建议用 Keil5 重新编译并确认 `.axf` 与最新源码一致。
 - PC 侧已完成：
-  - `Python + PyQt5 + pyserial` 源码版可运行，`build_release/SmartClockHost-v2.1/SmartClockHost.exe` 打包版已生成。
+  - `Python + PyQt5 + pyserial` 源码版可运行，`build_release/SmartClockHost-v2.2/SmartClockHost.exe` 打包版已生成。
   - 已实现串口控制、数字孪生、日志、自动测试、NTP 对时、天气短显、自动昼夜、多日程提醒和本地离线演示。
 - 已完成的扩展/自主方向：
   - `§4.2` 扩展功能中 E1/E2/E3 已完整实现，E4 采用轻量数据看板和事件日志方案。
@@ -175,10 +175,10 @@ python -m pip install -r requirements.txt
 打包版启动：
 
 ```text
-build_release/SmartClockHost-v2.1/SmartClockHost.exe
+build_release/SmartClockHost-v2.2/SmartClockHost.exe
 ```
 
-打包版为 PyInstaller onedir 形式，普通用户双击 `SmartClockHost.exe` 即可启动，不需要额外安装 Python。若同时提供压缩包，文件名通常为 `build_release/SmartClockHost-v2.1.zip`。
+打包版为 PyInstaller onedir 形式，普通用户双击 `SmartClockHost.exe` 即可启动，不需要额外安装 Python。若同时提供压缩包，文件名通常为 `build_release/SmartClockHost-v2.2.zip`。
 
 ### 4. 串口连接步骤
 
@@ -191,7 +191,7 @@ build_release/SmartClockHost-v2.1/SmartClockHost.exe
 
 ### 界面截图
 
-以下截图来自 v2.1 上位机在 Windows 原生 Qt 窗口下的 1280x720 检查，用于快速确认页面结构。实际演示时建议优先使用 `build_release/SmartClockHost-v2.1/SmartClockHost.exe`，因为后续每版交付都会重新打包 exe。
+以下截图来自 v2.2 上位机在 Windows 原生 Qt 窗口下的 1280x720 检查，用于快速确认页面结构。实际演示时建议优先使用 `build_release/SmartClockHost-v2.2/SmartClockHost.exe`，因为后续每版交付都会重新打包 exe。
 
 ![主页数据看板](docs/screenshots/home-1280x720.png)
 
@@ -226,7 +226,7 @@ NTP 成功后，PC 会以获取到的城市时间作为基准，再用单调时�
 
 ### 7. 昼夜模式与自动切换
 
-白天/黑夜模式可手动切换，也可启用自动昼夜切换。自动模式在 v2.1 安装包默认开启，会根据当前城市时间、日出日落信息或默认时间段判断应使用 DAY 还是 NIGHT。
+白天/黑夜模式可手动切换，也可启用自动昼夜切换。自动模式在 v2.2 安装包默认开启，会根据当前城市时间、日出日落信息或默认时间段判断应使用 DAY 还是 NIGHT。
 
 注意：PC 端按钮和板端 `USER1` 长按都可以切换昼夜模式，并会同步到另一端。用户手动切换另一昼夜模式时，上位机会关闭自动切换，并只在日志记录原因。切换城市或执行一键对时/天气刷新不会主动清空自动昼夜勾选状态。RESET/重连后的短时间内以 PC 当前模式为准，PC 会把 DAY/NIGHT 同步回板端，避免板端默认状态污染上位机显示。
 
@@ -236,7 +236,7 @@ NTP 成功后，PC 会以获取到的城市时间作为基准，再用单调时�
 
 - 串口已连接时，以 MCU 上报的 `*EVT:DISP`、`*EVT:LED`、`*EVT:KEY` 为准。
 - 串口未连接时，以 PC 本地运行时状态生成镜像，方便离线演示。
-- 板端开机显示 `88888888`、学号后八位、`V2.1` 版本/提示语时，PC 端会尽量同步显示；如果 PC 较晚连接，后续收到真实显示事件后会自动进入当前状态。
+- 板端开机显示 `88888888`、学号后八位、`V2.2` 版本/提示语时，PC 端会尽量同步显示；如果 PC 较晚连接，后续收到真实显示事件后会自动进入当前状态。
 - `*EVT:DISP` 中 `_` 仍表示空白物理位；如果滚动消息里需要真实显示下划线，MCU 会用 `~` 上报，PC 数字孪生会还原为七段码底段。
 - `USER2` 专用于天气短显：上位机虚拟 USER2、协议台 USER2 和自动测试采用安全短显路径，不再裸发 `*SET:KEY USER2`，而是按 `DISPLAY ON -> FORMAT LEFT -> LED -> MSG` 间隔发送天气 token，避免旧固件 USER2 内部路径或串口连发把状态机卡住。PC 收到实体 USER2 事件时也会辅助覆盖同一天气 token；若遇到非法显示帧，数字孪生会忽略该帧并自动重试短显。它不再承担 `SUB`/减一功能。若要让板端内部 USER2 路径本身完全干净，需要重新烧录当前 `mcu/src/main.c`。
 - `DISP` 短按按顺序切换 `时间 -> 日期 -> 星期 -> 年份`，其中星期页显示 `MONDAY` 到 `SUNDAY`；如果显示曾被长按关闭，短按 `DISP` 会先恢复显示再切页。
