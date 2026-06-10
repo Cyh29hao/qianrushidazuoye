@@ -2,6 +2,19 @@
 
 只记录阶段性最终修改、关键文件、验证结果和未解决问题；不记录无关对话。
 
+## 2026-06-11
+
+### Plus 周计划 Codex 交接补记
+
+#### 已完成修改
+- 新增 `docs/PLUS周计划Codex交接说明.md`，系统记录当前 v2.2 状态、最近一次提交、已验证事项、本地 release/for_submit 路径、GitHub 状态、下一位 Codex 接手优先事项和不要误踩的坑。
+- 更新 `PROJECT_CONTEXT.md` 顶部，补充 Plus 周计划交接状态：commit `e812ac5`、`main`/`gemini-ui-improvements` 已推送、tag `v2.2` 已推送、本地 release zip 已生成、GitHub Release 附件仍需网页上传。
+
+#### 交接结论
+- 当前主线是 `v2.2`，不要继续 v3.0。
+- PC 打包产物和 `for_submit/` 已本地准备好，但真实演示 mp4、简介 PDF 和 GitHub Release 附件仍需要用户后续完成。
+- 后续任何 PC/UI 可见改动都必须重新打包 exe，并用临时 `SMARTCLOCK_PROFILE_DIR` 烟测，不能污染用户配置。
+
 ## 2026-06-10
 
 ### v2.2 状态栏、图标与日程铃声收口

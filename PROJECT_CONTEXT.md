@@ -1,5 +1,13 @@
 # PROJECT_CONTEXT - 智能时钟联网系统
 
+## 2026-06-11 Plus 周计划 Codex 交接记录
+- 本轮最终交接文档已写入 `docs/PLUS周计划Codex交接说明.md`。后续另一个 Codex 账号接手时，优先读该文件、`AGENT.md`、`CHANGELOG_AI.md`、`docs/当前项目状态总览.md` 和 `docs/大作业要求逐条验收对照.md`。
+- 当前代码状态：`gemini-ui-improvements` 与 `main` 均已推到 commit `e812ac5`；`v2.2` tag 已推送到 GitHub；本地工作树在交接前应保持干净。
+- 当前 release 状态：本地已生成 `build_release/SmartClockHost-v2.2/SmartClockHost.exe`、`build_release/SmartClockHost-v2.2.zip`、`for_submit/release/SmartClockHost-v2.2.zip`；exe 8 秒烟测通过，图标抽取为项目图标，release 目录无用户配置/日志残留。
+- GitHub Release 附件未自动上传成功：本机无 `gh`，也无可用 GitHub API token。已经推送 tag `v2.2`，下一步需要在 GitHub 网页新建 release 并上传 `SmartClockHost-v2.2.zip`。
+- `for_submit/` 已建立：轻量文档和截图进入 Git；`for_submit/release/` 与 `for_submit/mcu/` 为本地准备材料，按 `.gitignore` 不提交。真实演示 mp4 尚未生成，不能伪造，需要用户实机录制。
+- 交接注意：不要再继续 v3.0；用户明确要回到 v2.2 稳定线。任何可见 PC/UI 修改后都必须重新打包 exe，并用临时 `SMARTCLOCK_PROFILE_DIR` 烟测，不能污染用户配置。
+
 ## 2026-06-10 v2.2 最终演示收口
 - 当前主线版本升为 `v2.2`。PC `APP_VERSION`、默认配置 `app_version`、HTTP User-Agent、README、当前状态总览、逐条验收对照和 MCU 开机版本显示均已同步到 v2.2 / `V2.2`。
 - 底部状态栏修复重复项目名和竖线分隔：左侧固定项目名为 `智能联网时钟系统`，feature 文案改为 `·` 分隔，当前显示形如 `智能联网时钟系统 · 串口孪生 · NTP天气 · 全球时区 · 闹钟日程 · 个性面板 · 自动测试`。
