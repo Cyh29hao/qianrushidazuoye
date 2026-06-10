@@ -345,3 +345,29 @@
 - v2.1 release 已重新打包：`build_release/SmartClockHost-v2.1/SmartClockHost.exe`，压缩包为 `build_release/SmartClockHost-v2.1.zip`。该目录仍被 `.gitignore` 忽略，不进入 Git。
 - 已验证：Python 语法检查通过、host-only 自动测试通过、强制 NIGHT 离屏首启 palette 检查通过、release exe 5 秒短启动烟测通过。
 - 后续测试重点：真实桌面双击 release exe，在上次保存为 `NIGHT` 的状态下确认首屏右侧数字孪生、日志区、页脚/状态栏不再出现白底；再切换 DAY/NIGHT 各一次确认主题仍正常。
+## 2026-06-10 v2.1 当前收口状态
+
+本轮只维护 2.1 主线，不继续 3.0。最新修改聚焦于用户实机反馈的四类问题：FUNC/按键高并发导致板端停在非默认页、调试页蜂鸣/LED 掩码控件不可见、自动化测试过快互相干扰且没有恢复用户设置、系统设置缺少一键恢复出厂状态。
+
+当前实现状态：
+
+- PC 端所有虚拟按键、协议台 `*SET:KEY ...` 和 RAW 按键命令都经由 `_send_key_command_safely()`，在自动测试、NTP、天气同步占用串口时拒绝人为按键；普通按键有冷却窗口，FUNC 冷却更长，减少连续点击把 MCU 状态机压死的概率。
+- MCU 端源码增加串口模拟按键冷却，`FUNC` 冷却时间更长；`EXT` 在没有编辑态、临时显示、闹钟等优先退出项时，会强制回到默认时间页并打开显示。注意：这部分必须重新 Keil5 编译并烧录后才会在实板生效。
+- “调试与测试 -> 板端硬件测试”现在独立创建蜂鸣和 LED 掩码控件，避免被系统设置页重建布局时误删或重父级；UI 几何探针确认 920x600 下控件和确认按钮均可见。
+- 自动化测试脚本 `pc_host/run_extension_checks.py` 已改成逐项慢速执行：快速测试预计约 45 秒，全面测试预计约 125 秒；测试前保存 `FORMAT/MODE/DISPLAY`，结束或失败后恢复；任一串口项 FAIL 后立即停止后续发送，避免硬件已经卡住时继续压命令。
+- 系统设置页新增“恢复出厂设置”按钮，带二次确认；确认后重置配置、运行状态、日程和天气缓存，若串口已连接会尝试同步 `EXT/DISPLAY ON/FORMAT LEFT/MODE DAY/ALARM OFF/LED 00` 到板端。
+- README 已更新：说明自动测试节奏和失败即停、测试后恢复设置、FUNC/USER 按键节流、EXT 回默认时间页、恢复出厂设置入口。
+
+本轮验证记录：
+
+- PC 静态检查通过：`python -m py_compile pc_host/app.py pc_host/run_extension_checks.py pc_host/protocol.py pc_host/twin_widgets.py pc_host/extension_services.py pc_host/extension_store.py`。
+- PyQt offscreen UI 检查通过：调试页蜂鸣/LED 掩码控件可见；系统设置页恢复出厂按钮可见；系统设置页无横向滚动。
+- COM5 旧固件实板联测：快速测试通过；全面测试在加长 USER2/跑马灯等待后通过，覆盖 PING、GET、DATE/TIME、MODE、WEATHER、BEEP、USER2、MSG 下划线、DISP/SPEED/FORMAT/EXT 和 ERROR 类型。
+- COM5 旧固件压力检查：连续快速发送多次 `FUNC` 后板端未永久失联，`PING` 可恢复响应；但旧固件画面仍可能停在星期/日期页，需要继续 `DISP` 才能回到时间页。源码里的 MCU 端冷却和 `EXT` 默认页恢复仍需烧录新固件后复测。
+- v2.1 exe 已重新打包：`build_release/SmartClockHost-v2.1/SmartClockHost.exe`，打包产物按 `.gitignore` 不提交。
+
+后续首要事项：
+
+1. 用 Keil5 重新编译并烧录 `mcu/src/main.c` 最新固件。
+2. 烧录后重点实测：FUNC 连按/长按/短按混合、USER1/USER2 连按、DISP 连续循环、EXT 回默认时间页、全面联合测试、NTP/天气期间人为按键被拒绝。
+3. 若实板仍出现卡死，优先从 MCU 显示/编辑状态机的“临时显示结束”和“编辑超时退出”路径继续收口，不要再靠 PC 端硬塞更多命令。

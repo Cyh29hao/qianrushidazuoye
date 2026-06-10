@@ -558,3 +558,29 @@
 
 ### 未解决问题
 - 仍建议在真实 Windows 桌面双击 `build_release/SmartClockHost-v2.1/SmartClockHost.exe`，确认首屏 NIGHT 模式不再出现白底；offscreen 可验证 palette，但真实 DPI/显卡绘制仍以本机肉眼复核为准。
+## 2026-06-10 v2.1 串口并发与联测收口
+
+### 已完成修改
+- 修复“调试与测试 -> 板端硬件测试”中蜂鸣和 LED 掩码控件不可见的问题：不再复用会被系统设置布局重建影响的旧控件，改为在调试页独立创建 `debugBeepSpinBox`、`debugLedHexEdit`、`debugSendBeepButton`、`debugSendLedButton`，旧信号入口继续指向这组可见控件。
+- PC 端虚拟按键、协议台 `*SET:KEY ...`、RAW 命令统一进入安全发送路径。自动测试、NTP、天气同步占用串口时会拒绝人为按键；FUNC 等容易进入编辑态的按键增加冷却窗口，避免连续乱按把板端留在临时/编辑状态。
+- 自动化测试改为慢速、逐项稳定、失败即停：测试前抓取 `FORMAT`、`MODE`、`DISPLAY`，结束或失败后发送 `EXT` 并恢复原设置；全面测试预计约 125 秒，快速测试预计约 45 秒。
+- 系统设置新增“恢复出厂设置”按钮，点击后需要二次确认；确认后重置城市、主题、显示、闹钟、日程和本地运行状态，并在串口已连接时尽量把默认状态同步到板端。
+- MCU 端 `mcu/src/main.c` 增加串口模拟按键冷却，FUNC 串口触发冷却更长；`EXT` 在没有临时显示/编辑/闹钟可退出时会回到默认时间页并打开显示，避免用户乱按后找不到默认时间界面。
+- README 更新自动测试节奏、状态恢复、FUNC/USER 按键节流、EXT 回默认时间页和恢复出厂设置相关说明。
+
+### 关键文件
+- `pc_host/app.py`
+- `pc_host/run_extension_checks.py`
+- `mcu/src/main.c`
+- `README.md`
+
+### 验证结果
+- PC 语法检查通过：`python -m py_compile pc_host/app.py pc_host/run_extension_checks.py pc_host/protocol.py pc_host/twin_widgets.py pc_host/extension_services.py pc_host/extension_store.py`。
+- PyQt 几何检查通过：在 920x600 条件下，“板端硬件测试”蜂鸣/LED 掩码输入框和确认按钮均可见；系统设置页“恢复出厂设置”按钮可见，水平滚动条最大值为 0。
+- COM5 实板串口测试通过：快速联合测试通过；全面联合测试在加长 USER2 和跑马灯等待后通过，覆盖 PING、GET、SET DATE/TIME、MODE 切换、WEATHER、BEEP、USER2、MSG 下划线、DISP/SPEED/FORMAT/EXT、ERROR LEN/SYNTAX/PARAM/RANGE。
+- 高并发压力检查：旧固件下连续快速发送 12 次 `*SET:KEY FUNC` 后，串口仍能通过 `PING` 响应，但画面可能停在星期/日期临时页；继续按 `DISP` 可切回时间页。源码中已增加 MCU 端冷却和 `EXT` 回默认时间页保护，需要重新烧录后才能完全发挥。
+- v2.1 exe 已重新打包并短启动烟测：`build_release/SmartClockHost-v2.1/SmartClockHost.exe`。
+
+### 仍需人工/硬件验证
+- `mcu/src/main.c` 已改动，必须用 Keil5 重新编译并烧录 S800 后，再复测 FUNC 连按、EXT 回默认时间页、DISP 循环、USER2 天气短显和自动测试长流程。
+- 本轮 release 打包产物在 `build_release/`，该目录按 `.gitignore` 不提交到 Git；如需发 GitHub Release，应手动上传 zip 附件。

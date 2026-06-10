@@ -332,6 +332,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self.manual_port_choice_made = False
         self.serial_io_lock = threading.RLock()
         self.test_saved_auto_day_night: bool | None = None
+        self.test_saved_runtime_state: RuntimeState | None = None
+        self.key_command_guard_until = 0.0
+        self.key_command_last_log_monotonic = 0.0
+        self.last_key_command_name = ""
+        self.last_key_command_monotonic = 0.0
         self.ring_names = [
             ("DEFAULT", "默认铃声"),
             ("WORK_START", "上课/上班开工铃"),
@@ -2424,6 +2429,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.ui.sendMessageButton,
                 self.usernameEdit,
                 self.usernameSaveButton,
+                getattr(self, "factoryResetButton", None),
             }:
                 widget.setParent(None)
                 widget.deleteLater()
@@ -2436,14 +2442,19 @@ class MainWindow(QtWidgets.QMainWindow):
         for column in range(6):
             layout.setColumnMinimumWidth(column, 0)
             layout.setColumnStretch(column, 0)
-        layout.setColumnMinimumWidth(0, 108)
-        layout.setColumnMinimumWidth(2, 174)
+        layout.setColumnMinimumWidth(0, 82)
+        layout.setColumnMinimumWidth(2, 136)
         layout.setColumnStretch(1, 1)
         layout.setColumnStretch(2, 0)
 
         self.ui.applyModeButton.setText("日夜切换")
         self.ui.sendMessageButton.setText("发送 MSG")
         self.usernameSaveButton.setText("确认用户名")
+        if not hasattr(self, "factoryResetButton"):
+            self.factoryResetButton = QtWidgets.QPushButton("恢复出厂设置", group)
+            self.factoryResetButton.setObjectName("factoryResetButton")
+        self.factoryResetButton.setText("恢复出厂设置")
+        self.factoryResetButton.setParent(group)
 
         for combo in (self.ui.displayToggleCombo, self.ui.formatCombo, self.ui.modeCombo):
             self._configure_centered_combo(combo)
@@ -2460,17 +2471,17 @@ class MainWindow(QtWidgets.QMainWindow):
         ]
         for row_index, (label_text, field, action) in enumerate(rows):
             label = QtWidgets.QLabel(label_text, group)
-            label.setMinimumWidth(96)
+            label.setMinimumWidth(82)
             label.setAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
             label.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed)
             field.setParent(group)
-            field.setMinimumWidth(220)
+            field.setMinimumWidth(138)
             field.setMinimumHeight(38)
             field.setMaximumHeight(42)
             field.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
             action.setParent(group)
-            action.setMinimumWidth(168)
-            action.setMaximumWidth(190)
+            action.setMinimumWidth(132)
+            action.setMaximumWidth(152)
             action.setMinimumHeight(38)
             action.setMaximumHeight(42)
             action.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed)
@@ -2478,6 +2489,14 @@ class MainWindow(QtWidgets.QMainWindow):
             layout.addWidget(field, row_index, 1)
             layout.addWidget(action, row_index, 2)
             layout.setRowMinimumHeight(row_index, 50)
+        reset_row = len(rows)
+        reset_hint = QtWidgets.QLabel("恢复出厂设置会重置城市、主题、显示、闹钟、日程和本地运行状态；确认后会尽量同步默认状态到板端。", group)
+        reset_hint.setWordWrap(True)
+        reset_hint.setProperty("class", "infoChip")
+        reset_hint.setStyleSheet("")
+        layout.addWidget(reset_hint, reset_row, 0, 1, 2)
+        layout.addWidget(self.factoryResetButton, reset_row, 2)
+        layout.setRowMinimumHeight(reset_row, 54)
         self._apply_display_group_layout_constraints()
 
     def _apply_display_group_layout_constraints(self) -> None:
@@ -2491,13 +2510,13 @@ class MainWindow(QtWidgets.QMainWindow):
         for column in range(6):
             layout.setColumnMinimumWidth(column, 0)
             layout.setColumnStretch(column, 0)
-        layout.setColumnMinimumWidth(0, 108)
-        layout.setColumnMinimumWidth(2, 174)
+        layout.setColumnMinimumWidth(0, 82)
+        layout.setColumnMinimumWidth(2, 136)
         layout.setColumnStretch(1, 1)
         for row in range(16):
             layout.setRowMinimumHeight(row, 0)
             layout.setRowStretch(row, 0)
-        for row in range(5):
+        for row in range(6):
             layout.setRowMinimumHeight(row, 56)
         for widget in (
             self.ui.displayToggleCombo,
@@ -2506,7 +2525,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.ui.messageEdit,
             self.usernameEdit,
         ):
-            widget.setMinimumWidth(220)
+            widget.setMinimumWidth(138)
             widget.setMinimumHeight(42)
             widget.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
         for button in (
@@ -2515,13 +2534,14 @@ class MainWindow(QtWidgets.QMainWindow):
             self.ui.applyModeButton,
             self.ui.sendMessageButton,
             self.usernameSaveButton,
+            self.factoryResetButton,
         ):
-            button.setMinimumWidth(168)
-            button.setMaximumWidth(190)
+            button.setMinimumWidth(132)
+            button.setMaximumWidth(152)
             button.setMinimumHeight(40)
             button.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed)
         group.setMinimumHeight(0)
-        group.setMaximumHeight(386)
+        group.setMaximumHeight(456)
         group.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
 
     def _refresh_theme_from_mode(self) -> None:
@@ -2581,7 +2601,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ui.connectionGroup.setMinimumHeight(150)
         self.ui.clockGroup.setMinimumHeight(250)
         self.ui.displayGroup.setMinimumHeight(0)
-        self.ui.displayGroup.setMaximumHeight(386)
+        self.ui.displayGroup.setMaximumHeight(456)
         self.ui.displayGroup.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
         self.ui.demoGroup.setMinimumHeight(150)
         self.ui.twinGroup.setMinimumHeight(600)
@@ -2787,7 +2807,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ui.connectionGroup.setMinimumHeight(124)
         self.ui.clockGroup.setMinimumHeight(178)
         self.ui.displayGroup.setMinimumHeight(0)
-        self.ui.displayGroup.setMaximumHeight(386)
+        self.ui.displayGroup.setMaximumHeight(456)
         self.ui.displayGroup.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
         self.ui.demoGroup.setMinimumHeight(220)
 
@@ -3384,32 +3404,66 @@ class MainWindow(QtWidgets.QMainWindow):
     def _build_debug_hardware_group(self, parent: QtWidgets.QWidget) -> QtWidgets.QGroupBox:
         group = QtWidgets.QGroupBox("板端硬件测试", parent)
         layout = QtWidgets.QVBoxLayout(group)
-        layout.setContentsMargins(14, 26, 14, 12)
+        layout.setContentsMargins(14, 24, 14, 12)
         layout.setSpacing(8)
-        self.ui.sendLedButton.setText("设置 LED")
-        self.ui.beepSpinBox.setAlignment(QtCore.Qt.AlignCenter)
-        self.ui.ledHexEdit.setAlignment(QtCore.Qt.AlignCenter)
-        self.ui.ledHexEdit.setClearButtonEnabled(False)
-        self.ui.beepSpinBox.setMinimumWidth(104)
-        self.ui.ledHexEdit.setMinimumWidth(104)
-        self.ui.sendBeepButton.setMinimumWidth(96)
-        self.ui.sendLedButton.setMinimumWidth(96)
 
-        def add_hardware_row(label_text: str, editor: QtWidgets.QWidget, button: QtWidgets.QPushButton) -> None:
-            row = QtWidgets.QWidget(group)
-            row_layout = QtWidgets.QHBoxLayout(row)
-            row_layout.setContentsMargins(0, 0, 0, 0)
-            row_layout.setSpacing(8)
-            label = QtWidgets.QLabel(label_text, row)
-            label.setMinimumWidth(76)
+        # Do not reuse the old widgets generated inside displayGroup: that group is
+        # rebuilt for System Settings and Qt may keep/reparent/delete them, which
+        # made the real exe show only labels without editors.
+        self.debugBeepSpinBox = QtWidgets.QSpinBox(group)
+        self.debugBeepSpinBox.setObjectName("debugBeepSpinBox")
+        self.debugBeepSpinBox.setMinimum(10)
+        self.debugBeepSpinBox.setMaximum(5000)
+        self.debugBeepSpinBox.setSingleStep(100)
+        self.debugBeepSpinBox.setValue(500)
+        self.debugBeepSpinBox.setAlignment(QtCore.Qt.AlignCenter)
+        self.debugBeepSpinBox.setMinimumWidth(132)
+        self.debugBeepSpinBox.setMaximumWidth(220)
+
+        self.debugLedHexEdit = QtWidgets.QLineEdit(group)
+        self.debugLedHexEdit.setObjectName("debugLedHexEdit")
+        self.debugLedHexEdit.setPlaceholderText("00-FF")
+        self.debugLedHexEdit.setText(f"{self.runtime_state.led_mask:02X}")
+        self.debugLedHexEdit.setAlignment(QtCore.Qt.AlignCenter)
+        self.debugLedHexEdit.setClearButtonEnabled(False)
+        self.debugLedHexEdit.setMaxLength(2)
+        self.debugLedHexEdit.setMinimumWidth(132)
+        self.debugLedHexEdit.setMaximumWidth(220)
+
+        self.debugSendBeepButton = QtWidgets.QPushButton("触发蜂鸣", group)
+        self.debugSendLedButton = QtWidgets.QPushButton("设置 LED", group)
+        self.debugSendBeepButton.setObjectName("debugSendBeepButton")
+        self.debugSendLedButton.setObjectName("debugSendLedButton")
+        self.debugSendBeepButton.setMinimumWidth(118)
+        self.debugSendLedButton.setMinimumWidth(118)
+
+        # Keep legacy attribute names pointing at the visible debug controls so
+        # older signal hookups and local-state sync code remain consistent.
+        self.ui.beepSpinBox = self.debugBeepSpinBox
+        self.ui.ledHexEdit = self.debugLedHexEdit
+        self.ui.sendBeepButton = self.debugSendBeepButton
+        self.ui.sendLedButton = self.debugSendLedButton
+
+        grid = QtWidgets.QGridLayout()
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setHorizontalSpacing(10)
+        grid.setVerticalSpacing(8)
+        grid.setColumnMinimumWidth(0, 86)
+        grid.setColumnStretch(1, 1)
+
+        def add_hardware_row(row: int, label_text: str, editor: QtWidgets.QWidget, button: QtWidgets.QPushButton) -> None:
+            label = QtWidgets.QLabel(label_text, group)
+            label.setMinimumWidth(82)
             label.setAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
-            row_layout.addWidget(label)
-            row_layout.addWidget(editor, 1)
-            row_layout.addWidget(button, 0)
-            layout.addWidget(row)
+            editor.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
+            button.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed)
+            grid.addWidget(label, row, 0)
+            grid.addWidget(editor, row, 1)
+            grid.addWidget(button, row, 2)
 
-        add_hardware_row("蜂鸣(ms)", self.ui.beepSpinBox, self.ui.sendBeepButton)
-        add_hardware_row("LED 掩码", self.ui.ledHexEdit, self.ui.sendLedButton)
+        add_hardware_row(0, "蜂鸣(ms)", self.debugBeepSpinBox, self.debugSendBeepButton)
+        add_hardware_row(1, "LED 掩码", self.debugLedHexEdit, self.debugSendLedButton)
+        layout.addLayout(grid)
         hint = QtWidgets.QLabel(
             "蜂鸣用于快速听测板载蜂鸣器；LED 掩码输入 00-FF，发送 *SET:LED XX 后会短时手动覆盖 8 位 LED，便于验收逐位点亮，随后自动恢复系统状态。",
             group,
@@ -3674,9 +3728,9 @@ class MainWindow(QtWidgets.QMainWindow):
         command = self.ui.rawCommandEdit.text().strip()
         if not command:
             return
-        if command.strip().upper() == "*SET:KEY USER2":
-            self.log("INFO", "协议台 USER2 已改走安全天气短显，不裸发 *SET:KEY USER2，避免旧固件卡死。")
-            self._trigger_user2_weather_short_display("协议台 USER2")
+        key = self._extract_key_command(command)
+        if key is not None:
+            self._send_key_command_safely(key, "协议台")
             return
         if command.upper() == "*RST" and (self.sync_in_progress or self.test_run_in_progress):
             self.send_command(command)
@@ -4101,6 +4155,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.alarmVoiceEnabledCheck.toggled.connect(lambda _checked: self.save_extension_config(log_message=False))
         self.quietNightCheck.toggled.connect(lambda _checked: self.save_extension_config(log_message=False))
         self.usernameSaveButton.clicked.connect(self.save_user_name)
+        if hasattr(self, "factoryResetButton"):
+            self.factoryResetButton.clicked.connect(self.confirm_factory_reset)
         self.scheduleRingPreviewButton.clicked.connect(self.preview_schedule_ring)
         self.scheduleApplyAlarmButton.clicked.connect(self.toggle_schedule_alarm)
         self.scheduleDisableAlarmButton.clicked.connect(
@@ -4249,6 +4305,60 @@ class MainWindow(QtWidgets.QMainWindow):
         self.refresh_dashboard()
         if log_message:
             self.log("INFO", "扩展配置已保存。")
+
+    def confirm_factory_reset(self) -> None:
+        reply = QtWidgets.QMessageBox.question(
+            self,
+            "确认恢复出厂设置",
+            "将重置城市、主题、显示、闹钟、日程和本地运行状态。日志文件会保留。是否继续？",
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+            QtWidgets.QMessageBox.No,
+        )
+        if reply != QtWidgets.QMessageBox.Yes:
+            self.log("INFO", "已取消恢复出厂设置。")
+            return
+        self.restore_factory_defaults()
+
+    def restore_factory_defaults(self) -> None:
+        self.config = AppConfig()
+        self.runtime_state = RuntimeState()
+        self.schedules = []
+        self.last_mode = self.runtime_state.mode
+        self.last_alarm = "OFF"
+        self.cached_weather_text = ""
+        self.cached_weather_led_mask = 0
+        self.weather_summary_text = "未刷新天气"
+        self.sunrise_text = "--:--"
+        self.sunset_text = "--:--"
+        self.last_weather_snapshot = None
+        self.last_ntp_sync_text = "未进行网络对时"
+        self.last_selected_zone_time = "--:--:--"
+        self._mark_board_weather_cache_dirty()
+        save_config(APP_DIR, self.config)
+        save_runtime_state(APP_DIR, self.runtime_state)
+        save_schedules(APP_DIR, self.schedules)
+        self.sync_extension_widgets_from_config()
+        self._apply_runtime_state_to_ui()
+        self.refresh_schedule_table()
+        self.reset_schedule_form()
+        self.refresh_dashboard()
+        self.log("INFO", "已恢复出厂设置：配置、运行状态和日程已重置。")
+        append_event_log(APP_DIR, "factory_reset", "defaults restored")
+        if self.is_connected:
+            self.pending_queries.clear()
+            self._mark_manual_serial_window("恢复出厂设置", duration_s=3.0)
+            self._send_serial_sequence(
+                [
+                    "*SET:KEY EXT",
+                    "*SET:DISPLAY ON",
+                    "*SET:FORMAT LEFT",
+                    "*SET:MODE DAY",
+                    "*SET:ALARM OFF",
+                    "*SET:LED 00",
+                ],
+                gap_ms=260,
+            )
+            QtCore.QTimer.singleShot(1800, self.query_runtime_state)
 
     def _send_datetime_snapshot(
         self,
@@ -6219,32 +6329,66 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         self.ui.messageEdit.setText(text)
 
-    def send_virtual_key(self, key_name: str) -> None:
+    def _extract_key_command(self, command: str) -> str | None:
+        parts = command.strip().upper().split()
+        if len(parts) == 2 and parts[0] == "*SET:KEY":
+            return parts[1]
+        return None
+
+    def _send_key_command_safely(self, key_name: str, source_text: str = "按键") -> bool:
         key = key_name.strip().upper()
+        if not key:
+            return False
         if key == "USER1":
-            self.request_user1_time_sync("虚拟 USER1")
-            return
+            self.request_user1_time_sync(source_text)
+            return True
         if key == "USER2":
-            weather_text = (self.cached_weather_text or self.runtime_state.weather_token or "").replace("_", " ").strip()
-            display_text = weather_text or "NO WX"
-            self.log("INFO", f"虚拟 USER2：请求显示天气短显 {display_text}，约 5 秒后回到时钟。")
-            self._set_latest_event(f"虚拟 USER2 -> 天气短显 {display_text}")
-            self._trigger_user2_weather_short_display("虚拟 USER2")
-            return
+            self.log("INFO", f"{source_text} USER2 已走安全天气短显路径，不直接发送原始 USER2 按键。")
+            self._trigger_user2_weather_short_display(source_text)
+            return True
+        now = time.monotonic()
+        if self.test_run_in_progress:
+            self.log("WARN", f"自动化测试正在占用串口，已忽略人为按键 {key}，避免打断测试状态机。")
+            return False
+        if self.ntp_fetch_in_progress or self.sync_in_progress or self.weather_refresh_in_progress:
+            if now - self.key_command_last_log_monotonic > 1.0:
+                self.log("WARN", f"后台对时/天气流程尚未结束，已暂缓按键 {key}，避免串口并发卡死。")
+                self.key_command_last_log_monotonic = now
+            return False
+        if now < self.key_command_guard_until:
+            if now - self.key_command_last_log_monotonic > 0.8:
+                left_ms = int((self.key_command_guard_until - now) * 1000)
+                self.log("WARN", f"按键 {key} 触发过快，已忽略本次输入；请等待约 {left_ms}ms 后再试。")
+                self.key_command_last_log_monotonic = now
+            return False
+        cooldown = 1.0 if key == "FUNC" else 0.75
+        if key in {"SHIFT", "ADD", "SAVE"}:
+            cooldown = 0.65
+        self.key_command_guard_until = now + cooldown
+        self.last_key_command_name = key
+        self.last_key_command_monotonic = now
+        self.pending_queries.clear()
+        self.last_ping_monotonic = None
+        self._mark_manual_serial_window(f"{source_text}: {key}", duration_s=max(1.4, cooldown + 0.5))
         if key == "DISP":
             self._advance_local_display_view_from_disp_key()
-            self._set_latest_event(f"虚拟 DISP -> {self.runtime_state.view_mode}")
+            self._set_latest_event(f"{source_text} DISP -> {self.runtime_state.view_mode}")
         if key in {"FUNC", "SHIFT", "ADD", "SAVE", "EXT"}:
-            self._schedule_single_alarm_query(f"虚拟按键 {key}", delay_ms=750)
-        self.send_command(f"*SET:KEY {key_name}")
+            self._schedule_single_alarm_query(f"{source_text} {key}", delay_ms=1100)
+        self.send_command(f"*SET:KEY {key}")
+        return True
+
+    def send_virtual_key(self, key_name: str) -> None:
+        key = key_name.strip().upper()
+        self._send_key_command_safely(key, "虚拟按键")
 
     def send_raw_command(self) -> None:
         command = self.ui.rawCommandEdit.text().strip()
         if not command:
             return
-        if command.strip().upper() == "*SET:KEY USER2":
-            self.log("INFO", "RAW USER2 已改走安全天气短显，不裸发 *SET:KEY USER2，避免旧固件卡死。")
-            self._trigger_user2_weather_short_display("RAW USER2")
+        key = self._extract_key_command(command)
+        if key is not None:
+            self._send_key_command_safely(key, "RAW")
             return
         if command.upper() == "*RST" and (self.sync_in_progress or self.test_run_in_progress):
             self.send_command(command)
@@ -6286,6 +6430,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.test_run_in_progress = True
         self.test_run_full = bool(full)
         self.test_saved_auto_day_night = self.config.auto_day_night
+        self.test_saved_runtime_state = RuntimeState(**vars(self.runtime_state))
         self.test_run_started_at = time.monotonic()
         self.runChecksButton.setEnabled(False)
         if hasattr(self, "runFullChecksButton"):
@@ -6371,6 +6516,12 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.autoDayNightCheck.setChecked(restored)
                 self.autoDayNightCheck.blockSignals(old_block)
             self.test_saved_auto_day_night = None
+        if self.test_saved_runtime_state is not None:
+            self.runtime_state = self.test_saved_runtime_state
+            self.test_saved_runtime_state = None
+            self._set_mode_state(self.runtime_state.mode, save=False, update_combo=True, update_theme=True)
+            self._apply_runtime_state_to_ui()
+            self._save_runtime_state()
         self.last_test_ok = ok
         self.last_test_summary = "PASS" if ok else "FAIL"
         self.testStatusLabel.setText(f"状态: {'通过' if ok else '失败'}")

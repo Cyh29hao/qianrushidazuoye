@@ -48,6 +48,8 @@
 #define USER1_RELEASE_GUARD_MS     350UL
 #define USER2_SHORT_COOLDOWN_MS    1500UL
 #define USER2_PC_GRACE_MS          350UL
+#define REMOTE_KEY_COOLDOWN_MS     260UL
+#define REMOTE_FUNC_COOLDOWN_MS    900UL
 #define DISP_LONG_PRESS_TICKS      80U
 #define I2C_WAIT_GUARD_LOOPS       50000UL
 #define TIME_BACKUP_SAVE_MS        10000UL
@@ -352,6 +354,7 @@ static uint8_t g_stableKeys[KEY_COUNT];
 static uint8_t g_debounceCounts[KEY_COUNT];
 static uint16_t g_holdTicks[KEY_COUNT];
 static uint8_t g_longPressDone[KEY_COUNT];
+static uint32_t g_lastRemoteKeyMs[KEY_COUNT];
 static uint32_t g_lastUser1ShortMs;
 static uint32_t g_lastUser1ModeMs;
 static uint32_t g_lastUser2ShortMs;
@@ -979,6 +982,7 @@ static void ResetRuntimeState(void)
         g_debounceCounts[index] = 0U;
         g_holdTicks[index] = 0U;
         g_longPressDone[index] = 0U;
+        g_lastRemoteKeyMs[index] = 0UL;
     }
 
     StopBuzzer();
@@ -1909,6 +1913,13 @@ static void HandleKeyPress(KeyCode key, bool emitEvent)
             DisableAlarmFromKey();
             return;
         }
+        if (clearedTransient == 0U) {
+            g_displayEnabled = 1U;
+            g_viewMode = VIEW_TIME;
+            g_scrollOffset = 0U;
+            g_viewScrollCompleted = 0U;
+            g_nextScrollMs = g_millis + CurrentScrollIntervalMs();
+        }
         break;
     }
     case KEY_USER1:
@@ -2098,9 +2109,17 @@ static bool SimulateKeyPress(const char *nameToken)
     for (index = 0U; index < KEY_COUNT; index++) {
         if (MatchToken(nameToken, kKeyNames[index],
                        (uint8_t)StringLengthBounded(kKeyNames[index], 8U)) != false) {
+            uint32_t cooldown = (index == KEY_FUNC) ?
+                                REMOTE_FUNC_COOLDOWN_MS :
+                                REMOTE_KEY_COOLDOWN_MS;
             if (g_bootPhase != BOOT_DONE) {
                 return true;
             }
+            if ((g_lastRemoteKeyMs[index] != 0UL) &&
+                ((uint32_t)(g_millis - g_lastRemoteKeyMs[index]) < cooldown)) {
+                return true;
+            }
+            g_lastRemoteKeyMs[index] = g_millis;
             HandleKeyPress((KeyCode)index, false);
             return true;
         }

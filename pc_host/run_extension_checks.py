@@ -20,13 +20,13 @@ from protocol import (
 )
 
 ProgressCallback = Callable[[str], None]
-SERIAL_ESTIMATED_SECONDS = 18
-SERIAL_FULL_ESTIMATED_SECONDS = 34
-HOST_ONLY_ESTIMATED_SECONDS = 3
-HOST_ONLY_FULL_ESTIMATED_SECONDS = 6
-SERIAL_COMMAND_GAP_S = 0.12
-SERIAL_HARD_TIMEOUT_S = 24.0
-SERIAL_FULL_HARD_TIMEOUT_S = 70.0
+SERIAL_ESTIMATED_SECONDS = 45
+SERIAL_FULL_ESTIMATED_SECONDS = 125
+HOST_ONLY_ESTIMATED_SECONDS = 5
+HOST_ONLY_FULL_ESTIMATED_SECONDS = 9
+SERIAL_COMMAND_GAP_S = 0.55
+SERIAL_HARD_TIMEOUT_S = 70.0
+SERIAL_FULL_HARD_TIMEOUT_S = 180.0
 
 
 @dataclass
@@ -67,6 +67,19 @@ def clear_stale_input(port: Any) -> None:
         port.reset_input_buffer()
     except Exception:  # noqa: BLE001
         read_lines(port, timeout_s=0.08)
+
+
+def settle_serial(
+    port: Any,
+    seconds: float = 0.7,
+    progress: ProgressCallback | None = None,
+) -> list[str]:
+    lines = read_lines(port, timeout_s=seconds)
+    for line in lines:
+        _progress(progress, f"[RX] {line}")
+    if seconds > 0:
+        time.sleep(min(0.25, max(0.0, seconds / 4)))
+    return lines
 
 
 def _format_check_line(result: CheckResult) -> str:
@@ -268,6 +281,8 @@ def send_user2_expect_weather_display(
                     compact = parsed.data.replace("_", "").replace(" ", "").replace("~", "_").upper()
                     if expected in compact:
                         _progress(progress, f"[INFO] USER2 safe weather display observed: {parsed.data}")
+                        _progress(progress, "[INFO] USER2 display observed; wait for temporary display to settle before next test")
+                        lines.extend(settle_serial(port, seconds=8.4, progress=progress))
                         return lines
     for line in lines:
         parsed = parse_line(line)
@@ -275,6 +290,8 @@ def send_user2_expect_weather_display(
             compact = parsed.data.replace("_", "").replace(" ", "").replace("~", "_").upper()
             if expected in compact:
                 _progress(progress, f"[INFO] USER2 safe weather display observed: {parsed.data}")
+                _progress(progress, "[INFO] USER2 display observed; wait for temporary display to settle before next test")
+                lines.extend(settle_serial(port, seconds=8.4, progress=progress))
                 return lines
     raise RuntimeError(f"USER2 safe weather display {expected} not observed; lines={lines}")
 
@@ -293,18 +310,61 @@ def execute_checks_on_open_port(
     original_mode = initial_mode.strip().upper()
     if original_mode not in {"DAY", "NIGHT"}:
         original_mode = "DAY"
+    original_format = "LEFT"
+    original_display = "ON"
+    failed = False
 
-    def run(name: str, action, hint: str) -> None:
+    def capture_state(command: str, default: str, allowed: set[str]) -> str:
+        try:
+            lines = send_expect_ok(port, command, timeout_s=1.8, progress=progress)
+            value = ok_payload(lines).strip().upper()
+            if value in allowed:
+                return value
+        except Exception as exc:  # noqa: BLE001
+            _progress(progress, f"[WARN] could not capture {command}: {exc}; use default {default}")
+        return default
+
+    _progress(progress, "[INFO] Capture board FORMAT/MODE/DISPLAY before automated test for restoration")
+    original_format = capture_state("*GET:FORMAT", original_format, {"LEFT", "RIGHT"})
+    original_mode = capture_state("*GET:MODE", original_mode, {"DAY", "NIGHT"})
+    original_display = capture_state("*GET:DISPLAY", original_display, {"ON", "OFF"})
+
+    def run(name: str, action, hint: str, settle_s: float = 0.7) -> None:
+        nonlocal failed
+        if failed:
+            return
         if time.monotonic() >= hard_deadline:
             _record(results, progress, name, "FAIL", "serial test hard timeout", hint)
+            failed = True
             return
         _progress(progress, f"[INFO] 开始测试: {name}")
         try:
             action()
         except Exception as exc:  # noqa: BLE001
             _record(results, progress, name, "FAIL", str(exc), hint)
+            failed = True
             return
+        if settle_s > 0:
+            settle_serial(port, seconds=settle_s, progress=progress)
         _record(results, progress, name, "OK")
+
+    def restore_board_state() -> None:
+        _progress(
+            progress,
+            f"[INFO] Restore board settings: FORMAT={original_format}, MODE={original_mode}, DISPLAY={original_display}",
+        )
+        restore_commands = [
+            "*SET:KEY EXT",
+            f"*SET:FORMAT {original_format}",
+            f"*SET:MODE {original_mode}",
+            f"*SET:DISPLAY {original_display}",
+        ]
+        for command in restore_commands:
+            try:
+                send_expect_ok(port, command, timeout_s=2.0, progress=progress)
+            except Exception as exc:  # noqa: BLE001
+                _progress(progress, f"[WARN] restore stopped at {command}: {exc}")
+                break
 
     run(
         "PING 心跳",
@@ -320,6 +380,11 @@ def execute_checks_on_open_port(
         "GET MODE",
         lambda: send_expect_ok(port, "*GET:MODE", timeout_s=2.0, progress=progress),
         "检查 MCU 是否支持 *GET:MODE，或 MODE 状态是否输出异常。",
+    )
+    run(
+        "GET DISPLAY",
+        lambda: send_expect_ok(port, "*GET:DISPLAY", timeout_s=2.0, progress=progress),
+        "检查 MCU 是否支持 *GET:DISPLAY，或显示开关状态是否输出异常。",
     )
 
     now = datetime.now().replace(microsecond=0)
@@ -338,15 +403,17 @@ def execute_checks_on_open_port(
         f"SET MODE {other_mode}",
         lambda: send_mode_expect(port, other_mode, timeout_s=2.0, progress=progress),
         "检查 DAY/NIGHT 指令解析、板端 MODE 事件和 PC 界面刷新。",
+        settle_s=1.8,
     )
     run(
         f"SET MODE {original_mode}",
         lambda: send_mode_expect(port, original_mode, timeout_s=2.0, progress=progress),
         "检查自动测试结束前能恢复测试前昼夜模式。",
+        settle_s=1.8,
     )
     run(
         "SET WEATHER",
-        lambda: send_expect_ok(port, build_set_weather_command("SUN29C__", 0x05), timeout_s=2.0, progress=progress),
+        lambda: send_expect_ok(port, build_set_weather_command("SUN29C__", 0x05), timeout_s=3.5, progress=progress),
         "检查 *SET:WEATHER DISP <8字符> LED <hex> 参数顺序和 LED 十六进制解析。",
     )
     run(
@@ -360,21 +427,35 @@ def execute_checks_on_open_port(
         "检查 PC 辅助 USER2 天气显示路径：EXT 退出临时态、LED 掩码、MSG 显示天气 token，并观察 *EVT:DISP。",
     )
     if full:
+        def send_msg_and_wait_for_marquee() -> list[str]:
+            lines = send_expect_ok(port, "*SET:MSG A_B_TEST", timeout_s=5.0, progress=progress)
+            _progress(progress, "[INFO] Wait for marquee min duration and final-frame hold before next command")
+            lines.extend(settle_serial(port, seconds=8.2, progress=progress))
+            return lines
+
+        def press_key_and_wait(key_name: str) -> list[str]:
+            lines = send_expect_ok(
+                port,
+                f"*SET:KEY {key_name}",
+                timeout_s=2.0,
+                progress=progress,
+            )
+            wait_s = 1.4 if key_name in {"DISP", "FORMAT", "EXT"} else 1.0
+            lines.extend(settle_serial(port, seconds=wait_s, progress=progress))
+            return lines
+
         run(
             "SET MSG A_B_TEST",
-            lambda: send_expect_ok(port, "*SET:MSG A_B_TEST", timeout_s=2.0, progress=progress),
+            send_msg_and_wait_for_marquee,
             "检查跑马灯、下划线七段码和临时显示状态机是否会卡死。",
+            settle_s=0.0,
         )
         for key_name in ("DISP", "SPEED", "FORMAT", "EXT"):
             run(
                 f"SIM KEY {key_name}",
-                lambda key_name=key_name: send_expect_ok(
-                    port,
-                    f"*SET:KEY {key_name}",
-                    timeout_s=2.0,
-                    progress=progress,
-                ),
+                lambda key_name=key_name: press_key_and_wait(key_name),
                 f"检查 {key_name} 按键映射、显示状态恢复和数字孪生同步。",
+                settle_s=0.0,
             )
         run(
             "ERROR LEN",
@@ -420,6 +501,7 @@ def execute_checks_on_open_port(
             ),
             "检查越界日期是否返回 ERROR RANGE。",
         )
+    restore_board_state()
     return _build_output(results, host_only=False, full=full)
 
 
