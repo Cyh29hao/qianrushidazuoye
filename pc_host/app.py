@@ -36,6 +36,18 @@ LED_BIT_LABELS = [
     ("D8", "手动覆盖"),
 ]
 
+
+def _set_windows_app_user_model_id() -> None:
+    if sys.platform != "win32":
+        return
+    try:
+        ctypes = __import__("ctypes")
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+            "Cyh29hao.SmartClockHost.v21"
+        )
+    except Exception:
+        pass
+
 import serial
 from PyQt5 import QtCore, QtGui, QtWidgets
 from serial.tools import list_ports
@@ -401,6 +413,20 @@ class MainWindow(QtWidgets.QMainWindow):
         super().resizeEvent(event)
         if hasattr(self, "mainSplitter"):
             QtCore.QTimer.singleShot(0, self._enforce_main_splitter_layout)
+        if hasattr(self, "status_features") and not self.test_run_in_progress:
+            self._restore_footer_features()
+
+    def _footer_feature_text(self) -> str:
+        if self.width() >= 1500:
+            return (
+                "智能联网时钟系统 | 串口同步·数字孪生 | NTP天气·全球时区 | "
+                "板载闹钟·PC日程管理 | 个性化界面·清晰面板 | 自动测试·稳定鲁棒"
+            )
+        return "智能联网时钟系统 | 串口孪生 | NTP天气 | 全球时区 | 闹钟日程 | 个性面板 | 自动测试"
+
+    def _restore_footer_features(self) -> None:
+        if hasattr(self, "status_features"):
+            self.status_features.setText(self._footer_feature_text())
 
     def eventFilter(self, obj, event):  # noqa: N802 - Qt API
         if (
@@ -461,7 +487,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 QtCore.Qt.SmoothTransformation,
             )
             self.status_project_icon.setPixmap(pixmap)
-        self.status_features = QtWidgets.QLabel("串口同步 · 数字孪生 · NTP天气 · 闹钟日程 · 自动测试")
+        self.status_features = QtWidgets.QLabel(self._footer_feature_text())
         self.status_features.setMinimumWidth(0)
         self.status_features.setSizePolicy(
             QtWidgets.QSizePolicy.Expanding,
@@ -4105,7 +4131,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.status_location.setText(place.name)
         self.status_local_time.setText(datetime.now().strftime("%H:%M:%S"))
         if hasattr(self, "status_features") and not self.test_run_in_progress:
-            self.status_features.setText("串口同步 · 数字孪生 · NTP天气 · 闹钟日程 · 自动测试")
+            self._restore_footer_features()
         dashboard_event_list = getattr(self, "dashboardEventList", None)
         if dashboard_event_list is not None:
             dashboard_event_list.clear()
@@ -4565,7 +4591,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.poll_timer.start()
             self.ping_timer.start()
             if hasattr(self, "status_features"):
-                self.status_features.setText("串口同步 · 数字孪生 · NTP天气 · 闹钟日程 · 自动测试")
+                self._restore_footer_features()
             self.testStatusLabel.setText("状态: 失败")
             self.testOutputText.append(
                 f"\nFAIL\n{reason}，已终止自动测试并恢复串口轮询。疑似硬件端状态机卡死，请手动 RESET。"
@@ -5449,18 +5475,24 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def trigger_schedule(self, item: ScheduleItem) -> None:
         token = normalize_board_message(item.board_label or item.title)
+        ring_name = (item.ring_type or "DEFAULT").strip().upper()
+        should_ring = not (self.config.quiet_night_rings and self.last_mode == "NIGHT")
         if self.is_connected:
-            self._mark_manual_serial_window(f"提醒 {item.title}", duration_s=2.2)
-            self._send_serial_sequence(
-                ["*SET:DISPLAY ON", f"*SET:MSG {self._board_message_payload(token)}"],
-                gap_ms=180,
-            )
-            if not (self.config.quiet_night_rings and self.last_mode == "NIGHT"):
-                self._play_ring_or_fallback(item.ring_type, f"提醒 {item.title}")
+            self._mark_manual_serial_window(f"提醒 {item.title}", duration_s=3.0)
+            commands = ["*SET:DISPLAY ON", f"*SET:MSG {self._board_message_payload(token)}"]
+            if should_ring:
+                if self.ring_command_supported is False:
+                    commands.append(f"*SET:BEEP {self._ring_fallback_duration(ring_name)}")
+                else:
+                    commands.append(build_set_ring_command(ring_name))
+                self.log("INFO", f"日程提醒铃声: {item.title} -> {ring_name}")
+            else:
+                self.log("INFO", f"日程提醒处于 NIGHT 且已启用夜间抑制，未触发铃声: {item.title}")
+            self._send_serial_sequence(commands, gap_ms=220)
         if item.voice_text.strip():
             speak_text(item.voice_text.strip())
-        append_event_log(APP_DIR, "schedule_fire", f"{item.title} | {item.ring_type}")
-        self.log("INFO", f"提醒触发: {item.title}")
+        append_event_log(APP_DIR, "schedule_fire", f"{item.title} | {ring_name}")
+        self.log("INFO", f"提醒触发: {item.title} | 铃声 {ring_name if should_ring else 'NIGHT_SUPPRESSED'}")
         self.refresh_dashboard()
 
     def refresh_ports(self) -> None:
@@ -6617,7 +6649,7 @@ class MainWindow(QtWidgets.QMainWindow):
         append_event_log(APP_DIR, "test_run", self.last_test_summary)
         self.refresh_dashboard()
         if hasattr(self, "status_features"):
-            self.status_features.setText("串口同步 · 数字孪生 · NTP天气 · 闹钟日程 · 自动测试")
+            self._restore_footer_features()
         self.log("INFO" if ok else "WARN", f"联合测试完成: {self.last_test_summary}")
         run_full_followup = self.test_run_full and ok
         self.test_run_full = False
@@ -6791,7 +6823,11 @@ def main() -> int:
     os.environ.pop("QT_QPA_PLATFORM", None)
     if "plugins" in QT_RUNTIME:
         QtCore.QCoreApplication.setLibraryPaths([QT_RUNTIME["plugins"]])
+    _set_windows_app_user_model_id()
     app = QtWidgets.QApplication(sys.argv)
+    icon_path = ICON_PATH if ICON_PATH.exists() else LOGO_PATH
+    if icon_path.exists():
+        app.setWindowIcon(QtGui.QIcon(str(icon_path)))
     window = MainWindow()
     window.showMaximized()
     return app.exec_()
