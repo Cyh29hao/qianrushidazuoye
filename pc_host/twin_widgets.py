@@ -277,8 +277,8 @@ class DigitalTwinWidget(QtWidgets.QWidget):
         self.key_button_by_name: dict[str, QtWidgets.QPushButton] = {}
         self.key_button_base_style = "padding: 2px 4px;"
         key_tips = {
-            "USER2": "USER2: 天气短显专用键；没有天气缓存时显示 NO WX",
-            "EXT": "SW8 / EXT: 退出编辑、取消天气短显或滚动消息；在 ALARM 编辑页关闭单次闹钟",
+            "USER2": "USER2: 天气短显专用键；有缓存直接显示天气，无缓存时显示 NO WX",
+            "EXT": "SW8 / EXT: 退出编辑、取消天气短显或滚动消息；在 ALARM 编辑页或正常页无临时画面时关闭单次闹钟",
             "FORMAT": "SW7 / FORMAT: 切换 LEFT/RIGHT 数码管显示方向",
             "SPEED": "SW6 / SPEED: 切换走马灯快/慢速度",
             "DISP": "SW5 / DISP: 切换时间、日期、星期、年份页面；长按关显示和 LED",

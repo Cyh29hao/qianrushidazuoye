@@ -257,6 +257,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.last_user1_ntp_request_monotonic = 0.0
         self.last_user1_ntp_warn_monotonic = 0.0
         self.last_user2_replay_monotonic = 0.0
+        self.last_user2_trigger_monotonic = 0.0
         self.pending_user2_display_text = ""
         self.pending_user2_display_deadline = 0.0
         self.pending_user2_display_fallback_done = False
@@ -448,6 +449,12 @@ class MainWindow(QtWidgets.QMainWindow):
                 QtCore.Qt.SmoothTransformation,
             )
             self.status_project_icon.setPixmap(pixmap)
+        self.status_features = QtWidgets.QLabel("串口同步 · 数字孪生 · NTP天气 · 闹钟日程 · 自动测试")
+        self.status_features.setMinimumWidth(0)
+        self.status_features.setSizePolicy(
+            QtWidgets.QSizePolicy.Expanding,
+            QtWidgets.QSizePolicy.Fixed,
+        )
         self.status_connection = QtWidgets.QLabel("未连接")
         self.status_mode = QtWidgets.QLabel("DAY")
         self.status_location = QtWidgets.QLabel("上海")
@@ -492,6 +499,7 @@ class MainWindow(QtWidgets.QMainWindow):
             button.setMaximumHeight(28)
         self.ui.statusbar.addWidget(self.status_project_icon)
         self.ui.statusbar.addWidget(self.status_project)
+        self.ui.statusbar.addWidget(self.status_features, 1)
         self.ui.statusbar.addPermanentWidget(self.status_connection)
         self.ui.statusbar.addPermanentWidget(self.status_mode)
         self.ui.statusbar.addPermanentWidget(self.status_location)
@@ -1034,11 +1042,12 @@ class MainWindow(QtWidgets.QMainWindow):
         value &= 0xFF
         self.latest_led_text = f"{value:02X}"
         if hasattr(self, "latestLedLabel"):
-            self.latestLedLabel.setText(
-                f"最新 LED: {self.latest_led_text} | {self._led_active_description(value)}"
+            self.latestLedLabel.setText(f"LED: {self.latest_led_text}")
+            self.latestLedLabel.setToolTip(
+                f"{self._led_active_description(value)}\n{self._led_legend_text()}"
             )
         if hasattr(self, "ledLegendLabel"):
-            self.ledLegendLabel.setText(self._led_legend_text())
+            self.ledLegendLabel.setVisible(False)
 
     def _apply_runtime_state_to_ui(self) -> None:
         self.ui.displayToggleCombo.setCurrentText("ON" if self.runtime_state.display_on else "OFF")
@@ -2220,6 +2229,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.ui.statusbar.setPalette(self._palette_for_colors(palette["status_bg"], palette["text"]))
         for label in (
             getattr(self, "status_project", None),
+            getattr(self, "status_features", None),
             getattr(self, "status_connection", None),
             getattr(self, "status_mode", None),
             getattr(self, "status_location", None),
@@ -2594,18 +2604,19 @@ class MainWindow(QtWidgets.QMainWindow):
             self.latestDisplayLabel.setObjectName("latestDisplayLabel")
             self.latestDisplayLabel.setProperty("class", "infoChip")
             self.latestDisplayLabel.setStyleSheet("")
+            self.latestDisplayLabel.setWordWrap(False)
 
-            self.latestLedLabel = QtWidgets.QLabel("最新 LED: --", summary_widget)
+            self.latestLedLabel = QtWidgets.QLabel("LED: --", summary_widget)
             self.latestLedLabel.setObjectName("latestLedLabel")
             self.latestLedLabel.setProperty("class", "infoChip")
             self.latestLedLabel.setStyleSheet("")
-            self.latestLedLabel.setWordWrap(True)
+            self.latestLedLabel.setWordWrap(False)
             self.latestLedLabel.setToolTip(self._led_legend_text())
 
             self.latestEventLabel = QtWidgets.QLabel("最近事件: 等待数据", summary_widget)
             self.latestEventLabel.setObjectName("latestEventLabel")
             self.latestEventLabel.setProperty("class", "infoChip")
-            self.latestEventLabel.setWordWrap(True)
+            self.latestEventLabel.setWordWrap(False)
             self.latestEventLabel.setStyleSheet("")
 
             self.ledLegendLabel = QtWidgets.QLabel(self._led_legend_text(), summary_widget)
@@ -2613,18 +2624,30 @@ class MainWindow(QtWidgets.QMainWindow):
             self.ledLegendLabel.setProperty("class", "infoChip")
             self.ledLegendLabel.setWordWrap(True)
             self.ledLegendLabel.setStyleSheet("")
+            self.ledLegendLabel.setVisible(False)
 
             self.showHeartbeatCheck = QtWidgets.QCheckBox("显示心跳日志", summary_widget)
             self.showHeartbeatCheck.setChecked(False)
             self.autoScrollCheck = QtWidgets.QCheckBox("日志自动滚动", summary_widget)
             self.autoScrollCheck.setChecked(True)
+            for chip in (
+                self.latestDisplayLabel,
+                self.latestLedLabel,
+                self.latestEventLabel,
+            ):
+                chip.setMinimumHeight(34)
+                chip.setMaximumHeight(42)
+                chip.setSizePolicy(
+                    QtWidgets.QSizePolicy.Expanding,
+                    QtWidgets.QSizePolicy.Fixed,
+                )
+            summary_widget.setMaximumHeight(90)
 
             summary_layout.addWidget(self.latestDisplayLabel, 0, 0)
             summary_layout.addWidget(self.latestLedLabel, 0, 1)
             summary_layout.addWidget(self.showHeartbeatCheck, 0, 2)
             summary_layout.addWidget(self.autoScrollCheck, 0, 3)
             summary_layout.addWidget(self.latestEventLabel, 1, 0, 1, 4)
-            summary_layout.addWidget(self.ledLegendLabel, 2, 0, 1, 4)
 
             log_layout.insertWidget(0, summary_widget)
 
@@ -2825,18 +2848,19 @@ class MainWindow(QtWidgets.QMainWindow):
             self.latestDisplayLabel.setObjectName("latestDisplayLabel")
             self.latestDisplayLabel.setProperty("class", "infoChip")
             self.latestDisplayLabel.setStyleSheet("")
+            self.latestDisplayLabel.setWordWrap(False)
 
-            self.latestLedLabel = QtWidgets.QLabel("最新 LED: --", summary_widget)
+            self.latestLedLabel = QtWidgets.QLabel("LED: --", summary_widget)
             self.latestLedLabel.setObjectName("latestLedLabel")
             self.latestLedLabel.setProperty("class", "infoChip")
             self.latestLedLabel.setStyleSheet("")
-            self.latestLedLabel.setWordWrap(True)
+            self.latestLedLabel.setWordWrap(False)
             self.latestLedLabel.setToolTip(self._led_legend_text())
 
             self.latestEventLabel = QtWidgets.QLabel("最近事件: 等待数据", summary_widget)
             self.latestEventLabel.setObjectName("latestEventLabel")
             self.latestEventLabel.setProperty("class", "infoChip")
-            self.latestEventLabel.setWordWrap(True)
+            self.latestEventLabel.setWordWrap(False)
             self.latestEventLabel.setStyleSheet("")
 
             self.ledLegendLabel = QtWidgets.QLabel(self._led_legend_text(), summary_widget)
@@ -2844,6 +2868,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.ledLegendLabel.setProperty("class", "infoChip")
             self.ledLegendLabel.setWordWrap(True)
             self.ledLegendLabel.setStyleSheet("")
+            self.ledLegendLabel.setVisible(False)
 
             self.showHeartbeatCheck = QtWidgets.QCheckBox("心跳日志", summary_widget)
             self.showHeartbeatCheck.setChecked(False)
@@ -2854,6 +2879,18 @@ class MainWindow(QtWidgets.QMainWindow):
             self.autoModeNoticeLabel.setStyleSheet("")
             self.autoModeNoticeLabel.setWordWrap(True)
             self.autoModeNoticeLabel.setVisible(False)
+            for chip in (
+                self.latestDisplayLabel,
+                self.latestLedLabel,
+                self.latestEventLabel,
+            ):
+                chip.setMinimumHeight(34)
+                chip.setMaximumHeight(42)
+                chip.setSizePolicy(
+                    QtWidgets.QSizePolicy.Expanding,
+                    QtWidgets.QSizePolicy.Fixed,
+                )
+            summary_widget.setMaximumHeight(90)
 
             summary_layout.addWidget(self.latestDisplayLabel, 0, 0)
             summary_layout.addWidget(self.latestLedLabel, 0, 1)
@@ -2861,7 +2898,6 @@ class MainWindow(QtWidgets.QMainWindow):
             summary_layout.addWidget(self.autoScrollCheck, 0, 3)
             summary_layout.addWidget(self.latestEventLabel, 1, 0, 1, 4)
             summary_layout.addWidget(self.autoModeNoticeLabel, 2, 0, 1, 4)
-            summary_layout.addWidget(self.ledLegendLabel, 3, 0, 1, 4)
             log_layout.insertWidget(1, summary_widget)
 
         if self.ui.horizontalLayout_2.indexOf(self.ui.connectButton) == -1:
@@ -3357,11 +3393,22 @@ class MainWindow(QtWidgets.QMainWindow):
         layout.addWidget(QtWidgets.QLabel("LED 掩码", group), 1, 0)
         layout.addWidget(self.ui.ledHexEdit, 1, 1)
         layout.addWidget(self.ui.sendLedButton, 1, 2)
-        hint = QtWidgets.QLabel("用于验收时快速验证蜂鸣器和 8 位 LED；日常设置请优先使用上方功能页。", group)
+        hint = QtWidgets.QLabel(
+            "蜂鸣用于快速听测板载蜂鸣器；LED 掩码输入 00-FF，发送 *SET:LED XX 后会短时手动覆盖 8 位 LED，便于验收逐位点亮，随后自动恢复系统状态。",
+            group,
+        )
         hint.setWordWrap(True)
         hint.setProperty("class", "infoChip")
         hint.setStyleSheet("")
+        led_map_hint = QtWidgets.QLabel(
+            "LED 位义：D1心跳  D2闹钟  D3编辑  D4串口RX  D5串口TX  D6夜间  D7RIGHT  D8手动覆盖；天气短显会临时使用天气掩码。",
+            group,
+        )
+        led_map_hint.setWordWrap(True)
+        led_map_hint.setProperty("class", "infoChip")
+        led_map_hint.setStyleSheet("")
         layout.addWidget(hint, 2, 0, 1, 3)
+        layout.addWidget(led_map_hint, 3, 0, 1, 3)
         self._style_form_grid(layout, label_width=82, row_height=42)
         return group
 
@@ -3389,14 +3436,14 @@ class MainWindow(QtWidgets.QMainWindow):
         self.testEstimateLabel.setProperty("class", "infoChip")
         self.testEstimateLabel.setStyleSheet("")
         self.testExplainLabel = QtWidgets.QLabel(
-            "快速测试：串口心跳、FORMAT/MODE 查询、日期时间写入、昼夜模式切到另一侧再切回、天气短显、铃声和 USER2。",
+            "快速测试：串口心跳、FORMAT/MODE 查询、日期时间写入、昼夜模式切到另一侧再切回、铃声，以及 USER2 天气短显实测。",
             test_group,
         )
         self.testExplainLabel.setWordWrap(True)
         self.testExplainLabel.setProperty("class", "infoChip")
         self.testExplainLabel.setStyleSheet("")
         self.boardShortcutLabel = QtWidgets.QLabel(
-            "全面测试：在快速测试基础上追加城市/NTP入口检查、跑马灯下划线、DISP/SPEED/FORMAT/EXT 按键、全部 ERROR 类型格式；测试不会改动自动昼夜开关最终状态。",
+            "全面测试：在快速测试基础上追加城市/NTP入口检查、跑马灯下划线、DISP/SPEED/FORMAT/EXT 按键、全部 ERROR 类型格式；USER2 会等待实际显示帧，测试不会改动自动昼夜开关最终状态。",
             test_group,
         )
         self.boardShortcutLabel.setWordWrap(True)
@@ -3978,6 +4025,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.status_mode.setText(self.last_mode)
         self.status_location.setText(place.name)
         self.status_local_time.setText(datetime.now().strftime("%H:%M:%S"))
+        if hasattr(self, "status_features") and not self.test_run_in_progress:
+            self.status_features.setText("串口同步 · 数字孪生 · NTP天气 · 闹钟日程 · 自动测试")
         dashboard_event_list = getattr(self, "dashboardEventList", None)
         if dashboard_event_list is not None:
             dashboard_event_list.clear()
@@ -4374,6 +4423,8 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.runFullChecksButton.setEnabled(True)
             self.poll_timer.start()
             self.ping_timer.start()
+            if hasattr(self, "status_features"):
+                self.status_features.setText("串口同步 · 数字孪生 · NTP天气 · 闹钟日程 · 自动测试")
             self.testStatusLabel.setText("状态: 失败")
             self.testOutputText.append(f"\nFAIL\n{reason}，已终止自动测试并恢复串口轮询。")
             self.log("ERROR", f"{reason}，自动测试已超时退出。")
@@ -4504,11 +4555,26 @@ class MainWindow(QtWidgets.QMainWindow):
         *,
         retry_count: int = 0,
     ) -> None:
+        now = time.monotonic()
+        if self.test_run_in_progress and retry_count == 0:
+            self.log("WARN", f"{source_text}：自动测试正在占用串口，本次 USER2 人工短显已忽略。")
+            return
+        if retry_count == 0 and now - self.last_user2_trigger_monotonic < 1.2:
+            self.log("INFO", f"{source_text}：USER2 天气短显触发过密，已合并本次请求。")
+            return
         token, led_mask = self._current_weather_short_token()
         visible = token.replace("_", " ").strip() or "NO WX"
+        has_weather_cache = bool(
+            (self.cached_weather_text or self.runtime_state.weather_token or "").strip()
+        )
+        if retry_count == 0:
+            self.last_user2_trigger_monotonic = now
         if not self.is_connected:
             self._set_local_display_override(visible, 5.0, led_mask)
-            self.log("INFO", f"{source_text}：本地模式显示天气短显 {visible}，约 5 秒后回到时钟。")
+            if has_weather_cache:
+                self.log("INFO", f"{source_text}：本地模式显示天气短显 {visible}，约 5 秒后回到时钟。")
+            else:
+                self.log("WARN", f"{source_text}：当前没有天气缓存，本地显示 NO WX。")
             self.refresh_dashboard()
             return
         if (
@@ -4531,11 +4597,15 @@ class MainWindow(QtWidgets.QMainWindow):
             else:
                 self.log("ERROR", f"{source_text}：串口忙超过 4 秒，已取消本次 USER2 天气短显。")
             return
+        self.last_user2_trigger_monotonic = now
         self.pending_queries.clear()
         self.last_ping_monotonic = None
         self._mark_manual_serial_window(source_text, duration_s=1.2)
         weather_command = build_set_weather_command(token, led_mask)
-        self.log("INFO", f"{source_text}：下发天气缓存并触发 USER2 显示 {visible}。")
+        if has_weather_cache:
+            self.log("INFO", f"{source_text}：下发天气缓存并触发 USER2 显示 {visible}。")
+        else:
+            self.log("WARN", f"{source_text}：当前没有天气缓存，触发 USER2 显示 NO WX。")
         self.send_command(weather_command)
         self._mark_user2_display_pending(visible)
         QtCore.QTimer.singleShot(240, lambda: self.send_command("*SET:KEY USER2"))
@@ -4648,7 +4718,10 @@ class MainWindow(QtWidgets.QMainWindow):
             or self.weather_refresh_in_progress
             or self.test_run_in_progress
         ):
-            if self.weather_refresh_in_progress or self.test_run_in_progress:
+            if self.test_run_in_progress:
+                self.log("WARN", f"{trigger_source}：自动测试正在占用串口，本次 NTP 请求已忽略。")
+                return False
+            if self.weather_refresh_in_progress:
                 self.pending_lifecycle_ntp_source = trigger_source
                 self.pending_lifecycle_ntp_query_after = (
                     self.pending_lifecycle_ntp_query_after or query_after
@@ -4770,6 +4843,9 @@ class MainWindow(QtWidgets.QMainWindow):
         trigger_source: str = "按钮",
         run_tests: bool | None = None,
     ) -> None:
+        if self.test_run_in_progress:
+            self.log("WARN", f"{trigger_source}：自动测试正在占用串口，本次天气/NTP 一键流程已忽略。")
+            return
         self.log("INFO", "已开始更新，请稍等片刻；正在后台定位城市、刷新天气，随后进行 NTP 对时写入。")
         if hasattr(self, "syncWeatherApplyButton"):
             self.syncWeatherApplyButton.setEnabled(False)
@@ -4793,6 +4869,10 @@ class MainWindow(QtWidgets.QMainWindow):
         trigger_source: str = "自动刷新",
         run_ntp_after_resolve: bool = False,
     ) -> None:
+        if self.test_run_in_progress:
+            if log_trigger:
+                self.log("WARN", f"{trigger_source}：自动测试正在占用串口，本次天气刷新已忽略。")
+            return
         if self.weather_refresh_in_progress:
             if log_trigger:
                 self.log("WARN", "天气刷新仍在进行，已忽略本次重复请求。")
@@ -6075,6 +6155,10 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         estimated = estimated_duration_seconds(host_only, full=full)
         test_name = "全面联合测试" if full else "快速联合测试"
+        if hasattr(self, "status_features"):
+            self.status_features.setText(
+                f"测试中：{test_name}，正在忽略手动串口操作"
+            )
         if hasattr(self, "testEstimateLabel"):
             self.testEstimateLabel.setText(f"预计耗时: 约 {estimated} 秒 | {test_name} | 当前目标: {active_target}")
         self.testOutputText.setPlainText(
@@ -6163,6 +6247,8 @@ class MainWindow(QtWidgets.QMainWindow):
             self.query_runtime_state()
         append_event_log(APP_DIR, "test_run", self.last_test_summary)
         self.refresh_dashboard()
+        if hasattr(self, "status_features"):
+            self.status_features.setText("串口同步 · 数字孪生 · NTP天气 · 闹钟日程 · 自动测试")
         self.log("INFO" if ok else "WARN", f"联合测试完成: {self.last_test_summary}")
         run_full_followup = self.test_run_full and ok
         self.test_run_full = False

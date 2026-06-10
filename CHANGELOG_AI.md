@@ -4,6 +4,35 @@
 
 ## 2026-06-10
 
+### v2.1 USER2/DISP/EXT 与日志摘要稳定收口
+
+#### 已完成修改
+- 右侧日志摘要删除 LED 位义长行，`最新 LED` 改为固定单行 `LED: XX`，详细 LED 掩码用途和 D1-D8 位义移到“调试与测试”的板端硬件测试区域。
+- MCU `USER2` 增加 350ms 等待 PC 天气缓存窗口和短按节流；`*SET:WEATHER` 不再无条件结束短显，避免有天气时先闪 `NO WX` 或把显示强制关回去。
+- PC `USER2` 增加 1.2 秒触发合并；自动测试期间人工 USER2/NTP/天气请求直接忽略并写日志，不再排队打断测试或测试结束后突然执行。
+- MCU `EXT` 除了在 `ALARM` 编辑页关闭单次闹钟外，也允许在正常页无临时天气/跑马灯时直接关闭已启用的板载单次闹钟，并上报 `*EVT:EDIT ALARM OFF`。
+- 自动测试 USER2 项改为真实观察短显：先下发 `SUN29C__`，再触发 USER2，必须收到包含 `SUN29C` 的 `*EVT:DISP` 才通过。
+- 页脚增加常态功能简介；自动测试期间显示“测试中：快速/全面联合测试，正在忽略手动串口操作”，结束或超时后恢复。
+
+#### 关键文件
+- `mcu/src/main.c`
+- `pc_host/app.py`
+- `pc_host/run_extension_checks.py`
+- `pc_host/twin_widgets.py`
+- `README.md`
+- `PROJECT_CONTEXT.md`
+- `CHANGELOG_AI.md`
+
+#### 验证结果
+- `pc_host/.venv/Scripts/python.exe -m py_compile pc_host/app.py pc_host/protocol.py pc_host/twin_widgets.py pc_host/extension_services.py pc_host/extension_store.py pc_host/run_extension_checks.py` 通过。
+- `gcc -fsyntax-only -std=c99 -DPART_TM4C1294NCPDT -DTARGET_IS_TM4C129_RA0 -I mcu/Inc -I mcu/Driverlib mcu/src/main.c` 通过。
+- `pc_host/.venv/Scripts/python.exe pc_host/run_extension_checks.py --host-only --full` 通过。
+- PyQt 离屏断言通过：右侧 LED 摘要固定单行、LED 位义长行隐藏、页脚测试中状态不会被 dashboard 刷新覆盖。
+- 源码版 6 秒启动烟测未退出；PyInstaller 重新打包 v2.1 成功，`build_release/SmartClockHost-v2.1/SmartClockHost.exe` 启动 6 秒未退出，zip 已重新生成。
+
+#### 未解决问题
+- 需要 Keil5 重新编译并烧录后实板验证：USER2 有天气不闪 `NO WX`、USER2 长按不挂死、DISP 连续切页不空白、EXT 正常页/ALARM 编辑页关闭单次闹钟。
+
 ### v2.1 单次闹钟同步、DISP 星期页与 LED 位义
 
 #### 已完成修改

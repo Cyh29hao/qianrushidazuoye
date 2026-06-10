@@ -215,6 +215,42 @@ def send_expect_error(
     return lines
 
 
+def send_user2_expect_weather_display(
+    port: Any,
+    progress: ProgressCallback | None = None,
+) -> list[str]:
+    expected = "SUN29C"
+    lines: list[str] = []
+    lines.extend(
+        send_expect_ok(
+            port,
+            build_set_weather_command("SUN29C__", 0x05),
+            timeout_s=2.0,
+            progress=progress,
+        )
+    )
+    lines.extend(
+        send_expect_ok(
+            port,
+            "*SET:KEY USER2",
+            timeout_s=2.0,
+            progress=progress,
+        )
+    )
+    extra = read_lines(port, timeout_s=1.8)
+    for line in extra:
+        _progress(progress, f"[RX] {line}")
+    lines.extend(extra)
+    for line in lines:
+        parsed = parse_line(line)
+        if parsed.kind == "event" and parsed.name == "DISP":
+            compact = parsed.data.replace("_", "").replace(" ", "").replace("~", "_").upper()
+            if expected in compact:
+                _progress(progress, f"[INFO] USER2 weather display observed: {parsed.data}")
+                return lines
+    raise RuntimeError(f"USER2 weather display {expected} not observed; lines={lines}")
+
+
 def execute_checks_on_open_port(
     port: Any,
     progress: ProgressCallback | None = None,
@@ -291,9 +327,9 @@ def execute_checks_on_open_port(
         "检查 *SET:RING DEFAULT 扩展铃声指令是否被当前固件支持。",
     )
     run(
-        "SIM KEY USER2",
-        lambda: send_expect_ok(port, "*SET:KEY USER2", timeout_s=2.0, progress=progress),
-        "检查 *SET:KEY USER2 是否支持，注意模拟按键不应回环上报 *EVT:KEY。",
+        "USER2 天气短显",
+        lambda: send_user2_expect_weather_display(port, progress=progress),
+        "检查 *SET:WEATHER 与 USER2 短显状态机；若失败，确认 MCU 已烧录最新固件并能上报 *EVT:DISP。",
     )
     if full:
         run(

@@ -1,5 +1,13 @@
 # PROJECT_CONTEXT - 智能时钟联网系统
 
+## 2026-06-10 v2.1 USER2/DISP/EXT 与日志摘要稳定收口
+- PC 右侧“日志与异常”摘要去掉 LED 位义长说明，`最新 LED` 改为固定单行 `LED: XX`，详细 D1-D8 位义和 `*SET:LED XX` 掩码用途移到“调试与测试 -> 板端硬件测试”，避免日志区高度在 1/2/3 行之间跳动。
+- MCU `USER2` 增加短按节流和 350ms PC 天气缓存宽限：板端没有天气缓存时先等待 PC 补发，超时才显示 `NO WX`；`*SET:WEATHER` 只更新缓存，不再无条件结束天气短显，避免短暂 `NO WX`、黑屏或后续 DISP 空白。
+- PC `USER2` 同步增加 1.2 秒节流；测试中人工 USER2、NTP、天气刷新会被忽略并写日志，不再排队到测试结束后突然执行。
+- MCU `EXT` 在 `ALARM` 编辑页继续关闭单次闹钟；正常时间页如果没有天气短显/跑马灯可退出且单次闹钟已启用，也会直接关闭单次闹钟并上报 `*EVT:EDIT ALARM OFF`，PC 立即更新状态。
+- 自动测试脚本 `USER2` 项升级为实测：先下发 `SUN29C__` 天气缓存，再触发 `USER2`，必须观察到 `*EVT:DISP` 中出现 `SUN29C` 才通过；PC 页脚测试期间显示“测试中”，并恢复常态功能简介。
+- 本轮改动涉及 `pc_host/app.py`、`pc_host/run_extension_checks.py`、`pc_host/twin_widgets.py`、`mcu/src/main.c`、`README.md`。PC v2.1 exe/zip 已重新打包并做 6 秒烟测；MCU 仍需 Keil5 重新编译烧录后实板验证。
+
 ## 2026-06-10 v2.1 单次闹钟同步、DISP 星期页与 LED 位义说明
 - MCU `mcu/src/main.c` 修复 `DISP` 短按体验：如果显示被长按关闭，短按 `DISP` 会先恢复显示、清理天气/滚动临时画面，再按 `TIME -> DATE -> WEEKDAY -> YEAR` 切页；`WEEKDAY` 页继续显示 `MONDAY` 到 `SUNDAY`。
 - MCU 新增板端关闭单次闹钟入口：进入 `ALARM` 编辑页后按 `EXT` 会关闭板载单次闹钟并退出编辑；`*SET:ALARM OFF` 和 `*SET:ALARM ...` 现在也会上报 `*EVT:EDIT ALARM ...`，便于 PC 即时同步。

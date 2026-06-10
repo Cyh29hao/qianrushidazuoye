@@ -46,6 +46,8 @@
 #define USER1_SHORT_COOLDOWN_MS    4000UL
 #define USER1_MODE_COOLDOWN_MS     900UL
 #define USER1_RELEASE_GUARD_MS     350UL
+#define USER2_SHORT_COOLDOWN_MS    1500UL
+#define USER2_PC_GRACE_MS          350UL
 #define DISP_LONG_PRESS_TICKS      80U
 #define I2C_WAIT_GUARD_LOOPS       50000UL
 #define TIME_BACKUP_SAVE_MS        10000UL
@@ -352,6 +354,7 @@ static uint16_t g_holdTicks[KEY_COUNT];
 static uint8_t g_longPressDone[KEY_COUNT];
 static uint32_t g_lastUser1ShortMs;
 static uint32_t g_lastUser1ModeMs;
+static uint32_t g_lastUser2ShortMs;
 static DisplayFrame g_currentFrame;
 static DisplayFrame g_previousFrame;
 static uint8_t g_currentSegments[DISPLAY_WIDTH];
@@ -368,6 +371,7 @@ static char g_weatherText[DISPLAY_WIDTH + 1U];
 static uint8_t g_weatherLedMask;
 static uint32_t g_weatherShowUntilMs;
 static uint8_t g_weatherForcedDisplayOn;
+static uint32_t g_weatherAwaitingPcUntilMs;
 static char g_uartLine[UART_LINE_MAX];
 static uint8_t g_uartLen;
 static uint8_t g_uartOverflow;
@@ -703,6 +707,15 @@ static void Tick10ms(void)
         RefreshDisplayAndLeds(true);
     }
 
+    if ((g_weatherAwaitingPcUntilMs != 0UL) &&
+        (g_millis >= g_weatherAwaitingPcUntilMs)) {
+        g_weatherAwaitingPcUntilMs = 0UL;
+        snprintf(g_weatherText, sizeof(g_weatherText), "NO WX");
+        g_weatherLedMask = 0U;
+        StartWeatherShortDisplay();
+        RefreshDisplayAndLeds(true);
+    }
+
     if ((g_millis >= g_nextScrollMs) && (g_bootPhase == BOOT_DONE)) {
         if ((g_messageActive != 0U) && (g_messageText[0] != '\0') &&
             (g_messageScrollLimit != 0U)) {
@@ -938,10 +951,12 @@ static void ResetRuntimeState(void)
     g_manualLedUntilMs = 0U;
     g_rxFlashUntilMs = 0U;
     g_txFlashUntilMs = 0U;
+    g_lastUser2ShortMs = 0U;
     g_weatherText[0] = '\0';
     g_weatherLedMask = 0U;
     g_weatherShowUntilMs = 0UL;
     g_weatherForcedDisplayOn = 0U;
+    g_weatherAwaitingPcUntilMs = 0UL;
     g_currentDigit = 0U;
     g_buzzerMode = BUZZER_IDLE;
     g_ringType = RING_DEFAULT;
@@ -1065,6 +1080,7 @@ static void ClearTransientDisplayState(void)
 static void FinishWeatherShortDisplay(void)
 {
     g_weatherShowUntilMs = 0UL;
+    g_weatherAwaitingPcUntilMs = 0UL;
     if (g_weatherForcedDisplayOn != 0U) {
         g_displayEnabled = 0U;
         g_weatherForcedDisplayOn = 0U;
@@ -1073,6 +1089,7 @@ static void FinishWeatherShortDisplay(void)
 
 static void StartWeatherShortDisplay(void)
 {
+    g_weatherAwaitingPcUntilMs = 0UL;
     if (g_displayEnabled == 0U) {
         g_displayEnabled = 1U;
         g_weatherForcedDisplayOn = 1U;
@@ -1802,6 +1819,14 @@ static void Keys_Scan(void)
 
 static void HandleKeyPress(KeyCode key, bool emitEvent)
 {
+    if ((key == KEY_USER2) && (emitEvent != false)) {
+        if ((g_lastUser2ShortMs != 0UL) &&
+            ((uint32_t)(g_millis - g_lastUser2ShortMs) < USER2_SHORT_COOLDOWN_MS)) {
+            return;
+        }
+        g_lastUser2ShortMs = g_millis;
+    }
+
     if (emitEvent) {
         EmitKeyEvent(key);
     }
@@ -1861,7 +1886,8 @@ static void HandleKeyPress(KeyCode key, bool emitEvent)
         g_displayFormat = (g_displayFormat == FORMAT_LEFT) ?
                           FORMAT_RIGHT : FORMAT_LEFT;
         break;
-    case KEY_EXT:
+    case KEY_EXT: {
+        uint8_t clearedTransient = 0U;
         if (g_editMode != EDIT_NONE) {
             if (g_editMode == EDIT_ALARM) {
                 DisableAlarmFromKey();
@@ -1871,12 +1897,20 @@ static void HandleKeyPress(KeyCode key, bool emitEvent)
             return;
         }
         if (g_weatherShowUntilMs != 0UL) {
+            clearedTransient = 1U;
             FinishWeatherShortDisplay();
         }
         if (g_messageActive != 0U) {
+            clearedTransient = 1U;
             ClearMessageState();
         }
+        if ((clearedTransient == 0U) &&
+            (g_alarm.enabled != 0U)) {
+            DisableAlarmFromKey();
+            return;
+        }
         break;
+    }
     case KEY_USER1:
         /* Short USER1 only emits *EVT:KEY USER1; PC handles NTP sync. */
         break;
@@ -1885,10 +1919,10 @@ static void HandleKeyPress(KeyCode key, bool emitEvent)
             ExitEditMode(false);
         }
         if (HasVisibleText(g_weatherText) == false) {
-            snprintf(g_weatherText, sizeof(g_weatherText), "NO WX");
-            g_weatherLedMask = 0U;
+            g_weatherAwaitingPcUntilMs = g_millis + USER2_PC_GRACE_MS;
+        } else {
+            StartWeatherShortDisplay();
         }
-        StartWeatherShortDisplay();
         break;
     default:
         break;
@@ -2851,7 +2885,9 @@ static void HandleSetWeather(const char *params)
     }
     snprintf(g_weatherText, sizeof(g_weatherText), "%s", nextWeather);
     g_weatherLedMask = nextLedMask;
-    FinishWeatherShortDisplay();
+    if ((g_weatherAwaitingPcUntilMs != 0UL) || (g_weatherShowUntilMs > g_millis)) {
+        StartWeatherShortDisplay();
+    }
     RefreshDisplayAndLeds(true);
     UART_ReplyOk(NULL);
 }
