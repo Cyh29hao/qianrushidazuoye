@@ -1,5 +1,12 @@
 # PROJECT_CONTEXT - 智能时钟联网系统
 
+## 2026-06-10 v2.1 COM5 实串口复测与 USER2 旧固件挂死记录
+- 按用户要求使用 COM5 做实串口全面测试：第一轮 `run_extension_checks.py --port COM5 --full` 已实际执行，PING、GET FORMAT/MODE、SET DATE/TIME、DAY/NIGHT、SET WEATHER、铃声、跑马灯下划线、DISP/SPEED/FORMAT/EXT、ERROR LEN/SYNTAX 均通过；USER2 天气短显没有观察到期望 `SUN29C` 显示帧。
+- 原始串口探测显示当前已烧板端固件在 `*SET:WEATHER DISP SUN29C__ LED 05` 后触发 `*SET:KEY USER2`，会输出异常 `*EVT:DISP` 字节，随后 COM5 可打开但不再响应 `*PING`、`*SET:KEY EXT`、`*RST`。这说明实板当前状态已经被 USER2 旧固件路径卡住，软件无法继续完成第二轮真实串口全量测试。
+- PC 端已补强旧固件兼容：USER2 fallback 先发送 `*SET:KEY EXT` 尝试退出临时状态，再延迟发送 `*SET:MSG <天气token>` 兜底显示；CLI 全面测试 USER2 项失败时也会尝试 `EXT/MSG` 恢复，并把总 hard timeout 放宽到 70 秒，避免 USER2 单项异常拖垮后续测试报告。
+- 当前结论：源码和上位机已继续加保护，但实板需要物理 RESET 或重新烧录最新 `mcu/src/main.c` 后，才能继续第二轮 COM5 全量实测。若不重烧，当前板端串口无 RX 的状态无法由 PC 串口命令可靠解除。
+- 本轮 PC v2.1 exe/zip 已重新打包：`build_release/SmartClockHost-v2.1/SmartClockHost.exe` 启动 6 秒未退出，压缩包 `build_release/SmartClockHost-v2.1.zip` 已更新；`build_release/` 仍不提交 Git。
+
 ## 2026-06-10 v2.1 USER2/DISP/EXT 与日志摘要稳定收口
 - PC 右侧“日志与异常”摘要去掉 LED 位义长说明，`最新 LED` 改为固定单行 `LED: XX`，详细 D1-D8 位义和 `*SET:LED XX` 掩码用途移到“调试与测试 -> 板端硬件测试”，避免日志区高度在 1/2/3 行之间跳动。
 - MCU `USER2` 增加短按节流和 350ms PC 天气缓存宽限：板端没有天气缓存时先等待 PC 补发，超时才显示 `NO WX`；`*SET:WEATHER` 只更新缓存，不再无条件结束天气短显，避免短暂 `NO WX`、黑屏或后续 DISP 空白。

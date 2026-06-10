@@ -4,6 +4,26 @@
 
 ## 2026-06-10
 
+### v2.1 COM5 实串口 USER2 卡死复盘与测试恢复
+
+#### 已完成修改
+- 使用 COM5 跑第一轮全面联合测试：PING、GET FORMAT/MODE、SET DATE/TIME、DAY/NIGHT、SET WEATHER、铃声、跑马灯、DISP/SPEED/FORMAT/EXT、ERROR LEN/SYNTAX 均通过；USER2 天气短显没有观察到 `SUN29C` 显示帧。
+- 进一步原始串口探测发现，当前实板固件在 `*SET:WEATHER DISP SUN29C__ LED 05` 后触发 `*SET:KEY USER2` 会输出异常 `*EVT:DISP` 字符，随后可能进入无 RX 状态；`EXT/PING/RST` 串口恢复无响应，说明实板当前烧录固件不是本轮最新状态或 USER2 路径已卡死。
+- 追加 COM5 恢复探测：端口仍可打开，但 DTR/RTS 组合切换、serial break、重新发送 `*PING` 均无 RX，确认第二轮实串口测试被当前实板状态阻塞。
+- `run_extension_checks.py` 全面测试总 hard timeout 从 42 秒放宽到 70 秒，避免 USER2 单项失败拖累后续 ERROR PARAM/RANGE 误报。
+- USER2 测试项在未观察到天气短显时会先尝试 `*SET:KEY EXT` 和 `*SET:MSG SUN29C` 恢复可见显示，再记录 FAIL。
+- PC 运行时 USER2 fallback 也改为先发 `EXT` 再发 `SET MSG`，减少旧固件临时显示状态卡住后继续写消息失败的概率。
+
+#### 验证结果
+- `pc_host/.venv/Scripts/python.exe -m py_compile pc_host/app.py pc_host/protocol.py pc_host/twin_widgets.py pc_host/extension_services.py pc_host/extension_store.py pc_host/run_extension_checks.py` 通过。
+- `gcc -fsyntax-only -std=c99 -DPART_TM4C1294NCPDT -DTARGET_IS_TM4C129_RA0 -I mcu/Inc -I mcu/Driverlib mcu/src/main.c` 通过。
+- `pc_host/.venv/Scripts/python.exe pc_host/run_extension_checks.py --host-only --full` 通过。
+- `pc_host/.venv/Scripts/python.exe pc_host/run_extension_checks.py --port COM5` 复测失败，所有命令无回包，符合“板端当前已卡死/需物理复位或重烧”的判断。
+- PyInstaller 重新生成 `build_release/SmartClockHost-v2.1/SmartClockHost.exe` 和 `build_release/SmartClockHost-v2.1.zip`；exe 烟测启动 6 秒未退出，烟测运行态文件已清理。
+
+#### 未解决问题
+- 当前 COM5 板端在 USER2 后已无 `*PING` 回包，软件无法继续第二轮实串口测试；需要按 RESET 或重新烧录最新 `mcu/src/main.c` 后再跑第二轮全面测试。
+
 ### v2.1 USER2/DISP/EXT 与日志摘要稳定收口
 
 #### 已完成修改

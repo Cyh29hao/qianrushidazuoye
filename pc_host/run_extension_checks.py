@@ -26,7 +26,7 @@ HOST_ONLY_ESTIMATED_SECONDS = 3
 HOST_ONLY_FULL_ESTIMATED_SECONDS = 6
 SERIAL_COMMAND_GAP_S = 0.12
 SERIAL_HARD_TIMEOUT_S = 24.0
-SERIAL_FULL_HARD_TIMEOUT_S = 42.0
+SERIAL_FULL_HARD_TIMEOUT_S = 70.0
 
 
 @dataclass
@@ -248,6 +248,29 @@ def send_user2_expect_weather_display(
             if expected in compact:
                 _progress(progress, f"[INFO] USER2 weather display observed: {parsed.data}")
                 return lines
+    _progress(progress, "[WARN] USER2 weather display not observed; try EXT/MSG recovery")
+    try:
+        lines.extend(
+            send_expect_ok(
+                port,
+                "*SET:KEY EXT",
+                timeout_s=1.2,
+                progress=progress,
+            )
+        )
+    except Exception as exc:  # noqa: BLE001
+        _progress(progress, f"[WARN] EXT recovery failed: {exc}")
+    try:
+        lines.extend(
+            send_expect_ok(
+                port,
+                "*SET:MSG SUN29C",
+                timeout_s=1.5,
+                progress=progress,
+            )
+        )
+    except Exception as exc:  # noqa: BLE001
+        _progress(progress, f"[WARN] MSG fallback failed: {exc}")
     raise RuntimeError(f"USER2 weather display {expected} not observed; lines={lines}")
 
 

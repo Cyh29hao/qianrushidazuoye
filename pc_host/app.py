@@ -4523,7 +4523,8 @@ class MainWindow(QtWidgets.QMainWindow):
             "WARN",
             f"USER2 触发后未检测到天气短显帧，已用滚动消息兜底显示 {fallback_text}；建议重新烧录最新 MCU 固件。",
         )
-        self.send_command(f"*SET:MSG {fallback_text}")
+        self._write_serial_recovery_command("*SET:KEY EXT")
+        QtCore.QTimer.singleShot(180, lambda: self.send_command(f"*SET:MSG {fallback_text}"))
 
     def _push_weather_cache_to_board(self, source_text: str, retry_count: int = 0) -> None:
         if not self.is_connected:
