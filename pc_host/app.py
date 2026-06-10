@@ -261,6 +261,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.pending_user2_display_text = ""
         self.pending_user2_display_deadline = 0.0
         self.pending_user2_display_fallback_done = False
+        self.pending_user2_display_retry_count = 0
         self.board_weather_cache_token = ""
         self.board_weather_cache_led_mask = -1
         self.board_weather_cache_synced_monotonic = 0.0
@@ -4534,51 +4535,100 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         self._push_weather_cache_to_board(source_text)
 
+    def _send_serial_sequence(
+        self,
+        commands: list[str],
+        *,
+        gap_ms: int = 180,
+        allow_during_sync: bool = False,
+        allow_during_test: bool = False,
+    ) -> None:
+        for index, command in enumerate(commands):
+            QtCore.QTimer.singleShot(
+                index * gap_ms,
+                lambda command=command: self.send_command(
+                    command,
+                    allow_during_sync=allow_during_sync,
+                    allow_during_test=allow_during_test,
+                ),
+            )
+
+    def _board_message_payload(self, visible_text: str) -> str:
+        payload = visible_text.strip()
+        if self.runtime_state.format == "RIGHT":
+            return payload[::-1]
+        return payload
+
     def _send_user2_weather_message(self, source_text: str, visible_text: str, led_mask: int) -> None:
         message_text = visible_text.replace("_", " ").strip() or "NO WX"
-        self._mark_manual_serial_window(source_text, duration_s=0.9)
+        board_message_text = message_text
+        self._mark_manual_serial_window(source_text, duration_s=4.5)
         self._mark_user2_display_pending(message_text)
+        self.runtime_state.format = "LEFT"
+        self.ui.formatCombo.setCurrentText("LEFT")
+        self._save_runtime_state()
+        commands = ["*SET:DISPLAY ON", "*SET:FORMAT LEFT"]
         if led_mask:
-            self.send_command(f"*SET:LED {led_mask & 0xFF:02X}")
-        self.send_command(f"*SET:MSG {message_text}")
+            commands.append(f"*SET:LED {led_mask & 0xFF:02X}")
+        commands.append(f"*SET:MSG {board_message_text}")
+        self._send_serial_sequence(commands, gap_ms=180)
 
     def _compact_display_text(self, text: str) -> str:
         return "".join(ch for ch in text.upper() if ch.isalnum())
 
+    def _display_event_token_is_valid(self, token: str) -> bool:
+        if not token or len(token) > 8:
+            return False
+        allowed = set("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_~- ")
+        return all((32 <= ord(ch) < 127) and (ch.upper() in allowed) for ch in token)
+
     def _mark_user2_display_pending(self, visible_text: str) -> None:
         compact = self._compact_display_text(visible_text)
         self.pending_user2_display_text = compact or "NOWX"
-        self.pending_user2_display_deadline = time.monotonic() + 1.2
+        self.pending_user2_display_deadline = time.monotonic() + 2.2
         self.pending_user2_display_fallback_done = False
-        QtCore.QTimer.singleShot(1250, self._fallback_user2_weather_display_if_needed)
+        self.pending_user2_display_retry_count = 0
+        QtCore.QTimer.singleShot(2250, self._fallback_user2_weather_display_if_needed)
 
     def _clear_user2_display_pending_if_matched(self, visible_text: str) -> None:
         if not self.pending_user2_display_text:
             return
         compact = self._compact_display_text(visible_text)
-        if self.pending_user2_display_text in compact:
+        expected = self.pending_user2_display_text
+        if expected in compact:
             self.pending_user2_display_text = ""
             self.pending_user2_display_deadline = 0.0
             self.pending_user2_display_fallback_done = False
+            self.pending_user2_display_retry_count = 0
 
     def _fallback_user2_weather_display_if_needed(self) -> None:
         if (
             not self.is_connected
             or not self.pending_user2_display_text
-            or self.pending_user2_display_fallback_done
             or time.monotonic() < self.pending_user2_display_deadline
         ):
             return
         fallback_text = self.pending_user2_display_text[:32]
-        self.pending_user2_display_fallback_done = True
-        self.pending_user2_display_text = ""
-        self.pending_user2_display_deadline = 0.0
-        self.log(
-            "WARN",
-            f"USER2 触发后未检测到天气短显帧，已用滚动消息兜底显示 {fallback_text}；请检查板端是否已退出临时状态或串口是否持续回传显示帧。",
-        )
+        self.pending_user2_display_retry_count += 1
+        if self.pending_user2_display_retry_count > 2:
+            self.log("ERROR", f"USER2 天气短显连续恢复失败，已释放等待状态；最后期望显示 {fallback_text}。")
+            self.pending_user2_display_fallback_done = True
+            self.pending_user2_display_text = ""
+            self.pending_user2_display_deadline = 0.0
+            self.pending_user2_display_retry_count = 0
+            return
+        self.pending_user2_display_deadline = time.monotonic() + 1.4
+        self.log("WARN", f"USER2 天气短显未观察到期望帧，正在第 {self.pending_user2_display_retry_count} 次自动恢复显示 {fallback_text}。")
         self._write_serial_recovery_command("*SET:KEY EXT")
-        QtCore.QTimer.singleShot(180, lambda: self.send_command(f"*SET:MSG {fallback_text}"))
+        board_text = fallback_text
+        QtCore.QTimer.singleShot(
+            220,
+            lambda: self._send_serial_sequence(
+                ["*SET:DISPLAY ON", "*SET:FORMAT LEFT", f"*SET:MSG {board_text}"],
+                gap_ms=180,
+            ),
+        )
+        QtCore.QTimer.singleShot(1500, self._fallback_user2_weather_display_if_needed)
 
     def _push_weather_cache_to_board(self, source_text: str, retry_count: int = 0) -> None:
         if not self.is_connected:
@@ -5277,7 +5327,11 @@ class MainWindow(QtWidgets.QMainWindow):
     def trigger_schedule(self, item: ScheduleItem) -> None:
         token = normalize_board_message(item.board_label or item.title)
         if self.is_connected:
-            self.send_command(f"*SET:MSG {token}")
+            self._mark_manual_serial_window(f"提醒 {item.title}", duration_s=2.2)
+            self._send_serial_sequence(
+                ["*SET:DISPLAY ON", f"*SET:MSG {self._board_message_payload(token)}"],
+                gap_ms=180,
+            )
             if not (self.config.quiet_night_rings and self.last_mode == "NIGHT"):
                 self._play_ring_or_fallback(item.ring_type, f"提醒 {item.title}")
         if item.voice_text.strip():
@@ -5844,6 +5898,15 @@ class MainWindow(QtWidgets.QMainWindow):
                 dp_mask = int(parsed.extra[0], 16)
             except ValueError:
                 return
+            if not self._display_event_token_is_valid(parsed.data):
+                self.log("WARN", f"忽略非法 DISPLAY 帧: {parsed.data!r} / {parsed.extra[0]}")
+                if self.pending_user2_display_text:
+                    self.pending_user2_display_deadline = min(
+                        self.pending_user2_display_deadline or time.monotonic(),
+                        time.monotonic() + 0.2,
+                    )
+                    QtCore.QTimer.singleShot(220, self._fallback_user2_weather_display_if_needed)
+                return
             self._complete_soft_reset_sync_if_pending("DISP")
             self.boot_mirror_generation += 1
             self.last_board_display_monotonic = time.monotonic()
@@ -6149,7 +6212,12 @@ class MainWindow(QtWidgets.QMainWindow):
         if not text:
             self.log("WARN", "消息为空，未发送。")
             return
-        self.send_command(f"*SET:MSG {text}")
+        self._mark_manual_serial_window("滚动消息", duration_s=2.2)
+        self._send_serial_sequence(
+            ["*SET:DISPLAY ON", f"*SET:MSG {self._board_message_payload(text)}"],
+            gap_ms=180,
+        )
+        self.ui.messageEdit.setText(text)
 
     def send_virtual_key(self, key_name: str) -> None:
         key = key_name.strip().upper()

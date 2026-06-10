@@ -137,6 +137,14 @@ def send_expect_ok(
     return lines
 
 
+def ok_payload(lines: list[str]) -> str:
+    for line in lines:
+        parsed = parse_line(line)
+        if parsed.kind == "ok":
+            return parsed.data.strip().upper()
+    return ""
+
+
 def send_mode_expect(
     port: Any,
     mode: str,
@@ -222,34 +230,45 @@ def send_user2_expect_weather_display(
     expected = "SUN29C"
     lines: list[str] = []
     _progress(progress, "[INFO] USER2 safe weather display uses EXT + LED + MSG to avoid wedging old USER2 firmware")
-    lines.extend(
-        send_expect_ok(
-            port,
+    format_lines = send_expect_ok(
+        port,
+        "*GET:FORMAT",
+        timeout_s=1.2,
+        progress=progress,
+    )
+    lines.extend(format_lines)
+    current_format = ok_payload(format_lines) or "LEFT"
+    _progress(progress, f"[INFO] USER2 safe weather display starts from format={current_format}; force LEFT for readable short display")
+    for attempt in range(1, 4):
+        if attempt > 1:
+            _progress(progress, f"[INFO] USER2 safe weather display retry {attempt}/3")
+        for command in (
             "*SET:KEY EXT",
-            timeout_s=1.2,
-            progress=progress,
-        )
-    )
-    lines.extend(
-        send_expect_ok(
-            port,
+            "*SET:DISPLAY ON",
+            "*SET:FORMAT LEFT",
             "*SET:LED 05",
-            timeout_s=1.2,
-            progress=progress,
-        )
-    )
-    lines.extend(
-        send_expect_ok(
-            port,
-            "*SET:MSG SUN29C",
-            timeout_s=1.5,
-            progress=progress,
-        )
-    )
-    extra = read_lines(port, timeout_s=1.8)
-    for line in extra:
-        _progress(progress, f"[RX] {line}")
-    lines.extend(extra)
+            f"*SET:MSG {expected}",
+        ):
+            lines.extend(
+                send_expect_ok(
+                    port,
+                    command,
+                    timeout_s=1.4,
+                    progress=progress,
+                )
+            )
+        deadline = time.monotonic() + 3.5
+        while time.monotonic() < deadline:
+            extra = read_lines(port, timeout_s=0.35)
+            for line in extra:
+                _progress(progress, f"[RX] {line}")
+                lines.append(line)
+                parsed = parse_line(line)
+                if parsed.kind == "event" and parsed.name == "DISP":
+                    compact = parsed.data.replace("_", "").replace(" ", "").replace("~", "_").upper()
+                    if expected in compact:
+                        _progress(progress, f"[INFO] USER2 safe weather display observed: {parsed.data}")
+                        return lines
     for line in lines:
         parsed = parse_line(line)
         if parsed.kind == "event" and parsed.name == "DISP":

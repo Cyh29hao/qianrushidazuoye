@@ -1,5 +1,13 @@
 # PROJECT_CONTEXT - 智能时钟联网系统
 
+## 2026-06-10 v2.1 USER2 串口序列化与 COM5 联机回归
+- 本轮继续使用 COM5 实机测试，重点复测用户反复指出的 USER2、隐藏心跳下手动 PING、自动测试、跑马灯下划线、连续 NTP/串口恢复和调试页蜂鸣/LED 掩码可见性。
+- PC USER2 天气短显现在走间隔串口序列：`DISPLAY ON -> FORMAT LEFT -> LED -> MSG`，不再裸发 `*SET:KEY USER2`，也不再把多条命令瞬间塞给 MCU；USER2 期间延长串口安静窗口，后台天气/NTP/GET 查询不会插队抢显示。
+- PC 数字孪生会忽略非法 `*EVT:DISP` token，并在 USER2 pending 时自动触发最多两次恢复重发；失败也会释放等待状态，不会把 UI 卡住。
+- 普通滚动消息和日程提醒也会先确保 `DISPLAY ON` 再间隔发送 `MSG`，MCU 源码的 `HandleSetMessage()` 同步改为收到 `*SET:MSG` 自动打开显示，避免“OK 但板端空白”。
+- 本轮验证：Python `py_compile` 通过，MCU `gcc -fsyntax-only` 通过，host-only full 通过，`run_extension_checks.py --port COM5 --full` 通过；PC 主窗口直连 COM5 在板端预设 RIGHT/旧帧情况下第一次虚拟 USER2 即显示正向 `SUN29C__`，pending 清零，无裸 USER2、无 `ERROR PARAM`；隐藏心跳时手动 PING 仍有 TX/RX；NTP 连击后状态释放且 PING 可恢复。
+- v2.1 release 已重新打包：`build_release/SmartClockHost-v2.1/SmartClockHost.exe` 与 `build_release/SmartClockHost-v2.1.zip`；exe 启动 8 秒未退出，release 目录只保留 `_internal/` 和 `SmartClockHost.exe`。
+
 ## 2026-06-10 v2.1 COM5 reset 后 USER2 安全短显与调试页修复
 - COM5 reset 后重新实测，确认当前已烧实板裸 `*SET:KEY USER2` 仍会把 `SUN29C` 显示成异常 `bE______`，说明实体 USER2 内部路径在当前固件上仍不稳定；PC 端已不再从虚拟按钮、协议台或 RAW 入口裸发 `*SET:KEY USER2`。
 - PC USER2 统一改为“安全天气短显”：使用 `*SET:LED <mask>` + `*SET:MSG <weather token>` 直接显示天气 token；收到实体 `*EVT:KEY USER2` 后也会立即辅助覆盖显示，避免异常帧停留和串口状态机卡死。

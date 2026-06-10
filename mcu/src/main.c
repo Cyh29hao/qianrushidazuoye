@@ -2763,6 +2763,8 @@ static void HandleSetMessage(const char *params)
     if (g_messageActive != 0U) {
         ClearMessageState();
     }
+    g_displayEnabled = 1U;
+    g_weatherForcedDisplayOn = 0U;
     snprintf(g_messageText, sizeof(g_messageText), "%s", params);
     g_messageActive = 1U;
     g_messageStartedMs = g_millis;

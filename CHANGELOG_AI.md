@@ -4,6 +4,25 @@
 
 ## 2026-06-10
 
+### v2.1 USER2 串口序列化与 COM5 联机回归
+
+#### 已完成修改
+- PC 端 USER2 天气短显不再一次性连发多条串口命令，改为按 `DISPLAY ON -> FORMAT LEFT -> LED -> MSG` 间隔发送，避免 MCU 偶发把连续命令解析成 `ERROR PARAM` 或污染显示状态机。
+- USER2 短显期间延长串口安静窗口，后台天气/NTP/运行状态查询不会插队抢占显示；未观察到期望天气帧时最多自动恢复重发两次，失败后释放 pending 状态，不会把 UI 卡住。
+- PC 数字孪生新增 DISPLAY 帧合法性过滤：收到不可打印/非法 token 时只写 WARN，不更新镜像；如果正在等待 USER2 天气短显，则触发恢复流程。
+- 普通滚动消息和日程提醒下发前也先确保 `DISPLAY ON`，并用短间隔序列发送，减少显示关闭或串口连发导致“OK 但看不见”的情况。
+- MCU `*SET:MSG` 源码同步补强：收到消息时自动打开显示并清掉天气强制显示标记，重新烧录后即使此前显示关闭，跑马灯/提醒也能直接可见。
+- 自动测试脚本 USER2 项升级为强制 LEFT、最多三次恢复重发后观察 `SUN29C`，避免旧临时显示状态导致误判。
+
+#### 验证结果
+- `python -m py_compile pc_host/app.py pc_host/protocol.py pc_host/twin_widgets.py pc_host/extension_services.py pc_host/extension_store.py pc_host/run_extension_checks.py` 通过。
+- `gcc -fsyntax-only -std=c99 -DPART_TM4C1294NCPDT -DTARGET_IS_TM4C129_RA0 -I mcu/Inc -I mcu/Driverlib mcu/src/main.c` 通过。
+- `pc_host/run_extension_checks.py --host-only --full` 通过。
+- `pc_host/run_extension_checks.py --port COM5 --full` 通过，覆盖 PING、GET、DATE/TIME、DAY/NIGHT、WEATHER、RING、USER2 安全天气短显、`A_B_TEST`、DISP/SPEED/FORMAT/EXT、ERROR LEN/SYNTAX/PARAM/RANGE。
+- PC 主窗口直连 COM5 回归：故意把板端设为 RIGHT 且残留旧天气帧后，第一次点击虚拟 USER2 即显示正向 `SUN29C__`，pending 清零，日志中无裸 `*SET:KEY USER2`、无 `ERROR PARAM`。
+- 隐藏心跳日志时手动 `*PING` 仍能看到 TX/RX；NTP 连击烟测后同步状态释放、串口仍回 `*PONG`，没有长期卡死。
+- v2.1 打包版已重新生成：`build_release/SmartClockHost-v2.1/SmartClockHost.exe` 与 `build_release/SmartClockHost-v2.1.zip`；exe 启动 8 秒未退出，烟测运行态文件已清理后重新压缩。
+
 ### v2.1 COM5 reset 后 USER2 与调试页收口
 
 #### 已完成修改
