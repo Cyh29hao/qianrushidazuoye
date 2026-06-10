@@ -73,6 +73,7 @@ from protocol import (
     build_set_time_command,
     build_set_weather_command,
     parse_line,
+    token_to_text,
 )
 from run_extension_checks import (
     estimated_duration_seconds,
@@ -245,6 +246,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.serial_recovery_stage = 0
         self.last_user1_ntp_request_monotonic = 0.0
         self.last_user1_ntp_warn_monotonic = 0.0
+        self.last_user2_replay_monotonic = 0.0
+        self.pending_user2_display_text = ""
+        self.pending_user2_display_deadline = 0.0
+        self.pending_user2_display_fallback_done = False
         self.latest_display_text = "--"
         self.latest_led_text = "--"
         self.latest_event_text = "等待数据"
@@ -278,6 +283,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.last_mode_auto_applied = ""
         self.last_tx_command = ""
         self.last_tx_monotonic = 0.0
+        self.last_night_display_fix_monotonic = 0.0
         self.ring_command_supported: bool | None = None
         self.last_test_summary = "未运行"
         self.last_test_ok = False
@@ -2126,6 +2132,9 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _normalize_groupbox_layouts(self) -> None:
         for group in self.findChildren(QtWidgets.QGroupBox):
+            if group is getattr(self.ui, "displayGroup", None):
+                self._apply_display_group_layout_constraints()
+                continue
             layout = group.layout()
             if layout is None:
                 continue
@@ -2164,8 +2173,8 @@ class MainWindow(QtWidgets.QMainWindow):
     ) -> QtWidgets.QWidget:
         row = QtWidgets.QWidget(self.ui.displayGroup)
         row.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
-        row.setMinimumHeight(40)
-        row.setMaximumHeight(44)
+        row.setMinimumHeight(38)
+        row.setMaximumHeight(40)
         layout = QtWidgets.QHBoxLayout(row)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
@@ -2265,16 +2274,33 @@ class MainWindow(QtWidgets.QMainWindow):
         while layout.count():
             item = layout.takeAt(0)
             widget = item.widget()
-            if isinstance(widget, QtWidgets.QLabel):
+            if widget is not None and widget not in {
+                self.ui.displayToggleCombo,
+                self.ui.applyDisplayButton,
+                self.ui.formatCombo,
+                self.ui.applyFormatButton,
+                self.ui.modeCombo,
+                self.ui.applyModeButton,
+                self.ui.messageEdit,
+                self.ui.sendMessageButton,
+                self.usernameEdit,
+                self.usernameSaveButton,
+            }:
                 widget.setParent(None)
                 widget.deleteLater()
-        layout.setContentsMargins(12, 26, 12, 12)
-        layout.setHorizontalSpacing(0)
-        layout.setVerticalSpacing(8)
-        for column in range(4):
+        layout.setContentsMargins(18, 32, 18, 18)
+        layout.setHorizontalSpacing(12)
+        layout.setVerticalSpacing(10)
+        for row in range(16):
+            layout.setRowMinimumHeight(row, 0)
+            layout.setRowStretch(row, 0)
+        for column in range(6):
             layout.setColumnMinimumWidth(column, 0)
             layout.setColumnStretch(column, 0)
-        layout.setColumnStretch(0, 1)
+        layout.setColumnMinimumWidth(0, 108)
+        layout.setColumnMinimumWidth(2, 174)
+        layout.setColumnStretch(1, 1)
+        layout.setColumnStretch(2, 0)
 
         self.ui.applyModeButton.setText("日夜切换")
         self.ui.sendMessageButton.setText("发送 MSG")
@@ -2287,21 +2313,77 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ui.messageEdit.setAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
 
         rows = [
-            self._make_settings_row("显示开关", self.ui.displayToggleCombo, self.ui.applyDisplayButton),
-            self._make_settings_row("FORMAT", self.ui.formatCombo, self.ui.applyFormatButton),
-            self._make_settings_row("MODE", self.ui.modeCombo, self.ui.applyModeButton),
-            self._make_settings_row(
-                "滚动消息",
-                self.ui.messageEdit,
-                self.ui.sendMessageButton,
-                field_min_width=170,
-                action_width=112,
-            ),
-            self._make_settings_row("用户名", self.usernameEdit, self.usernameSaveButton),
+            ("显示开关", self.ui.displayToggleCombo, self.ui.applyDisplayButton),
+            ("FORMAT", self.ui.formatCombo, self.ui.applyFormatButton),
+            ("MODE", self.ui.modeCombo, self.ui.applyModeButton),
+            ("滚动消息", self.ui.messageEdit, self.ui.sendMessageButton),
+            ("用户名", self.usernameEdit, self.usernameSaveButton),
         ]
-        for row_index, row in enumerate(rows):
-            layout.addWidget(row, row_index, 0)
-            layout.setRowMinimumHeight(row_index, 44)
+        for row_index, (label_text, field, action) in enumerate(rows):
+            label = QtWidgets.QLabel(label_text, group)
+            label.setMinimumWidth(96)
+            label.setAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
+            label.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed)
+            field.setParent(group)
+            field.setMinimumWidth(220)
+            field.setMinimumHeight(38)
+            field.setMaximumHeight(42)
+            field.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
+            action.setParent(group)
+            action.setMinimumWidth(168)
+            action.setMaximumWidth(190)
+            action.setMinimumHeight(38)
+            action.setMaximumHeight(42)
+            action.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed)
+            layout.addWidget(label, row_index, 0)
+            layout.addWidget(field, row_index, 1)
+            layout.addWidget(action, row_index, 2)
+            layout.setRowMinimumHeight(row_index, 50)
+        self._apply_display_group_layout_constraints()
+
+    def _apply_display_group_layout_constraints(self) -> None:
+        if not hasattr(self, "usernameEdit") or not hasattr(self, "usernameSaveButton"):
+            return
+        group = self.ui.displayGroup
+        layout = self.ui.gridLayout_2
+        layout.setContentsMargins(18, 34, 18, 18)
+        layout.setHorizontalSpacing(12)
+        layout.setVerticalSpacing(10)
+        for column in range(6):
+            layout.setColumnMinimumWidth(column, 0)
+            layout.setColumnStretch(column, 0)
+        layout.setColumnMinimumWidth(0, 108)
+        layout.setColumnMinimumWidth(2, 174)
+        layout.setColumnStretch(1, 1)
+        for row in range(16):
+            layout.setRowMinimumHeight(row, 0)
+            layout.setRowStretch(row, 0)
+        for row in range(5):
+            layout.setRowMinimumHeight(row, 56)
+        for widget in (
+            self.ui.displayToggleCombo,
+            self.ui.formatCombo,
+            self.ui.modeCombo,
+            self.ui.messageEdit,
+            self.usernameEdit,
+        ):
+            widget.setMinimumWidth(220)
+            widget.setMinimumHeight(42)
+            widget.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
+        for button in (
+            self.ui.applyDisplayButton,
+            self.ui.applyFormatButton,
+            self.ui.applyModeButton,
+            self.ui.sendMessageButton,
+            self.usernameSaveButton,
+        ):
+            button.setMinimumWidth(168)
+            button.setMaximumWidth(190)
+            button.setMinimumHeight(40)
+            button.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed)
+        group.setMinimumHeight(0)
+        group.setMaximumHeight(386)
+        group.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
 
     def _refresh_theme_from_mode(self) -> None:
         self._apply_theme()
@@ -2359,7 +2441,9 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.ui.connectionGroup.setMinimumHeight(150)
         self.ui.clockGroup.setMinimumHeight(250)
-        self.ui.displayGroup.setMinimumHeight(220)
+        self.ui.displayGroup.setMinimumHeight(0)
+        self.ui.displayGroup.setMaximumHeight(386)
+        self.ui.displayGroup.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
         self.ui.demoGroup.setMinimumHeight(150)
         self.ui.twinGroup.setMinimumHeight(600)
         self.ui.logGroup.setMinimumHeight(300)
@@ -2438,12 +2522,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ui.gridLayout.setHorizontalSpacing(12)
         self.ui.gridLayout.setVerticalSpacing(10)
         self.ui.gridLayout.setContentsMargins(14, 10, 14, 10)
-        self.ui.gridLayout_2.setColumnStretch(0, 1)
-        self.ui.gridLayout_2.setColumnStretch(1, 4)
-        self.ui.gridLayout_2.setColumnStretch(2, 2)
-        self.ui.gridLayout_2.setHorizontalSpacing(12)
-        self.ui.gridLayout_2.setVerticalSpacing(10)
-        self.ui.gridLayout_2.setContentsMargins(14, 10, 14, 10)
+        self._apply_display_group_layout_constraints()
         self.ui.verticalLayout_2.setSpacing(10)
         self.ui.verticalLayout_2.setContentsMargins(14, 10, 14, 12)
         self.ui.verticalLayout_3.setSpacing(8)
@@ -2546,7 +2625,9 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.ui.connectionGroup.setMinimumHeight(124)
         self.ui.clockGroup.setMinimumHeight(178)
-        self.ui.displayGroup.setMinimumHeight(330)
+        self.ui.displayGroup.setMinimumHeight(0)
+        self.ui.displayGroup.setMaximumHeight(386)
+        self.ui.displayGroup.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
         self.ui.demoGroup.setMinimumHeight(220)
 
         available_height = max(target_height, available.height())
@@ -2721,15 +2802,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ui.gridLayout.setRowMinimumHeight(2, 44)
         self.ui.gridLayout.setRowMinimumHeight(3, 24)
         self.ui.gridLayout.setRowMinimumHeight(4, 42)
-        for column in range(4):
-            self.ui.gridLayout_2.setColumnMinimumWidth(column, 0)
-            self.ui.gridLayout_2.setColumnStretch(column, 0)
-        self.ui.gridLayout_2.setColumnStretch(0, 1)
-        self.ui.gridLayout_2.setHorizontalSpacing(0)
-        self.ui.gridLayout_2.setVerticalSpacing(8)
-        self.ui.gridLayout_2.setContentsMargins(12, 26, 12, 12)
-        for row in range(8):
-            self.ui.gridLayout_2.setRowMinimumHeight(row, 44)
+        self._apply_display_group_layout_constraints()
         self.ui.verticalLayout_2.setSpacing(10)
         self.ui.verticalLayout_2.setContentsMargins(12, 28, 12, 12)
         self.ui.verticalLayout_3.setSpacing(8)
@@ -3257,7 +3330,7 @@ class MainWindow(QtWidgets.QMainWindow):
             ("GET 显示开关 | *GET:DISPLAY", "*GET:DISPLAY"),
             ("GET FORMAT | *GET:FORMAT", "*GET:FORMAT"),
             ("GET MODE | *GET:MODE", "*GET:MODE"),
-            ("SET 日期 | *SET:DATE YEAR 2026 MONTH 06 DATE 09", "*SET:DATE YEAR 2026 MONTH 06 DATE 09"),
+            ("SET 日期 | *SET:DATE YEAR 2026 MONTH 6 DATE 9", "*SET:DATE YEAR 2026 MONTH 6 DATE 9"),
             ("SET 时间 | *SET:TIME HOUR 12 MINUTE 30 SECOND 45", "*SET:TIME HOUR 12 MINUTE 30 SECOND 45"),
             ("SET 闹钟 | *SET:ALARM HOUR 07 MINUTE 30 SECOND 00", "*SET:ALARM HOUR 07 MINUTE 30 SECOND 00"),
             ("关闭闹钟 | *SET:ALARM OFF", "*SET:ALARM OFF"),
@@ -4069,6 +4142,9 @@ class MainWindow(QtWidgets.QMainWindow):
             return False
         error_text = (parsed.data or parsed.name or "").strip().upper()
         phase = self.sync_write_phase
+        expected_prefix = "*SET:DATE" if phase == "DATE" else "*SET:TIME"
+        if not self.last_tx_command.strip().upper().startswith(expected_prefix):
+            return False
         if (
             phase == "DATE"
             and error_text == "PARAM"
@@ -4078,9 +4154,9 @@ class MainWindow(QtWidgets.QMainWindow):
             self.sync_date_retry_done = True
             retry = (
                 f"*SET:DATE YEAR {self.sync_snapshot.year:04d} "
-                f"MONTH {self.sync_snapshot.month} DATE {self.sync_snapshot.day}"
+                f"MONTH {self.sync_snapshot.month:02d} DATE {self.sync_snapshot.day:02d}"
             )
-            self.log("WARN", "板端对 SET DATE 返回 ERROR PARAM，已用无前导零格式重试一次。")
+            self.log("WARN", "板端对 SET DATE 返回 ERROR PARAM，已用两位月/日兼容格式重试一次。")
             QtCore.QTimer.singleShot(
                 220,
                 lambda command=retry: self.send_command(command, allow_during_sync=True),
@@ -4211,6 +4287,117 @@ class MainWindow(QtWidgets.QMainWindow):
             time.monotonic() + duration_s,
         )
         self.auto_serial_quiet_reason = reason
+
+    def _current_weather_short_token(self) -> tuple[str, int]:
+        token = (self.cached_weather_text or self.runtime_state.weather_token or "").strip()
+        led_mask = self.cached_weather_led_mask or self.runtime_state.weather_led_mask
+        if not token:
+            return "NO_WX___", 0
+        return token, led_mask & 0xFF
+
+    def _compact_display_text(self, text: str) -> str:
+        return "".join(ch for ch in text.upper() if ch.isalnum())
+
+    def _mark_user2_display_pending(self, visible_text: str) -> None:
+        compact = self._compact_display_text(visible_text)
+        self.pending_user2_display_text = compact or "NOWX"
+        self.pending_user2_display_deadline = time.monotonic() + 1.2
+        self.pending_user2_display_fallback_done = False
+        QtCore.QTimer.singleShot(1250, self._fallback_user2_weather_display_if_needed)
+
+    def _clear_user2_display_pending_if_matched(self, visible_text: str) -> None:
+        if not self.pending_user2_display_text:
+            return
+        compact = self._compact_display_text(visible_text)
+        if self.pending_user2_display_text in compact:
+            self.pending_user2_display_text = ""
+            self.pending_user2_display_deadline = 0.0
+            self.pending_user2_display_fallback_done = False
+
+    def _fallback_user2_weather_display_if_needed(self) -> None:
+        if (
+            not self.is_connected
+            or not self.pending_user2_display_text
+            or self.pending_user2_display_fallback_done
+            or time.monotonic() < self.pending_user2_display_deadline
+        ):
+            return
+        fallback_text = self.pending_user2_display_text[:32]
+        self.pending_user2_display_fallback_done = True
+        self.pending_user2_display_text = ""
+        self.pending_user2_display_deadline = 0.0
+        self.log(
+            "WARN",
+            f"USER2 触发后未检测到天气短显帧，已用滚动消息兜底显示 {fallback_text}；建议重新烧录最新 MCU 固件。",
+        )
+        self.send_command(f"*SET:MSG {fallback_text}")
+
+    def _push_weather_cache_to_board(self, source_text: str, retry_count: int = 0) -> None:
+        if not self.is_connected:
+            return
+        if (
+            self.ntp_fetch_in_progress
+            or self.sync_in_progress
+            or self.test_run_in_progress
+            or self._serial_auto_quiet_active()
+        ):
+            if retry_count == 0:
+                self.log("INFO", f"{source_text}：串口正忙，天气缓存下发已排队。")
+            if retry_count < 12:
+                delay_ms = self._serial_auto_quiet_delay_ms(220) if self._serial_auto_quiet_active() else 420
+                QtCore.QTimer.singleShot(
+                    delay_ms,
+                    lambda: self._push_weather_cache_to_board(source_text, retry_count + 1),
+                )
+            else:
+                self.log("ERROR", f"{source_text}：串口忙超过 5 秒，天气缓存未能下发到板端。")
+            return
+        token, led_mask = self._current_weather_short_token()
+        self._mark_manual_serial_window(source_text, duration_s=0.8)
+        self.send_command(build_set_weather_command(token, led_mask))
+
+    def _trigger_user2_weather_short_display(
+        self,
+        source_text: str,
+        *,
+        retry_count: int = 0,
+    ) -> None:
+        token, led_mask = self._current_weather_short_token()
+        visible = token.replace("_", " ").strip() or "NO WX"
+        if not self.is_connected:
+            self._set_local_display_override(visible, 5.0, led_mask)
+            self.log("INFO", f"{source_text}：本地模式显示天气短显 {visible}，约 5 秒后回到时钟。")
+            self.refresh_dashboard()
+            return
+        if (
+            self.ntp_fetch_in_progress
+            or self.sync_in_progress
+            or self.test_run_in_progress
+            or self._serial_auto_quiet_active()
+        ):
+            if retry_count == 0:
+                self.log("INFO", f"{source_text}：串口正忙，天气短显已排队，避免插队打断对时/测试。")
+            if retry_count < 12:
+                delay_ms = self._serial_auto_quiet_delay_ms(240) if self._serial_auto_quiet_active() else 360
+                QtCore.QTimer.singleShot(
+                    delay_ms,
+                    lambda: self._trigger_user2_weather_short_display(
+                        source_text,
+                        retry_count=retry_count + 1,
+                    ),
+                )
+            else:
+                self.log("ERROR", f"{source_text}：串口忙超过 4 秒，已取消本次 USER2 天气短显。")
+            return
+        self.pending_queries.clear()
+        self.last_ping_monotonic = None
+        self._mark_manual_serial_window(source_text, duration_s=1.2)
+        weather_command = build_set_weather_command(token, led_mask)
+        self.log("INFO", f"{source_text}：下发天气缓存并触发 USER2 显示 {visible}。")
+        self.send_command(weather_command)
+        self._mark_user2_display_pending(visible)
+        QtCore.QTimer.singleShot(240, lambda: self.send_command("*SET:KEY USER2"))
+        QtCore.QTimer.singleShot(1000, self.query_runtime_state)
 
     def _schedule_lifecycle_ntp(
         self,
@@ -4593,24 +4780,7 @@ class MainWindow(QtWidgets.QMainWindow):
             f"{self.weather_summary_text} | {self.cached_weather_text} | LED {self.cached_weather_led_mask:02X}",
         )
         if self.is_connected:
-            weather_command = build_set_weather_command(
-                self.cached_weather_text,
-                self.cached_weather_led_mask,
-            )
-            if self.sync_in_progress or self.ntp_fetch_in_progress or self.test_run_in_progress:
-                self.log("INFO", "天气数据已更新；等待对时/测试流程结束后再下发天气短显数据。")
-                QtCore.QTimer.singleShot(
-                    1400,
-                    lambda cmd=weather_command: self.send_command(cmd),
-                )
-            elif self._serial_auto_quiet_active():
-                self.log("INFO", "天气数据已更新；等待手动串口指令完成后再下发天气短显数据。")
-                QtCore.QTimer.singleShot(
-                    self._serial_auto_quiet_delay_ms(),
-                    lambda cmd=weather_command: self.send_command(cmd),
-                )
-            else:
-                self.send_command(weather_command)
+            self._push_weather_cache_to_board("天气数据已更新")
         if log_trigger:
             _, zone_now, offset_seconds = self._active_place_time_context()
             time_context = (
@@ -4650,8 +4820,8 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _resync_mode_to_board_if_conflict(self, board_mode: str, source_text: str) -> bool:
         desired = self._normalize_mode_value(
-            self.ui.modeCombo.currentText() if hasattr(self.ui, "modeCombo") else self.last_mode,
-            self.last_mode,
+            self.last_mode or self.runtime_state.mode,
+            self.runtime_state.mode,
         )
         if board_mode == desired:
             return False
@@ -4675,8 +4845,8 @@ class MainWindow(QtWidgets.QMainWindow):
         if not self.is_connected:
             return
         desired = self._normalize_mode_value(
-            self.ui.modeCombo.currentText() if hasattr(self.ui, "modeCombo") else self.last_mode,
-            self.last_mode,
+            self.last_mode or self.runtime_state.mode,
+            self.runtime_state.mode,
         )
         if self.sync_in_progress:
             QtCore.QTimer.singleShot(900, lambda: self._send_pc_mode_to_board(source_text))
@@ -4688,6 +4858,7 @@ class MainWindow(QtWidgets.QMainWindow):
             )
             return
         self._remember_mode_request(desired, "pc_resync")
+        self._set_mode_state(desired)
         self.send_command(f"*SET:MODE {desired}")
         self.log("INFO", f"{source_text}：已按 PC 当前设置同步昼夜模式 {desired} 到板端。")
 
@@ -5043,6 +5214,27 @@ class MainWindow(QtWidgets.QMainWindow):
         self._local_query_notice(query)
         self.refresh_dashboard()
 
+    def _display_frame_is_full_hms(self, token: str, dp_mask: int) -> bool:
+        text = token_to_text(token, dp_mask).strip()
+        parts = text.split(".")
+        if len(parts) != 3 or any(len(part) != 2 or not part.isdigit() for part in parts):
+            return False
+        hour, minute, second = (int(part) for part in parts)
+        return 0 <= hour <= 23 and 0 <= minute <= 59 and 0 <= second <= 59
+
+    def _correct_night_display_if_needed(self, token: str, dp_mask: int) -> None:
+        if self.last_mode != "NIGHT":
+            return
+        if not self._display_frame_is_full_hms(token, dp_mask):
+            return
+        now = time.monotonic()
+        if now - self.last_night_display_fix_monotonic < 3.0:
+            return
+        self.last_night_display_fix_monotonic = now
+        self.log("WARN", "检测到 NIGHT 模式仍显示时分秒，已重新向板端同步 NIGHT 显示规则。")
+        append_event_log(APP_DIR, "night_display_fix", token_to_text(token, dp_mask))
+        QtCore.QTimer.singleShot(120, lambda: self._send_pc_mode_to_board("夜间显示自纠"))
+
     def _apply_local_command(self, command: str) -> None:
         upper = command.upper()
         moment = self._get_runtime_datetime()
@@ -5196,6 +5388,28 @@ class MainWindow(QtWidgets.QMainWindow):
     def is_connected(self) -> bool:
         return self.serial_port is not None and self.serial_port.is_open
 
+    def _unsupported_7seg_chars(self, text: str) -> list[str]:
+        allowed = set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 -_.")
+        return sorted({ch for ch in text if ch not in allowed})
+
+    def _reject_unsupported_message_command(self, command: str) -> bool:
+        upper = command.upper()
+        if not upper.startswith("*SET:MSG "):
+            return False
+        text = command[9:].strip()
+        unsupported = self._unsupported_7seg_chars(text)
+        if not unsupported:
+            return False
+        shown = " ".join(repr(ch) for ch in unsupported[:6])
+        if len(unsupported) > 6:
+            shown += " ..."
+        self.log(
+            "ERROR",
+            f"滚动消息包含 7 段码不支持字符：{shown}；已取消发送，请只使用字母、数字、空格、-、_、.",
+        )
+        append_event_log(APP_DIR, "message_rejected", f"unsupported chars: {shown}")
+        return True
+
     def send_command(
         self,
         command: str,
@@ -5206,6 +5420,8 @@ class MainWindow(QtWidgets.QMainWindow):
     ) -> None:
         cleaned = command.strip()
         if not cleaned:
+            return
+        if self._reject_unsupported_message_command(cleaned):
             return
         if self.test_run_in_progress and not allow_during_test:
             self.log("WARN", f"自动测试正在占用串口，已暂缓/忽略本次指令: {cleaned}")
@@ -5355,6 +5571,8 @@ class MainWindow(QtWidgets.QMainWindow):
             self.last_display_event = (parsed.data, dp_mask)
             self.latest_display_text = f"{parsed.data} / {parsed.extra[0]}"
             self.latestDisplayLabel.setText(f"最新显示: {self.latest_display_text}")
+            self._clear_user2_display_pending_if_matched(token_to_text(parsed.data, dp_mask))
+            self._correct_night_display_if_needed(parsed.data, dp_mask)
             return
 
         if parsed.name == "LED":
@@ -5421,6 +5639,16 @@ class MainWindow(QtWidgets.QMainWindow):
                     weather_text = "NO WX"
                 self.log("INFO", f"USER2 按键：板端正在显示天气短显 {weather_text}，约 5 秒后回到时钟。")
                 self._set_latest_event(f"USER2 -> 天气短显 {weather_text}")
+                if (
+                    self.is_connected
+                    and (self.cached_weather_text or self.runtime_state.weather_token)
+                    and time.monotonic() - self.last_user2_replay_monotonic > 2.0
+                ):
+                    self.last_user2_replay_monotonic = time.monotonic()
+                    QtCore.QTimer.singleShot(
+                        90,
+                        lambda: self._trigger_user2_weather_short_display("板端 USER2 补发天气缓存"),
+                    )
                 self.refresh_dashboard()
                 return
             self.refresh_dashboard()
@@ -5525,7 +5753,7 @@ class MainWindow(QtWidgets.QMainWindow):
         date = self.ui.dateEdit.date()
         command = (
             f"*SET:DATE YEAR {date.year():04d} "
-            f"MONTH {date.month():02d} DATE {date.day():02d}"
+            f"MONTH {date.month()} DATE {date.day()}"
         )
         self.send_command(command)
 
@@ -5648,19 +5876,12 @@ class MainWindow(QtWidgets.QMainWindow):
             self.request_user1_time_sync("虚拟 USER1")
             return
         if key == "USER2":
-            weather_text = (self.cached_weather_text or self.runtime_state.weather_token or "").strip()
+            weather_text = (self.cached_weather_text or self.runtime_state.weather_token or "").replace("_", " ").strip()
             display_text = weather_text or "NO WX"
             self.log("INFO", f"虚拟 USER2：请求显示天气短显 {display_text}，约 5 秒后回到时钟。")
             self._set_latest_event(f"虚拟 USER2 -> 天气短显 {display_text}")
-            if self.is_connected:
-                command = build_set_weather_command(
-                    display_text,
-                    self.cached_weather_led_mask or self.runtime_state.weather_led_mask,
-                )
-                self.send_command(command)
-                QtCore.QTimer.singleShot(180, lambda: self.send_command("*SET:KEY USER2"))
-                QtCore.QTimer.singleShot(800, self.query_runtime_state)
-                return
+            self._trigger_user2_weather_short_display("虚拟 USER2")
+            return
         self.send_command(f"*SET:KEY {key_name}")
 
     def send_raw_command(self) -> None:

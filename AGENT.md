@@ -93,3 +93,10 @@
 - 右侧栏内部控件的 `sizeHint()`/`minimumSizeHint()` 不能反向撑爆主窗口。7SEG、LED、按键和日志摘要应优先压缩到 360-500px 的右栏范围内，而不是要求 500px 以上固定宽度。
 - 左侧页面可以纵向滚动，但当前可见页的水平滚动最大值必须为 0；如果为了保右侧而让左侧产生横向滚动，仍视为 UI 失败。
 - 每次改主窗口布局后，至少在真实 Qt 窗口中验证最大化几何：记录 window、splitter sizes、left/right width、right edge、当前可见左页 horizontal scrollbar maximum，并保存截图。
+
+## Release 打包硬规则
+
+- 用户默认检查打包版 exe。任何一轮修改只要触及 `pc_host/app.py`、`pc_host/twin_widgets.py`、`pc_host/protocol.py`、UI 布局、主题、配置默认值、资源文件或打包相关文档，完成验证后都必须重新生成 `build_release/SmartClockHost-v2.1/SmartClockHost.exe` 和 zip。
+- 打包前先运行源码版或等价脚本做真实窗口/截图检查；打包后必须再启动 exe 做烟测，确认窗口能打开、图标不是默认占位图、无明显 QSS parse/Traceback、主要页面布局没有被打包环境改坏。
+- `build_release/` 仍然不提交到 Git；只在汇报中说明本地 exe/zip 路径。如需 GitHub Release 附件，另行上传 zip，不把大型打包产物混进普通 commit。
+- 若因为中文路径导致 PyInstaller/Qt hook 异常，优先使用 `C:\smartclock_latest` junction 或英文临时路径重新打包，不能跳过 exe 交付。

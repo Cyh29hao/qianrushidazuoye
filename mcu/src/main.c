@@ -219,6 +219,10 @@ static uint32_t CurrentScrollIntervalMs(void);
 static uint8_t CurrentVisibleScrollLimit(void);
 static bool IsFiniteScrollActive(void);
 static void ClearMessageState(void);
+static void FinishWeatherShortDisplay(void);
+static void StartWeatherShortDisplay(void);
+static bool IsDisplaySupportedChar(char value);
+static bool IsTextSupportedFor7Seg(const char *text);
 static uint8_t ScrollLegCount(uint8_t scrollLimit);
 static uint8_t ScrollMaxStep(uint8_t scrollLimit);
 static uint8_t ScrollOffsetForStep(uint8_t step, uint8_t scrollLimit);
@@ -245,7 +249,6 @@ static void HandleDisplayLongPress(void);
 static void ToggleDayNightMode(void);
 static void AdvanceEditField(void);
 static void IncrementEditField(void);
-static void DecrementEditField(void);
 static void SaveEditState(void);
 static void EnterEditMode(EditMode mode);
 static void ExitEditMode(bool saveChanges);
@@ -363,6 +366,7 @@ static uint8_t g_buzzerPatternStep;
 static char g_weatherText[DISPLAY_WIDTH + 1U];
 static uint8_t g_weatherLedMask;
 static uint32_t g_weatherShowUntilMs;
+static uint8_t g_weatherForcedDisplayOn;
 static char g_uartLine[UART_LINE_MAX];
 static uint8_t g_uartLen;
 static uint8_t g_uartOverflow;
@@ -694,7 +698,7 @@ static void Tick10ms(void)
     }
 
     if ((g_weatherShowUntilMs != 0UL) && (g_millis >= g_weatherShowUntilMs)) {
-        g_weatherShowUntilMs = 0UL;
+        FinishWeatherShortDisplay();
         RefreshDisplayAndLeds(true);
     }
 
@@ -936,6 +940,7 @@ static void ResetRuntimeState(void)
     g_weatherText[0] = '\0';
     g_weatherLedMask = 0U;
     g_weatherShowUntilMs = 0UL;
+    g_weatherForcedDisplayOn = 0U;
     g_currentDigit = 0U;
     g_buzzerMode = BUZZER_IDLE;
     g_ringType = RING_DEFAULT;
@@ -1047,13 +1052,31 @@ static bool HasVisibleText(const char *text)
 
 static void ClearTransientDisplayState(void)
 {
-    g_weatherShowUntilMs = 0UL;
+    FinishWeatherShortDisplay();
     if (g_messageActive != 0U) {
         ClearMessageState();
     }
     g_scrollOffset = 0U;
     g_viewScrollCompleted = 0U;
     g_nextScrollMs = g_millis + CurrentScrollIntervalMs();
+}
+
+static void FinishWeatherShortDisplay(void)
+{
+    g_weatherShowUntilMs = 0UL;
+    if (g_weatherForcedDisplayOn != 0U) {
+        g_displayEnabled = 0U;
+        g_weatherForcedDisplayOn = 0U;
+    }
+}
+
+static void StartWeatherShortDisplay(void)
+{
+    if (g_displayEnabled == 0U) {
+        g_displayEnabled = 1U;
+        g_weatherForcedDisplayOn = 1U;
+    }
+    g_weatherShowUntilMs = g_millis + WEATHER_SHOW_MS;
 }
 
 static void BuildVisibleText(char *out, uint8_t outSize)
@@ -1512,6 +1535,32 @@ static uint8_t Encode7Seg(char value)
     }
 }
 
+static bool IsDisplaySupportedChar(char value)
+{
+    char upper = ToUpperAscii(value);
+    if ((upper >= '0') && (upper <= '9')) {
+        return true;
+    }
+    if ((upper >= 'A') && (upper <= 'Z')) {
+        return true;
+    }
+    return (upper == ' ') || (upper == '-') || (upper == '_') || (upper == '.');
+}
+
+static bool IsTextSupportedFor7Seg(const char *text)
+{
+    if (*text == '\0') {
+        return false;
+    }
+    while (*text != '\0') {
+        if (IsDisplaySupportedChar(*text) == false) {
+            return false;
+        }
+        text++;
+    }
+    return true;
+}
+
 static uint8_t BuildSystemLedByte(void)
 {
     uint8_t result = 0U;
@@ -1529,6 +1578,10 @@ static uint8_t BuildSystemLedByte(void)
     if ((g_displayEnabled == 0U) && (g_bootPhase == BOOT_DONE) &&
         (g_editMode == EDIT_NONE)) {
         return 0U;
+    }
+
+    if ((g_weatherShowUntilMs > g_millis) && (g_weatherLedMask != 0U)) {
+        return g_weatherLedMask;
     }
 
     if (g_heartbeatBit != 0U) {
@@ -1564,9 +1617,6 @@ static uint8_t BuildSystemLedByte(void)
     if ((g_manualLedUntilMs > g_millis) &&
         ((g_manualLedMask & LED_MANUAL_BIT) != 0U)) {
         result |= LED_MANUAL_BIT;
-    }
-    if ((g_weatherShowUntilMs > g_millis) && (g_weatherLedMask != 0U)) {
-        result = g_weatherLedMask;
     }
     return result;
 }
@@ -1810,7 +1860,7 @@ static void HandleKeyPress(KeyCode key, bool emitEvent)
             return;
         }
         if (g_weatherShowUntilMs != 0UL) {
-            g_weatherShowUntilMs = 0UL;
+            FinishWeatherShortDisplay();
         }
         if (g_messageActive != 0U) {
             ClearMessageState();
@@ -1821,14 +1871,13 @@ static void HandleKeyPress(KeyCode key, bool emitEvent)
         break;
     case KEY_USER2:
         if (g_editMode != EDIT_NONE) {
-            DecrementEditField();
-            return;
+            ExitEditMode(false);
         }
         if (HasVisibleText(g_weatherText) == false) {
             snprintf(g_weatherText, sizeof(g_weatherText), "NO WX");
             g_weatherLedMask = 0U;
         }
-        g_weatherShowUntilMs = g_millis + WEATHER_SHOW_MS;
+        StartWeatherShortDisplay();
         break;
     default:
         break;
@@ -1934,66 +1983,6 @@ static void IncrementEditField(void)
             g_editAlarm.second = (uint8_t)((g_editAlarm.second + 1U) % 60U);
         }
         g_editAlarm.enabled = 1U;
-    }
-
-    g_editDeadlineMs = g_millis + EDIT_TIMEOUT_MS;
-    RefreshDisplayAndLeds(true);
-}
-
-static void DecrementEditField(void)
-{
-    uint8_t days;
-
-    if (g_editMode == EDIT_DATE) {
-        if (g_editField == 0U) {
-            if (g_editDateTime.year <= 2020U) {
-                g_editDateTime.year = 2099U;
-            } else {
-                g_editDateTime.year--;
-            }
-        } else if (g_editField == 1U) {
-            if (g_editDateTime.month <= 1U) {
-                g_editDateTime.month = 12U;
-            } else {
-                g_editDateTime.month--;
-            }
-        } else {
-            days = DaysInMonth(g_editDateTime.year, g_editDateTime.month);
-            if (g_editDateTime.day <= 1U) {
-                g_editDateTime.day = days;
-            } else {
-                g_editDateTime.day--;
-            }
-        }
-        days = DaysInMonth(g_editDateTime.year, g_editDateTime.month);
-        if (g_editDateTime.day > days) {
-            g_editDateTime.day = days;
-        }
-    } else if (g_editMode == EDIT_TIME) {
-        if (g_editField == 0U) {
-            g_editDateTime.hour = (g_editDateTime.hour == 0U) ?
-                                  23U : (uint8_t)(g_editDateTime.hour - 1U);
-        } else if (g_editField == 1U) {
-            g_editDateTime.minute = (g_editDateTime.minute == 0U) ?
-                                    59U : (uint8_t)(g_editDateTime.minute - 1U);
-        } else {
-            g_editDateTime.second = (g_editDateTime.second == 0U) ?
-                                    59U : (uint8_t)(g_editDateTime.second - 1U);
-        }
-    } else if (g_editMode == EDIT_ALARM) {
-        if (g_editField == 0U) {
-            g_editAlarm.hour = (g_editAlarm.hour == 0U) ?
-                               23U : (uint8_t)(g_editAlarm.hour - 1U);
-        } else if (g_editField == 1U) {
-            g_editAlarm.minute = (g_editAlarm.minute == 0U) ?
-                                 59U : (uint8_t)(g_editAlarm.minute - 1U);
-        } else {
-            g_editAlarm.second = (g_editAlarm.second == 0U) ?
-                                 59U : (uint8_t)(g_editAlarm.second - 1U);
-        }
-        g_editAlarm.enabled = 1U;
-    } else {
-        return;
     }
 
     g_editDeadlineMs = g_millis + EDIT_TIMEOUT_MS;
@@ -2660,8 +2649,10 @@ static void HandleSetDisplay(const char *params)
     params = ReadToken(params, token, sizeof(token));
     if (MatchToken(token, "ON", 2U) != false) {
         g_displayEnabled = 1U;
+        g_weatherForcedDisplayOn = 0U;
     } else if (MatchToken(token, "OFF", 2U) != false) {
         g_displayEnabled = 0U;
+        g_weatherForcedDisplayOn = 0U;
     } else {
         UART_ReplyError("PARAM");
         return;
@@ -2702,10 +2693,14 @@ static void HandleSetMessage(const char *params)
         UART_ReplyError("LEN");
         return;
     }
+    if (IsTextSupportedFor7Seg(params) == false) {
+        UART_ReplyError("PARAM");
+        return;
+    }
     if (g_editMode != EDIT_NONE) {
         ExitEditMode(false);
     }
-    g_weatherShowUntilMs = 0UL;
+    FinishWeatherShortDisplay();
     if (g_messageActive != 0U) {
         ClearMessageState();
     }
@@ -2801,6 +2796,10 @@ static void HandleSetWeather(const char *params)
             memset(nextWeather, ' ', DISPLAY_WIDTH);
             nextWeather[DISPLAY_WIDTH] = '\0';
             for (index = 0U; (index < DISPLAY_WIDTH) && (token[index] != '\0'); index++) {
+                if (IsDisplaySupportedChar(token[index]) == false) {
+                    UART_ReplyError("PARAM");
+                    return;
+                }
                 nextWeather[index] = (token[index] == '_') ? ' ' : token[index];
             }
             sawDisplay = 1U;
@@ -2827,7 +2826,7 @@ static void HandleSetWeather(const char *params)
     }
     snprintf(g_weatherText, sizeof(g_weatherText), "%s", nextWeather);
     g_weatherLedMask = nextLedMask;
-    g_weatherShowUntilMs = 0UL;
+    FinishWeatherShortDisplay();
     RefreshDisplayAndLeds(true);
     UART_ReplyOk(NULL);
 }

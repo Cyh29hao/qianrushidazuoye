@@ -273,7 +273,7 @@ class DigitalTwinWidget(QtWidgets.QWidget):
         self.key_button_by_name: dict[str, QtWidgets.QPushButton] = {}
         self.key_button_base_style = "padding: 2px 4px;"
         key_tips = {
-            "USER2": "USER2: 非编辑状态显示当前天气短显或 NO WX；编辑状态作为 SUB 减一键",
+            "USER2": "USER2: 天气短显专用键；没有天气缓存时显示 NO WX",
             "EXT": "SW8 / EXT: 退出编辑、取消天气短显或滚动消息",
             "FORMAT": "SW7 / FORMAT: 切换 LEFT/RIGHT 数码管显示方向",
             "SPEED": "SW6 / SPEED: 切换走马灯快/慢速度",
@@ -285,7 +285,7 @@ class DigitalTwinWidget(QtWidgets.QWidget):
             "SAVE": "SW4 / SAVE: 保存编辑值",
         }
         keys = [
-            ("USER2", "USER2\nSUB", 0, 0),
+            ("USER2", "USER2\nWX", 0, 0),
             ("EXT", "SW8\nEXT", 0, 1),
             ("FORMAT", "SW7\nFMT", 0, 2),
             ("SPEED", "SW6\nSPD", 0, 3),

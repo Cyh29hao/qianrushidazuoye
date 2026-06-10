@@ -15,7 +15,7 @@ class ParsedLine:
 def build_set_date_command(moment: datetime) -> str:
     return (
         f"*SET:DATE YEAR {moment.year:04d} "
-        f"MONTH {moment.month:02d} DATE {moment.day:02d}"
+        f"MONTH {moment.month} DATE {moment.day}"
     )
 
 
@@ -27,7 +27,15 @@ def build_set_time_command(moment: datetime) -> str:
 
 
 def build_set_weather_command(display_token: str, led_mask: int) -> str:
-    token = display_token[:8].ljust(8, "_")
+    cleaned = []
+    for ch in display_token.strip().upper():
+        if ch.isspace():
+            cleaned.append("_")
+        elif ch in "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.":
+            cleaned.append(ch)
+        else:
+            cleaned.append("_")
+    token = "".join(cleaned)[:8].ljust(8, "_")
     return f"*SET:WEATHER DISP {token} LED {led_mask:02X}"
 
 

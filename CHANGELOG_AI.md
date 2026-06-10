@@ -2,6 +2,44 @@
 
 只记录阶段性最终修改、关键文件、验证结果和未解决问题；不记录无关对话。
 
+## 2026-06-10
+
+### v2.1 USER2 天气短显与板端显示区收口
+
+#### 已完成修改
+- USER2 不再承担 `SUB`/减一功能：MCU 删除减一函数，编辑态 USER2 先退出编辑再执行天气短显；PC 数字孪生按钮和 tooltip 改为 `USER2 / WX`。
+- PC 虚拟 USER2 无天气时下发 `NO_WX___`，有天气时下发当前天气 token；触发后如果未收到期望 `*EVT:DISP`，约 1.2 秒后自动发送 `*SET:MSG <token>` 作为可见兜底，并提示需要烧录最新 MCU。
+- 系统设置页“板端显示与快捷控制”改为专用 5 行布局，避免旧 `gridLayout_2` 历史行高导致控件重叠；真实 Qt 小窗口下系统设置页横向滚动为 0，右侧数字孪生完整显示。
+- `AGENT.md` 新增 release 打包硬规则：以后 PC/UI/配置/资源改动后默认必须重新打包 v2.1 exe 并做 exe 烟测。
+- README 新增界面截图章节，截图覆盖主页、系统设置、闹钟日程、调试测试；USER2 说明更新为天气短显专用键，并增加旧固件下需要重烧 MCU 的排查提示。
+- 重新打包 v2.1：`build_release/SmartClockHost-v2.1/SmartClockHost.exe` 与 `build_release/SmartClockHost-v2.1.zip` 已更新，烟测运行态已清理。
+
+#### 关键文件
+- `mcu/src/main.c`
+- `pc_host/app.py`
+- `pc_host/twin_widgets.py`
+- `pc_host/config.json`
+- `README.md`
+- `AGENT.md`
+- `docs/extensions-roadmap.md`
+- `docs/screenshots/*.png`
+- `PROJECT_CONTEXT.md`
+- `CHANGELOG_AI.md`
+
+#### 验证结果
+- `pc_host/.venv/Scripts/python.exe -m py_compile pc_host/app.py pc_host/protocol.py pc_host/twin_widgets.py pc_host/extension_services.py pc_host/extension_store.py pc_host/run_extension_checks.py` 通过。
+- `gcc -fsyntax-only -std=c99 -DPART_TM4C1294NCPDT -DTARGET_IS_TM4C129_RA0 -I mcu/Inc -I mcu/Driverlib mcu/src/main.c` 通过。
+- `pc_host/.venv/Scripts/python.exe pc_host/run_extension_checks.py --host-only --full` 通过。
+- 假串口 USER2 行为断言通过：有天气时发送 `*SET:WEATHER DISP SUN29C__ LED 05`、`*SET:KEY USER2`，无匹配显示帧时兜底 `*SET:MSG SUN29C`；无天气时发送 `*SET:WEATHER DISP NO_WX___ LED 00`。
+- COM5 实串口短测确认当前已烧旧固件仍会回异常天气帧，但 PC 兜底 `*SET:MSG SUN29C` 能让板端回 `*EVT:DISP SUN29C__ 00`；最新源码根修复仍需重新烧录。
+- 真实 Qt 窗口截图覆盖四页，窗口约 `1082x660`；系统设置/闹钟日程/调试测试页横向滚动最大值均为 0。
+- PyInstaller 从 `C:\smartclock_latest` 通过 `python -m PyInstaller` 打包成功；exe 启动 6 秒未退出。
+- `git diff --check` 通过，仅有 Windows CRLF 行尾提示。
+
+#### 未解决问题
+- 当前实板固件不是最新源码表现，USER2 根路径仍必须用 Keil5 重新编译烧录 `mcu/clock.uvprojx` 后再实测；PC 兜底只是保证旧固件下演示可见。
+- 未做长时间 USER1/USER2/NTP 并发硬件压力测试，本轮只做了 USER2 相关短测。
+
 ## 2026-06-09
 
 ### v2.1 极端并发与 RESET/NTP 稳定收口
@@ -271,7 +309,7 @@
 #### 已完成修改
 - PC 主窗口保持左右 `QSplitter` 明确分栏；右侧数字孪生镜像固定在右侧顶部，日志区在其下方扩展，不再覆盖左侧主页、系统设置或自动测试页面。
 - 日志区改为可扩展高度，启用按控件宽度换行和滚动条，避免被数字孪生或底部状态栏遮挡。
-- 数字孪生按键高度、字号和整体 size hint 已收紧；第二行按键不再被日志面板裁切，USER2 tooltip 明确说明“非编辑状态显示天气短显，编辑状态作为 SUB 减一键”。
+- 数字孪生按键高度、字号和整体 size hint 已收紧；第二行按键不再被日志面板裁切，USER2 tooltip 明确说明“天气短显专用键”，不再保留 SUB/减一语义。
 - 下拉框、日期/时间编辑器、spinbox 箭头改用 Qt 稳定支持的 XPM 图标；checkbox 勾选状态改用 XPM 白色勾，避免黑色小方块和“只有框没有勾”的问题。
 - NTP 对时增加 token 过滤与 8 秒 watchdog；时间写入增加 5 秒 watchdog；天气刷新增加 14 秒 watchdog，超时后恢复 UI 并写日志。
 - 一键对时/刷新天气后的自动测试只会在 NTP、串口写入和天气刷新全部空闲后启动，避免自动测试抢占同一个串口导致偶发失败。

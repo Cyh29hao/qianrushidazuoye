@@ -1,5 +1,24 @@
 # PROJECT_CONTEXT - 智能时钟联网系统
 
+## 2026-06-10 v2.1 USER2 与板端显示区收口
+- USER2 已彻底收口为天气短显专用键：MCU `mcu/src/main.c` 删除 `DecrementEditField()`，编辑态按 USER2 会先退出编辑再显示天气或 `NO WX`；PC 右侧数字孪生按钮改为 `USER2 / WX`，tooltip/README/扩展路线文档不再把 USER2 描述为 `SUB`/减一。
+- PC `pc_host/app.py` 的虚拟 USER2 会先下发 `*SET:WEATHER DISP <token8> LED <hex>`，再触发 `*SET:KEY USER2`；无天气缓存时下发 `NO_WX___`，保证板端固件收到的是可读的 `NO WX`。
+- 为兼容当前实板上仍未烧最新固件的情况，PC 增加 USER2 显示帧 watchdog：触发后约 1.2 秒未收到期望天气短显帧，会自动发送 `*SET:MSG <天气token>` 作为可见兜底，并在日志提示应重新烧录最新 MCU。
+- 实串口 COM5 短测结果：当前已烧板端固件对 `*SET:WEATHER DISP SUN29C__ LED 05` + `*SET:KEY USER2` 仍回 `NO_WX_` 与不可打印字节，说明板端不是最新源码；随后发送兜底 `*SET:MSG SUN29C` 后板端回 `*EVT:DISP SUN29C__ 00`，证明 PC 兜底能让演示可见。根修复仍需 Keil5 重新编译烧录当前 `mcu/src/main.c`。
+- 系统设置页“板端显示与快捷控制”重排为稳定 5 行表单：显示开关、FORMAT、MODE、滚动消息、用户名。真实 Qt 窗口约 `1082x660` 下截图验证：`displayGroup` 为 `612x386`，右侧数字孪生为 `420x221`，系统设置/闹钟日程/调试测试页横向滚动均为 0。
+- README 新增“界面截图”章节，引用 `docs/screenshots/home-1280x720.png`、`system-settings-1280x720.png`、`alarm-schedule-1280x720.png`、`debug-test-1280x720.png`；截图已用真实 Qt 窗口重新生成。
+- `AGENT.md` 新增 `Release 打包硬规则`：今后 PC/UI/配置/资源改动后必须重新打包 exe，用户默认检查 exe；打包产物仍不进 Git。
+- v2.1 release 已重新打包并烟测：`build_release/SmartClockHost-v2.1/SmartClockHost.exe` 启动 6 秒未退出，`build_release/SmartClockHost-v2.1.zip` 已重新生成；烟测运行态 `config.json/runtime_state.json/schedules.json/logs` 已从 release 目录清理。`build_release/` 仍不提交。
+- 本轮验证：Python `py_compile` 通过，MCU `gcc -fsyntax-only` 通过，`pc_host/run_extension_checks.py --host-only --full` 通过，`git diff --check` 仅有 CRLF 行尾提示。
+
+## 2026-06-10 提交材料与自主答辩准备启动
+- 已按 `docs/大作业要求/大作业题目-学生版_V1.2.pdf` 第 7 节复核提交要求：最终压缩包建议为 `大作业524031910102-陈云海.zip`，顶层目录为 `大作业524031910102-陈云海/`，简介 PDF 为 `大作业524031910102-陈云海.pdf`。
+- 新增 `submission/README.md`，用于规划最终提交目录、必交清单、清理规则和提交前检查；新增 `submission/简介PDF_4-8页初稿大纲.md` 与 `submission/演示视频_5分钟脚本初稿.md`。
+- 新增 `docs/当前项目状态总览.md`，给用户快速理解当前 v2.1 已实现功能、验证结果、剩余实板风险和冲刺顺序。
+- 新增 `docs/自主答辩准备初稿.md`，整理自主答辩演示顺序、技术细节、关键代码位置和可能问答。
+- 更新 `README.md` 的“当前状态”，去掉过时的 `§4.2/§4.3 尚未完成` 表述；更新 `docs/大作业要求逐条验收对照.md` 到 2026-06-10 状态。
+- 当前已有 `mcu/obj/s800_clock.axf`，但昨晚 MCU 又改过 USER1/I2C/串口稳定性保护，正式提交前仍建议用 Keil5 重新编译并确认 `.axf` 与最新源码一致。
+
 ## 2026-06-09 v2.1 极端并发与 RESET/NTP 稳定收口
 - PC `pc_host/app.py` 已将 NTP 写板端改为串行握手：先发送 `*SET:DATE`，收到 `OK` 后再发送 `*SET:TIME`；若 `SET DATE` 偶发 `ERROR PARAM`，会用无前导零格式重试一次，失败则退出本次写入并恢复 UI，不再卡住。
 - 串口发送路径增加轻量互斥和保护：自动测试/对时写入占用串口时，普通按钮、协议台、天气下发不会插队；`SET MODE` 在对时写入期间会延后，避免 MODE 的 `OK` 被误当 DATE/TIME 的 `OK`。
@@ -209,7 +228,7 @@
 - `pc_host/requirements.txt` 目前只有 PyQt5 与 pyserial，和新增参考文件建议的 Python 3.11.9、PyQt5 5.15.9、ntplib/requests/astral/matplotlib 不完全一致；当前实现使用标准库和 Open-Meteo 路线，不要贸然加依赖。
 - MCU 本轮 7SEG、开机帧、1Hz 事件和 `USER1` 语义改动尚未用 Keil/真板编译烧录验证；当前本机只找到 MinGW `gcc`，未发现 `UV4`/`armclang`/`armcc`/`arm-none-eabi-gcc`。
 - 当前 PC 端 `.venv` 可运行 PyQt5；已用 Windows 原生 Qt 平台截图检查主页、系统设置、闹钟与日程管理、调试与测试的白天/黑夜模式。Qt offscreen 平台可能不渲染部分文字，最终视觉判断优先使用 Windows 原生平台或真实窗口。
-- 正式提交材料尚未准备：未发现简介 PDF/Word、演示视频/PPT、正式截图集、`mcu/obj/*.axf` 可烧写产物。用户当前说暂时不着急提交材料，先把程序修到位。
+- 正式提交材料已开始准备：`submission/` 下已有提交目录说明、简介 PDF 大纲和演示视频脚本；`mcu/obj/s800_clock.axf` 已存在，但因 MCU 后续又改过稳定性保护，正式提交前仍应 Keil5 重新编译确认；简介 PDF、演示视频和正式截图集尚未生成。
 - `docs/next-step-ui-and-host-fixes.md` 是旧任务书，里面的问题可能已经部分修复，不能直接当作当前 bug 清单。
 
 ## 下一步计划
@@ -233,7 +252,7 @@
 - NTP 对时增加 token 过滤和 8 秒超时；串口日期/时间写入增加 5 秒超时；天气刷新增加 14 秒超时。超时后恢复按钮、写日志，不再让 UI 或自动测试流程悬挂。
 - 一键对时/刷新天气后的自动测试只在 NTP、串口写入和天气刷新全部空闲后启动；手动点击自动测试时，如果对时/天气仍在进行，会等待后续空闲，避免抢占同一个串口。
 - 自动测试脚本 `pc_host/run_extension_checks.py` 增加 stale input 清理、每条串口命令 timeout、串口 hard timeout 和命令间隔，失败会记录 FAIL/排查提示，不再无限等待。
-- PC 本地/离线 USER2 没有有效天气 token 时显示 `NO WX`；MCU 端 USER2 非编辑状态显示天气短显，天气为空时也显示 `NO WX`，编辑状态仍作为 SUB 减一键。
+- PC 本地/离线 USER2 没有有效天气 token 时显示 `NO WX`；MCU 端 USER2 已收口为天气短显专用键，编辑态会先退出编辑再显示天气或 `NO WX`，不再承担 SUB/减一功能。
 - MCU 收到 `SET DATE`/`SET TIME` 时会清理天气/消息临时显示，收到 `SET WEATHER` 时校验空天气、清除天气短显计时并刷新显示，降低对时/天气更新后数码管卡在临时状态的风险。
 - v2.1 UI/release 收口：左侧主内容宽度优先、右侧数字孪生降低最小宽度并增加按键行距；主要表单统一行高/边距；主页面关闭横向滚动；主要下拉框文本居中且可点击；串口下拉框仍可手动输入；下拉箭头改为实色 XPM 下三角，避免黑色小方块。
 - v2.1 打包产物已生成：`build_release/SmartClockHost-v2.1/SmartClockHost.exe`，压缩包为 `build_release/SmartClockHost-v2.1.zip`。`build_release/` 默认不提交到 Git。
