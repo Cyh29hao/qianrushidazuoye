@@ -2,9 +2,11 @@
 
 ## 2026-06-10 v2.2 最终演示收口
 - 当前主线版本升为 `v2.2`。PC `APP_VERSION`、默认配置 `app_version`、HTTP User-Agent、README、当前状态总览、逐条验收对照和 MCU 开机版本显示均已同步到 v2.2 / `V2.2`。
-- 底部状态栏修复重复项目名：左侧固定项目名为 `智能联网时钟系统`，后续 feature 文案去掉重复前缀，避免再出现 `智能时钟 | 智能联网时钟系统 | ...`。
+- 底部状态栏修复重复项目名和竖线分隔：左侧固定项目名为 `智能联网时钟系统`，feature 文案改为 `·` 分隔，当前显示形如 `智能联网时钟系统 · 串口孪生 · NTP天气 · 全球时区 · 闹钟日程 · 个性面板 · 自动测试`。
 - 日程提醒铃声修复为“必响”策略：PC 日程触发时会下发 `DISPLAY ON`、`SET MSG`、`SET RING`，并追加短 `SET BEEP` 作为可听确认；NIGHT 模式不再抑制板端铃声，只会按设置抑制语音播报。
-- Windows 图标路径再次加固：AppUserModelID 改为 `Cyh29hao.SmartClockHost.v22`，源码和打包版都优先使用 `pc_host/assets/clock_logo.ico`；v2.2 exe 需要重新打包并用图标抽取验证。
+- Windows 图标路径再次加固：AppUserModelID 改为 `Cyh29hao.SmartClockHost.v22`，源码和打包版都优先使用 `pc_host/assets/clock_logo.ico`；v2.2 exe 已重新打包并用关联图标抽取验证为项目橙色数码管图标。
+- 打包/烟测规则更新：release 烟测必须使用临时 `SMARTCLOCK_PROFILE_DIR`，最终 `build_release/SmartClockHost-v2.2/` 不保留 `config.json`、`runtime_state.json`、`schedules.json` 或 `logs/`，避免覆盖用户当前配置。
+- 已建立 `for_submit/` 模拟提交目录，包含说明文档、验收对照副本、答辩速记、截图素材、v2.2 release zip 和本地 MCU 工程副本；大体积 release/MCU 副本仍按 `.gitignore` 不进 Git。
 - 本轮改动触及 PC 和 MCU：PC 需要重新打包 v2.2 exe；MCU 需要 Keil5 重新编译烧录后才能看到开机 `V2.2` 和最终板端行为。
 
 ## 2026-06-10 v2.1 USER2 串口序列化与 COM5 联机回归

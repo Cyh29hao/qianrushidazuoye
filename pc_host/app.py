@@ -13,13 +13,14 @@ from pathlib import Path
 
 from bootstrap_qt import configure_qt_runtime
 
-APP_DIR = (
+APP_BASE_DIR = (
     Path(sys.executable).resolve().parent
     if getattr(sys, "frozen", False)
     else Path(__file__).resolve().parent
 )
-BUNDLE_DIR = Path(getattr(sys, "_MEIPASS", APP_DIR))
-QT_RUNTIME = configure_qt_runtime(APP_DIR)
+APP_DIR = Path(os.environ.get("SMARTCLOCK_PROFILE_DIR", APP_BASE_DIR)).resolve()
+BUNDLE_DIR = Path(getattr(sys, "_MEIPASS", APP_BASE_DIR))
+QT_RUNTIME = configure_qt_runtime(APP_BASE_DIR)
 APP_VERSION = "v2.2"
 GITHUB_URL = "https://github.com/Cyh29hao"
 LOGO_PATH = BUNDLE_DIR / "assets" / "clock_logo.svg"
@@ -419,10 +420,10 @@ class MainWindow(QtWidgets.QMainWindow):
     def _footer_feature_text(self) -> str:
         if self.width() >= 1500:
             return (
-                "串口同步·数字孪生 | NTP天气·全球时区 | 板载闹钟·PC日程管理 | "
-                "个性化界面·清晰面板 | 自动测试·稳定鲁棒"
+                "· 串口同步 · 数字孪生 · NTP天气 · 全球时区 · 板载闹钟 · "
+                "PC日程 · 个性面板 · 自动测试 · 稳定鲁棒"
             )
-        return "串口孪生 | NTP天气 | 全球时区 | 闹钟日程 | 个性面板 | 自动测试"
+        return "· 串口孪生 · NTP天气 · 全球时区 · 闹钟日程 · 个性面板 · 自动测试"
 
     def _restore_footer_features(self) -> None:
         if hasattr(self, "status_features"):
@@ -1777,7 +1778,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 border-top: 1px solid {palette['group_border']};
             }}
             QStatusBar::item {{
-                border-left: 1px solid {palette['group_border']};
+                border-left: none;
                 padding-left: 6px;
                 padding-right: 6px;
             }}
@@ -2127,7 +2128,7 @@ class MainWindow(QtWidgets.QMainWindow):
             f"border-top: 1px solid {palette['group_border']};"
             f"}}"
             f"QStatusBar::item {{"
-            f"border-left: 1px solid {palette['group_border']};"
+            f"border-left: none;"
             f"padding-left: 6px;"
             f"padding-right: 6px;"
             f"}}"

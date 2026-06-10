@@ -100,4 +100,5 @@
 - 打包前先运行源码版或等价脚本做真实窗口/截图检查；打包后必须再启动 exe 做烟测，确认窗口能打开、图标不是默认占位图、无明显 QSS parse/Traceback、主要页面布局没有被打包环境改坏。
 - `build_release/` 仍然不提交到 Git；只在汇报中说明本地 exe/zip 路径。如需 GitHub Release 附件，另行上传 zip，不把大型打包产物混进普通 commit。
 - 每版 release 文件夹和 zip 都必须包含当前最新的 MCU 工程副本，至少包括 `mcu/src/`、`mcu/Inc/`、`mcu/Driverlib/`、`mcu/RTE/`、`mcu/clock.uvprojx`、`mcu/clock.uvoptx`，方便用户直接打开 Keil5 编译烧录；仍然不要提交 `build_release/`。
+- 打包和烟测 release 时禁止污染用户当前配置。启动源码版或 exe 做烟测时必须设置临时 `SMARTCLOCK_PROFILE_DIR`，并在结束后删除该临时目录；不要修改已有 `pc_host/config.json`、release 目录中的用户配置、日志或日程文件。
 - 若因为中文路径导致 PyInstaller/Qt hook 异常，优先使用 `C:\smartclock_latest` junction 或英文临时路径重新打包，不能跳过 exe 交付。

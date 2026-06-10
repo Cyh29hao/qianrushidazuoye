@@ -8,9 +8,12 @@
 
 #### 已完成修改
 - PC 端版本升为 `v2.2`，默认配置、HTTP User-Agent、README、当前状态总览和逐条验收对照同步更新；MCU 开机版本显示同步改为 `V2.2`。
-- 底部状态栏左侧项目名改为 `智能联网时钟系统`，feature 文案去掉重复项目名前缀，最终显示形如 `智能联网时钟系统 | 串口孪生 | NTP天气 | ...`。
+- 底部状态栏左侧项目名改为 `智能联网时钟系统`，feature 文案去掉重复项目前缀并改为 `·` 分隔，最终显示形如 `智能联网时钟系统 · 串口孪生 · NTP天气 · 全球时区 · 闹钟日程 · 个性面板 · 自动测试`；同时去掉 `QStatusBar::item` 竖线边框。
 - 日程触发逻辑改为演示优先：无论 DAY/NIGHT 都会向板端下发铃声；若命名铃声可用，先下发 `*SET:RING <type>`，再追加短 `*SET:BEEP <ms>` 做可听确认；若旧固件不支持 `RING`，直接使用 BEEP 兼容模式。夜间抑制选项改为只抑制语音播报，铃声仍响。
 - Windows AppUserModelID 更新到 v2.2，Qt 应用级图标和窗口图标仍优先使用 `pc_host/assets/clock_logo.ico`；v2.2 release 打包时会重新嵌入 ico。
+- README、逐条验收对照、当前状态总览、自主答辩准备和 `for_submit/` 提交包文档补充自主创新亮点：GitHub 版本管理、PC/板端双向昼夜与自动昼夜、两套自动测试、高并发防卡死、全球时区、双端对齐和用户友好界面。
+- `AGENT.md` 增加 release 打包硬规则：打包/烟测必须使用临时 `SMARTCLOCK_PROFILE_DIR`，不得污染用户现有配置、日志、日程或 release 目录运行态文件。
+- 建立 `for_submit/` 模拟提交目录，包含提交包说明、提交前检查清单、答辩亮点速记、文档副本、截图素材、v2.2 release zip 和本地 MCU 工程副本；大体积 release/MCU 副本不进入 Git。
 
 #### 验证结果
 - `python -m py_compile pc_host/app.py pc_host/run_extension_checks.py pc_host/protocol.py pc_host/twin_widgets.py pc_host/extension_services.py pc_host/extension_store.py` 通过。
@@ -18,7 +21,8 @@
 - `pc_host/run_extension_checks.py --host-only --full` 通过；离屏 UI 探针确认状态栏左侧为 `智能联网时钟系统`、feature 文案不再重复项目名、版本显示 `v2.2`。
 - 离屏日程触发探针确认 NIGHT + 夜间抑制开启 + sync 占用情况下仍会排队 `*SET:DISPLAY ON`、`*SET:MSG`、`*SET:RING WAKE`、`*SET:BEEP 1200`，且允许对时期间下发提醒。
 - COM5 短探针确认 `*SET:RING WAKE` 和 `*SET:BEEP 900` 均返回 `OK`。
-- PyInstaller clean build 已重新生成 `build_release/SmartClockHost-v2.2/SmartClockHost.exe` 和 zip；exe 启动 8 秒未退出；从 exe 抽取的关联图标为项目橙色数码管图标。
+- PyInstaller clean build 已重新生成 `build_release/SmartClockHost-v2.2/SmartClockHost.exe` 和 zip；exe 使用临时 `SMARTCLOCK_PROFILE_DIR` 启动 8 秒未退出；release 目录未生成 `config.json/runtime_state.json/schedules.json/logs`；从 exe 抽取的关联图标为项目橙色数码管图标。
+- Windows Qt 真实窗口截图已刷新到 `docs/screenshots/` 和 `for_submit/demo/screenshots/`，包含主页、系统设置、闹钟与日程、调试与测试和黑夜模式系统设置。
 - 因 MCU 开机版本改为 `V2.2`，正式演示前需要 Keil5 重新编译烧录。
 
 ### v2.1 USER2 串口序列化与 COM5 联机回归

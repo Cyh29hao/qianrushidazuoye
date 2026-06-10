@@ -21,3 +21,6 @@ tmp/
 docs/source-materials/
 docs/dialogue_with_codex.md
 docs/summary_dialogue_with_codex.md
+for_submit/release/
+for_submit/mcu/
+for_submit/demo/*.mp4
