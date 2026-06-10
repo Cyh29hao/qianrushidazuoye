@@ -307,6 +307,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.test_run_in_progress = False
         self.test_run_started_at = 0.0
         self.test_run_full = False
+        self.test_cancel_event: threading.Event | None = None
+        self.test_saved_section_index: int | None = None
         self.pending_auto_test_after_apply = False
         self.pending_auto_test_full = False
         self.last_apply_monotonic = 0.0
@@ -3496,6 +3498,8 @@ class MainWindow(QtWidgets.QMainWindow):
         test_layout.setSpacing(12)
         self.runChecksButton = QtWidgets.QPushButton("快速联合测试", test_group)
         self.runFullChecksButton = QtWidgets.QPushButton("全面联合测试", test_group)
+        self.abortChecksButton = QtWidgets.QPushButton("中止测试", test_group)
+        self.abortChecksButton.setEnabled(False)
         self.testStatusLabel = QtWidgets.QLabel("状态: 未运行", test_group)
         self.testStatusLabel.setProperty("class", "infoChip")
         self.testStatusLabel.setStyleSheet("")
@@ -3532,6 +3536,7 @@ class MainWindow(QtWidgets.QMainWindow):
         test_button_layout.setSpacing(8)
         test_button_layout.addWidget(self.runChecksButton)
         test_button_layout.addWidget(self.runFullChecksButton)
+        test_button_layout.addWidget(self.abortChecksButton)
 
         test_layout.addWidget(test_button_row)
         test_layout.addWidget(self.testStatusLabel)
@@ -4176,6 +4181,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.scheduleTypeCombo.currentIndexChanged.connect(self._sync_schedule_type_ui)
         self.runChecksButton.clicked.connect(lambda: self.run_automated_checks(full=False))
         self.runFullChecksButton.clicked.connect(lambda: self.run_automated_checks(full=True))
+        self.abortChecksButton.clicked.connect(self.abort_automated_checks)
 
     def toggle_schedule_enabled(self, item: QtWidgets.QTableWidgetItem) -> None:
         row = item.row()
@@ -4545,19 +4551,26 @@ class MainWindow(QtWidgets.QMainWindow):
         self.serial_recovery_stage += 1
         reason = f"串口 TX 后 {quiet_s:.1f}s 未收到 RX（最近指令: {self.last_tx_command or '--'}）"
         self._clear_waiting_serial_state(reason)
-        if self.test_run_in_progress and now - self.test_run_started_at > (50.0 if self.test_run_full else 30.0):
+        test_timeout_s = estimated_duration_seconds(False, full=self.test_run_full) + 45.0
+        if self.test_run_in_progress and now - self.test_run_started_at > test_timeout_s:
+            if self.test_cancel_event is not None:
+                self.test_cancel_event.set()
             self.test_run_in_progress = False
             self.test_run_full = False
             self.runChecksButton.setEnabled(True)
             if hasattr(self, "runFullChecksButton"):
                 self.runFullChecksButton.setEnabled(True)
+            if hasattr(self, "abortChecksButton"):
+                self.abortChecksButton.setEnabled(False)
             self.poll_timer.start()
             self.ping_timer.start()
             if hasattr(self, "status_features"):
                 self.status_features.setText("串口同步 · 数字孪生 · NTP天气 · 闹钟日程 · 自动测试")
             self.testStatusLabel.setText("状态: 失败")
-            self.testOutputText.append(f"\nFAIL\n{reason}，已终止自动测试并恢复串口轮询。")
-            self.log("ERROR", f"{reason}，自动测试已超时退出。")
+            self.testOutputText.append(
+                f"\nFAIL\n{reason}，已终止自动测试并恢复串口轮询。疑似硬件端状态机卡死，请手动 RESET。"
+            )
+            self.log("ERROR", f"{reason}，自动测试已超时退出；疑似硬件端状态机卡死，请手动 RESET。")
             return
         if self.serial_recovery_stage == 1:
             self.log("WARN", f"{reason}，正在自动发送 EXT/PING 尝试退出临时显示或异常等待态。")
@@ -6431,10 +6444,15 @@ class MainWindow(QtWidgets.QMainWindow):
         self.test_run_full = bool(full)
         self.test_saved_auto_day_night = self.config.auto_day_night
         self.test_saved_runtime_state = RuntimeState(**vars(self.runtime_state))
+        self.test_saved_section_index = getattr(self.leftSections, "current_index", None)
+        cancel_event = threading.Event()
+        self.test_cancel_event = cancel_event
         self.test_run_started_at = time.monotonic()
         self.runChecksButton.setEnabled(False)
         if hasattr(self, "runFullChecksButton"):
             self.runFullChecksButton.setEnabled(False)
+        if hasattr(self, "abortChecksButton"):
+            self.abortChecksButton.setEnabled(True)
         self.testStatusLabel.setText("状态: 运行中")
         active_target = (
             self.serial_port.port
@@ -6466,11 +6484,12 @@ class MainWindow(QtWidgets.QMainWindow):
                         progress=progress,
                         full=full,
                         initial_mode=self.last_mode,
+                        cancel_event=cancel_event,
                     )
                 elif host_only:
-                    ok, output = execute_host_only_checks(progress=progress, full=full)
+                    ok, output = execute_host_only_checks(progress=progress, full=full, cancel_event=cancel_event)
                 else:
-                    ok, output = execute_checks_on_port(port_name, progress=progress, full=full)
+                    ok, output = execute_checks_on_port(port_name, progress=progress, full=full, cancel_event=cancel_event)
             except Exception as exc:  # noqa: BLE001
                 output = f"FAIL\n{exc}"
                 ok = False
@@ -6478,8 +6497,38 @@ class MainWindow(QtWidgets.QMainWindow):
 
         threading.Thread(target=worker, daemon=True).start()
 
+    def abort_automated_checks(self) -> None:
+        if not self.test_run_in_progress:
+            return
+        if self.test_cancel_event is not None:
+            self.test_cancel_event.set()
+        self.testStatusLabel.setText("状态: 正在中止")
+        if hasattr(self, "abortChecksButton"):
+            self.abortChecksButton.setEnabled(False)
+        self.testOutputText.append("\n用户请求中止：正在等待当前串口步骤结束并恢复测试前状态...")
+        self.log("WARN", "用户请求中止自动化测试：将停止后续项目并执行收尾恢复。")
+
+    def _format_test_progress_line(self, line: str) -> str:
+        stripped = line.strip()
+        if not stripped:
+            return ""
+        if stripped.startswith("[TX] ") or stripped.startswith("[RX] "):
+            return ""
+        if stripped.startswith("[INFO] 开始测试:"):
+            return "开始：" + stripped.split(":", 1)[1].strip()
+        if stripped.startswith("[INFO] Rapid key burst"):
+            return "开始：高并发按键鲁棒性测试"
+        if stripped.startswith("[WARN] "):
+            return "WARN：" + stripped[7:].strip()
+        if stripped.startswith("[INFO] Restore board settings"):
+            return "收尾：恢复测试前 FORMAT/MODE/DISPLAY"
+        if stripped.startswith("- "):
+            return stripped
+        if stripped in {"PASS", "FAIL"}:
+            return stripped
+        return ""
+
     def _append_test_output_line(self, line: str) -> None:
-        self.testOutputText.append(line)
         if line.startswith("[TX] "):
             command = line[5:].strip()
             self.last_tx_command = command
@@ -6498,15 +6547,24 @@ class MainWindow(QtWidgets.QMainWindow):
             self.log("RX", raw)
         elif line.startswith("[INFO] "):
             self.log("INFO", line[7:].strip())
+        elif line.startswith("[WARN] "):
+            self.log("WARN", line[7:].strip())
+        display_line = self._format_test_progress_line(line)
+        if display_line:
+            self.testOutputText.append(display_line)
         cursor = self.testOutputText.textCursor()
         cursor.movePosition(QtGui.QTextCursor.End)
         self.testOutputText.setTextCursor(cursor)
 
     def _finish_test_run(self, output: str, ok: bool) -> None:
+        was_cancelled = self.test_cancel_event is not None and self.test_cancel_event.is_set()
+        self.test_cancel_event = None
         self.test_run_in_progress = False
         self.runChecksButton.setEnabled(True)
         if hasattr(self, "runFullChecksButton"):
             self.runFullChecksButton.setEnabled(True)
+        if hasattr(self, "abortChecksButton"):
+            self.abortChecksButton.setEnabled(False)
         if self.test_saved_auto_day_night is not None:
             restored = self.test_saved_auto_day_night
             self.config.auto_day_night = restored
@@ -6523,8 +6581,10 @@ class MainWindow(QtWidgets.QMainWindow):
             self._apply_runtime_state_to_ui()
             self._save_runtime_state()
         self.last_test_ok = ok
-        self.last_test_summary = "PASS" if ok else "FAIL"
-        self.testStatusLabel.setText(f"状态: {'通过' if ok else '失败'}")
+        self.last_test_summary = "CANCELLED" if was_cancelled else ("PASS" if ok else "FAIL")
+        self.testStatusLabel.setText(
+            "状态: 已中止" if was_cancelled else f"状态: {'通过' if ok else '失败'}"
+        )
         if self.test_run_started_at:
             elapsed = time.monotonic() - self.test_run_started_at
             if hasattr(self, "testEstimateLabel"):
@@ -6532,6 +6592,15 @@ class MainWindow(QtWidgets.QMainWindow):
             self.test_run_started_at = 0.0
         self.testOutputText.append("\n--- 汇总 ---")
         self.testOutputText.append(output or ("PASS" if ok else "FAIL"))
+        if (not ok) and (
+            "timeout" in output.lower()
+            or "PONG" in output.upper()
+            or "卡死" in output
+            or "无响应" in output
+        ):
+            stuck_tip = "疑似硬件端状态机卡死或串口无响应：请手动 RESET 板卡，等待 READY 后再运行测试。"
+            self.testOutputText.append(stuck_tip)
+            self.log("ERROR", stuck_tip)
         cursor = self.testOutputText.textCursor()
         cursor.movePosition(QtGui.QTextCursor.End)
         self.testOutputText.setTextCursor(cursor)
@@ -6539,6 +6608,12 @@ class MainWindow(QtWidgets.QMainWindow):
             self.poll_timer.start()
             self.ping_timer.start()
             self.query_runtime_state()
+        if self.test_saved_section_index is not None:
+            try:
+                self.leftSections.select_index(self.test_saved_section_index)
+            except Exception:  # noqa: BLE001
+                pass
+            self.test_saved_section_index = None
         append_event_log(APP_DIR, "test_run", self.last_test_summary)
         self.refresh_dashboard()
         if hasattr(self, "status_features"):

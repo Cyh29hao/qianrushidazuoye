@@ -371,3 +371,29 @@
 1. 用 Keil5 重新编译并烧录 `mcu/src/main.c` 最新固件。
 2. 烧录后重点实测：FUNC 连按/长按/短按混合、USER1/USER2 连按、DISP 连续循环、EXT 回默认时间页、全面联合测试、NTP/天气期间人为按键被拒绝。
 3. 若实板仍出现卡死，优先从 MCU 显示/编辑状态机的“临时显示结束”和“编辑超时退出”路径继续收口，不要再靠 PC 端硬塞更多命令。
+## 2026-06-10 v2.1 自动测试与 release 当前状态
+
+本轮在上一版 COM5 全面测试通过的基础上，继续增强“测试脚本是否会自己把硬件压死”的防护。
+
+当前状态：
+
+- `pc_host/run_extension_checks.py --port COM5 --full` 已通过，新增项目 `RAPID KEY BURST` 也通过。该项目会快速发送 `FUNC/DISP/SPEED/FORMAT/EXT` 组合，然后执行 `EXT + PING` 判断硬件是否仍可恢复。
+- 自动测试现在支持取消事件；PC 上位机“调试与测试”页新增“中止测试”按钮。中止后脚本停止后续测试项，并尝试恢复 `FORMAT/MODE/DISPLAY`。
+- 自动测试会记录开始前左侧页面，测试完成或中止后回到原页面。
+- 测试输出框已清晰化：只显示每项做了什么、OK/FAIL/WARN 和最后结论，不再把所有 TX/RX 刷进左侧测试输出；完整 TX/RX 仍在右侧日志中。
+- 健康检查超时阈值按当前预计耗时动态计算。若测试期间长时间无 RX，会在 PC 端明确提示疑似硬件端状态机卡死，需要手动 RESET。
+- v2.1 打包版已重新生成：`build_release/SmartClockHost-v2.1/SmartClockHost.exe` 与 `build_release/SmartClockHost-v2.1.zip`。release 文件夹和 zip 内已经包含最新 MCU 工程副本：`mcu/src/`、`mcu/Inc/`、`mcu/Driverlib/`、`mcu/RTE/`、`mcu/clock.uvprojx`、`mcu/clock.uvoptx`。
+
+验证记录：
+
+- PC 静态检查通过。
+- host-only full 通过。
+- UI offscreen 探针通过：中止按钮可见、初始禁用，测试输出过滤隐藏 TX/RX。
+- COM5 取消探针通过：主动取消后线程未挂住，输出 FAIL，并进入恢复阶段。
+- COM5 全面联合测试通过，耗时约 135 秒。
+- exe 8 秒烟测通过。
+
+注意事项：
+
+- `build_release/` 仍然不提交 Git；交付 zip 时可直接使用本地 `build_release/SmartClockHost-v2.1.zip`。
+- MCU 端最新源码还必须 Keil5 编译并烧录，才能让板端自身的按键冷却、`EXT` 回默认时间页等保护在物理板上生效。

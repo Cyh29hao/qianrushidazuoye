@@ -584,3 +584,30 @@
 ### 仍需人工/硬件验证
 - `mcu/src/main.c` 已改动，必须用 Keil5 重新编译并烧录 S800 后，再复测 FUNC 连按、EXT 回默认时间页、DISP 循环、USER2 天气短显和自动测试长流程。
 - 本轮 release 打包产物在 `build_release/`，该目录按 `.gitignore` 不提交到 Git；如需发 GitHub Release，应手动上传 zip 附件。
+## 2026-06-10 v2.1 自动测试鲁棒性增强
+
+### 已完成修改
+- 全面联合测试新增 `RAPID KEY BURST` 项，模拟 `FUNC/DISP/SPEED/FORMAT/EXT` 快速连续按键，随后执行 `EXT + PING` 恢复检查；若无 `PONG` 会直接 FAIL，并提示疑似板端/串口状态机卡死，需要手动 RESET。
+- 自动测试脚本支持取消事件；上位机新增“中止测试”按钮。中止后不再继续后续测试项，并尽量执行 `FORMAT/MODE/DISPLAY` 恢复。
+- 自动测试开始前记录左侧页面索引，结束后恢复到启动测试前的页面；测试输出框不再刷大量 TX/RX，只保留开始项、OK/FAIL、WARN 和汇总结论，完整 TX/RX 仍保留在右侧日志区。
+- 自动测试健康检查超时阈值改为按当前预计耗时动态计算，避免全面测试被旧的 50 秒阈值误杀；若真的长时间无 RX，会提示“疑似硬件端状态机卡死，请手动 RESET”。
+- v2.1 release 重新打包，`build_release/SmartClockHost-v2.1/` 和 zip 内已包含最新 MCU 工程副本，便于直接打开 Keil5 编译烧录。
+
+### 关键文件
+- `pc_host/app.py`
+- `pc_host/run_extension_checks.py`
+- `README.md`
+- `AGENT.md`
+- `CHANGELOG_AI.md`
+- `PROJECT_CONTEXT.md`
+
+### 验证结果
+- `python -m py_compile pc_host/app.py pc_host/run_extension_checks.py pc_host/protocol.py pc_host/twin_widgets.py pc_host/extension_services.py pc_host/extension_store.py` 通过。
+- `python pc_host/run_extension_checks.py --host-only --full` 通过，离线模式明确标记高并发按键鲁棒性需要真实 COM 口测试。
+- PyQt offscreen 检查通过：“中止测试”按钮可见且初始禁用；测试输出过滤会隐藏 `[TX]`/`[RX]` 原始流水。
+- COM5 取消探针通过：启动全面测试后设置取消事件，线程正常退出，输出 FAIL，并执行恢复命令。
+- COM5 全面联合测试通过，新增 `RAPID KEY BURST: OK`，总耗时约 135 秒。
+- v2.1 exe 重新打包并 8 秒烟测通过；release 目录确认包含 `mcu/src/main.c` 与 `mcu/clock.uvprojx`。
+
+### 仍需人工/硬件验证
+- 新 MCU 源码仍需 Keil5 重新编译并烧录。只有烧录后，MCU 端串口按键冷却和 `EXT` 回默认时间页才能在实板上完全生效。
