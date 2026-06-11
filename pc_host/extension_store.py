@@ -22,6 +22,7 @@ class SavedPlace:
     longitude: float = 121.4737
     timezone: str = "Asia/Shanghai"
     utc_offset_seconds: int = 8 * 3600
+    country: str = "中国"
 
 
 def _default_saved_places() -> list[SavedPlace]:
@@ -364,6 +365,7 @@ def _normalize_config(payload: dict[str, Any]) -> AppConfig:
             longitude=config.longitude,
             timezone=config.timezone,
             utc_offset_seconds=8 * 3600,
+            country=str(payload.get("country", "中国") or "中国"),
         )
     while len(config.saved_places) < 5:
         config.saved_places.append(SavedPlace())
@@ -382,6 +384,7 @@ def _normalize_place_entry(raw: Any) -> SavedPlace:
         longitude=float(raw.get("longitude", 121.4737)),
         timezone=str(raw.get("timezone", "Asia/Shanghai") or "Asia/Shanghai"),
         utc_offset_seconds=int(raw.get("utc_offset_seconds", 8 * 3600)),
+        country=str(raw.get("country", "中国") or "中国"),
     )
 
 

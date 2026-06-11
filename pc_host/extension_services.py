@@ -36,8 +36,35 @@ KNOWN_TIMEZONE_OFFSETS = {
     "Europe/Berlin": 1 * 3600,
     "Europe/Paris": 1 * 3600,
     "America/New_York": -5 * 3600,
+    "America/Detroit": -5 * 3600,
+    "America/Toronto": -5 * 3600,
     "America/Los_Angeles": -8 * 3600,
+    "America/Vancouver": -8 * 3600,
+    "America/Chicago": -6 * 3600,
+    "America/Mexico_City": -6 * 3600,
+    "America/Sao_Paulo": -3 * 3600,
+    "America/Denver": -7 * 3600,
+    "America/Phoenix": -7 * 3600,
     "Australia/Sydney": 10 * 3600,
+    "Australia/Melbourne": 10 * 3600,
+    "Australia/Brisbane": 10 * 3600,
+    "Australia/Adelaide": 9 * 3600 + 1800,
+    "Australia/Perth": 8 * 3600,
+    "Asia/Dubai": 4 * 3600,
+    "Asia/Kolkata": 5 * 3600 + 1800,
+    "Asia/Jakarta": 7 * 3600,
+    "Asia/Manila": 8 * 3600,
+    "Asia/Kuala_Lumpur": 8 * 3600,
+    "Asia/Taipei": 8 * 3600,
+    "Asia/Jerusalem": 2 * 3600,
+    "Asia/Riyadh": 3 * 3600,
+    "Europe/Moscow": 3 * 3600,
+    "Europe/Rome": 1 * 3600,
+    "Europe/Madrid": 1 * 3600,
+    "Europe/Amsterdam": 1 * 3600,
+    "Europe/Zurich": 1 * 3600,
+    "Africa/Cairo": 2 * 3600,
+    "Africa/Johannesburg": 2 * 3600,
 }
 CITY_PRESETS = {
     "上海": (31.2304, 121.4737, "Asia/Shanghai", DEFAULT_UTC_OFFSET_SECONDS, "中国"),
@@ -54,6 +81,108 @@ CITY_PRESETS = {
     "london": (51.5072, -0.1276, "Europe/London", 0, "United Kingdom"),
     "纽约": (40.7128, -74.0060, "America/New_York", -5 * 3600, "美国"),
     "new york": (40.7128, -74.0060, "America/New_York", -5 * 3600, "USA"),
+    "nyc": (40.7128, -74.0060, "America/New_York", -5 * 3600, "USA"),
+    "休斯顿": (29.7604, -95.3698, "America/Chicago", -6 * 3600, "美国"),
+    "houston": (29.7604, -95.3698, "America/Chicago", -6 * 3600, "USA"),
+    "芝加哥": (41.8781, -87.6298, "America/Chicago", -6 * 3600, "美国"),
+    "chicago": (41.8781, -87.6298, "America/Chicago", -6 * 3600, "USA"),
+    "洛杉矶": (34.0522, -118.2437, "America/Los_Angeles", -8 * 3600, "美国"),
+    "los angeles": (34.0522, -118.2437, "America/Los_Angeles", -8 * 3600, "USA"),
+    "la": (34.0522, -118.2437, "America/Los_Angeles", -8 * 3600, "USA"),
+    "华盛顿": (38.9072, -77.0369, "America/New_York", -5 * 3600, "美国"),
+    "washington": (38.9072, -77.0369, "America/New_York", -5 * 3600, "USA"),
+    "washington dc": (38.9072, -77.0369, "America/New_York", -5 * 3600, "USA"),
+    "旧金山": (37.7749, -122.4194, "America/Los_Angeles", -8 * 3600, "美国"),
+    "san francisco": (37.7749, -122.4194, "America/Los_Angeles", -8 * 3600, "USA"),
+    "西雅图": (47.6062, -122.3321, "America/Los_Angeles", -8 * 3600, "美国"),
+    "seattle": (47.6062, -122.3321, "America/Los_Angeles", -8 * 3600, "USA"),
+    "多伦多": (43.6532, -79.3832, "America/Toronto", -5 * 3600, "加拿大"),
+    "toronto": (43.6532, -79.3832, "America/Toronto", -5 * 3600, "Canada"),
+    "温哥华": (49.2827, -123.1207, "America/Vancouver", -8 * 3600, "加拿大"),
+    "vancouver": (49.2827, -123.1207, "America/Vancouver", -8 * 3600, "Canada"),
+    "渥太华": (45.4215, -75.6972, "America/Toronto", -5 * 3600, "加拿大"),
+    "ottawa": (45.4215, -75.6972, "America/Toronto", -5 * 3600, "Canada"),
+    "巴黎": (48.8566, 2.3522, "Europe/Paris", 1 * 3600, "法国"),
+    "paris": (48.8566, 2.3522, "Europe/Paris", 1 * 3600, "France"),
+    "柏林": (52.5200, 13.4050, "Europe/Berlin", 1 * 3600, "德国"),
+    "berlin": (52.5200, 13.4050, "Europe/Berlin", 1 * 3600, "Germany"),
+    "罗马": (41.9028, 12.4964, "Europe/Rome", 1 * 3600, "意大利"),
+    "rome": (41.9028, 12.4964, "Europe/Rome", 1 * 3600, "Italy"),
+    "马德里": (40.4168, -3.7038, "Europe/Madrid", 1 * 3600, "西班牙"),
+    "madrid": (40.4168, -3.7038, "Europe/Madrid", 1 * 3600, "Spain"),
+    "莫斯科": (55.7558, 37.6173, "Europe/Moscow", 3 * 3600, "俄罗斯"),
+    "moscow": (55.7558, 37.6173, "Europe/Moscow", 3 * 3600, "Russia"),
+    "新加坡": (1.3521, 103.8198, "Asia/Singapore", 8 * 3600, "新加坡"),
+    "singapore": (1.3521, 103.8198, "Asia/Singapore", 8 * 3600, "Singapore"),
+    "首尔": (37.5665, 126.9780, "Asia/Seoul", 9 * 3600, "韩国"),
+    "seoul": (37.5665, 126.9780, "Asia/Seoul", 9 * 3600, "South Korea"),
+    "曼谷": (13.7563, 100.5018, "Asia/Bangkok", 7 * 3600, "泰国"),
+    "bangkok": (13.7563, 100.5018, "Asia/Bangkok", 7 * 3600, "Thailand"),
+    "迪拜": (25.2048, 55.2708, "Asia/Dubai", 4 * 3600, "阿联酋"),
+    "dubai": (25.2048, 55.2708, "Asia/Dubai", 4 * 3600, "United Arab Emirates"),
+    "新德里": (28.6139, 77.2090, "Asia/Kolkata", 5 * 3600 + 1800, "印度"),
+    "delhi": (28.6139, 77.2090, "Asia/Kolkata", 5 * 3600 + 1800, "India"),
+    "new delhi": (28.6139, 77.2090, "Asia/Kolkata", 5 * 3600 + 1800, "India"),
+    "孟买": (19.0760, 72.8777, "Asia/Kolkata", 5 * 3600 + 1800, "印度"),
+    "mumbai": (19.0760, 72.8777, "Asia/Kolkata", 5 * 3600 + 1800, "India"),
+    "悉尼": (-33.8688, 151.2093, "Australia/Sydney", 10 * 3600, "澳大利亚"),
+    "sydney": (-33.8688, 151.2093, "Australia/Sydney", 10 * 3600, "Australia"),
+    "堪培拉": (-35.2809, 149.1300, "Australia/Sydney", 10 * 3600, "澳大利亚"),
+    "canberra": (-35.2809, 149.1300, "Australia/Sydney", 10 * 3600, "Australia"),
+    "墨西哥城": (19.4326, -99.1332, "America/Mexico_City", -6 * 3600, "墨西哥"),
+    "mexico city": (19.4326, -99.1332, "America/Mexico_City", -6 * 3600, "Mexico"),
+    "圣保罗": (-23.5558, -46.6396, "America/Sao_Paulo", -3 * 3600, "巴西"),
+    "sao paulo": (-23.5558, -46.6396, "America/Sao_Paulo", -3 * 3600, "Brazil"),
+    "巴西利亚": (-15.7939, -47.8828, "America/Sao_Paulo", -3 * 3600, "巴西"),
+    "brasilia": (-15.7939, -47.8828, "America/Sao_Paulo", -3 * 3600, "Brazil"),
+    "开罗": (30.0444, 31.2357, "Africa/Cairo", 2 * 3600, "埃及"),
+    "cairo": (30.0444, 31.2357, "Africa/Cairo", 2 * 3600, "Egypt"),
+}
+COUNTRY_CAPITAL_ALIASES = {
+    "中国": "北京",
+    "china": "beijing",
+    "中华人民共和国": "北京",
+    "美国": "washington dc",
+    "usa": "washington dc",
+    "us": "washington dc",
+    "united states": "washington dc",
+    "united states of america": "washington dc",
+    "英国": "london",
+    "uk": "london",
+    "united kingdom": "london",
+    "日本": "tokyo",
+    "japan": "tokyo",
+    "韩国": "seoul",
+    "south korea": "seoul",
+    "新加坡共和国": "singapore",
+    "singapore": "singapore",
+    "法国": "paris",
+    "france": "paris",
+    "德国": "berlin",
+    "germany": "berlin",
+    "意大利": "rome",
+    "italy": "rome",
+    "西班牙": "madrid",
+    "spain": "madrid",
+    "俄罗斯": "moscow",
+    "russia": "moscow",
+    "加拿大": "ottawa",
+    "canada": "ottawa",
+    "澳大利亚": "canberra",
+    "australia": "canberra",
+    "印度": "new delhi",
+    "india": "new delhi",
+    "泰国": "bangkok",
+    "thailand": "bangkok",
+    "阿联酋": "dubai",
+    "uae": "dubai",
+    "united arab emirates": "dubai",
+    "墨西哥": "mexico city",
+    "mexico": "mexico city",
+    "巴西": "brasilia",
+    "brazil": "brasilia",
+    "埃及": "cairo",
+    "egypt": "cairo",
 }
 CHINA_WEATHER_CITY_CODES = {
     "北京": "101010100",
@@ -192,6 +321,15 @@ def infer_timezone_offset_seconds(
     default: int = DEFAULT_UTC_OFFSET_SECONDS,
     utc_moment: datetime | None = None,
 ) -> int:
+    moment = utc_moment or datetime.now(timezone.utc)
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    try:
+        offset = moment.astimezone(ZoneInfo(timezone_name)).utcoffset()
+        if offset is not None:
+            return int(offset.total_seconds())
+    except (ZoneInfoNotFoundError, ModuleNotFoundError, ValueError):
+        pass
     dst_offset = _dst_aware_offset_seconds(timezone_name, utc_moment)
     if dst_offset is not None:
         return dst_offset
@@ -229,10 +367,32 @@ def _dst_aware_offset_seconds(
         start = _nth_weekday_utc(year, 3, 6, 2, 7)
         end = _nth_weekday_utc(year, 11, 6, 1, 6)
         return -4 * 3600 if start <= moment < end else -5 * 3600
+    if timezone_name == "America/Chicago":
+        start = _nth_weekday_utc(year, 3, 6, 2, 8)
+        end = _nth_weekday_utc(year, 11, 6, 1, 7)
+        return -5 * 3600 if start <= moment < end else -6 * 3600
+    if timezone_name in {"America/Denver"}:
+        start = _nth_weekday_utc(year, 3, 6, 2, 9)
+        end = _nth_weekday_utc(year, 11, 6, 1, 8)
+        return -6 * 3600 if start <= moment < end else -7 * 3600
     if timezone_name == "America/Los_Angeles":
         start = _nth_weekday_utc(year, 3, 6, 2, 10)
         end = _nth_weekday_utc(year, 11, 6, 1, 9)
         return -7 * 3600 if start <= moment < end else -8 * 3600
+    if timezone_name in {"America/Toronto", "America/Detroit"}:
+        start = _nth_weekday_utc(year, 3, 6, 2, 7)
+        end = _nth_weekday_utc(year, 11, 6, 1, 6)
+        return -4 * 3600 if start <= moment < end else -5 * 3600
+    if timezone_name in {"America/Vancouver"}:
+        start = _nth_weekday_utc(year, 3, 6, 2, 10)
+        end = _nth_weekday_utc(year, 11, 6, 1, 9)
+        return -7 * 3600 if start <= moment < end else -8 * 3600
+    if timezone_name == "Australia/Sydney":
+        start = _nth_weekday_utc(year, 10, 6, 1, 16)
+        end = _nth_weekday_utc(year + 1, 4, 6, 1, 16) if moment.month >= 10 else _nth_weekday_utc(year, 4, 6, 1, 16)
+        if moment.month >= 10:
+            return 11 * 3600 if moment >= start else 10 * 3600
+        return 11 * 3600 if moment < end else 10 * 3600
     if timezone_name == "Europe/London":
         start = _last_weekday_utc(year, 3, 6, 1)
         end = _last_weekday_utc(year, 10, 6, 1)
@@ -241,6 +401,10 @@ def _dst_aware_offset_seconds(
         start = _last_weekday_utc(year, 3, 6, 1)
         end = _last_weekday_utc(year, 10, 6, 1)
         return 2 * 3600 if start <= moment < end else 1 * 3600
+    if timezone_name == "Africa/Cairo":
+        start = _last_weekday_utc(year, 4, 4, 22)
+        end = _last_weekday_utc(year, 10, 3, 21)
+        return 3 * 3600 if start <= moment < end else 2 * 3600
     return None
 
 
@@ -273,16 +437,20 @@ def _last_weekday_utc(
 
 def geocode_city(city_name: str, timeout: float = 4.0) -> CityLookupResult:
     normalized = city_name.strip()
-    preset = CITY_PRESETS.get(normalized.lower()) or CITY_PRESETS.get(normalized)
+    lookup_key = normalized.lower()
+    country_capital = COUNTRY_CAPITAL_ALIASES.get(lookup_key) or COUNTRY_CAPITAL_ALIASES.get(normalized)
+    preset_query = country_capital or normalized
+    preset = CITY_PRESETS.get(preset_query.lower()) or CITY_PRESETS.get(preset_query)
     if preset is not None:
         latitude, longitude, timezone_name, offset_seconds, country = preset
+        offset_seconds = infer_timezone_offset_seconds(timezone_name, offset_seconds)
         return CityLookupResult(
-            name=normalized,
+            name=preset_query.title() if country_capital and preset_query.isascii() else preset_query,
             latitude=latitude,
             longitude=longitude,
             timezone=timezone_name,
             utc_offset_seconds=offset_seconds,
-            country=country,
+            country=normalized if country_capital else country,
         )
     result = _geocode_open_meteo(normalized, timeout)
     if result is not None:

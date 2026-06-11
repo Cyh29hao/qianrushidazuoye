@@ -4,6 +4,23 @@
 
 ## 2026-06-11
 
+### v2.2 全球时区/P1-P2/虚拟长按收口
+
+#### 已完成修改
+- P1/数字孪生本地 YEAR/星期等超过 8 位文本统一使用跑马灯，不再只滚动 WEEKDAY；离屏探针确认 YEAR 页连续帧发生变化。
+- 修复日程管理表格空白点击不能取消选中：删除被覆盖的重复 `eventFilter()`，把空白点击清表单逻辑合并到有效事件过滤器。
+- PC 虚拟按键新增 0.8 秒长按：USER1 长按切 DAY/NIGHT，DISP 长按切显示开关，FUNC 长按按保存/退出编辑语义处理。
+- P2 协议测试本地模式新增协议校验器；错误模板不再误回 `OK LOCAL`，会按 `ERROR RANGE/PARAM/SYNTAX/LEN (LOCAL)` 分类回显。
+- 全球时区/天气增强：补充代表城市和国家首都预设；输入 `美国/USA/日本/Australia` 会转首都并保留国家字段；Houston/Chicago 走 `America/Chicago`，当前夏令时 offset 为 `UTC-05:00`。
+- 天气刷新日志补充定位/时区/拉天气流程；README 说明 Open-Meteo Geocoding/Forecast、国内天气接口、Nominatim/wttr 兜底和 `zoneinfo`/内置 DST fallback。
+- Matplotlib 系统状态图去掉百分比，改为“显示、昼夜、连接、天气、板载闹钟、PC提醒”的实际状态/计数文案。
+
+#### 验证
+- `pc_host/.venv/Scripts/python.exe -m py_compile pc_host/app.py pc_host/protocol.py pc_host/twin_widgets.py pc_host/extension_services.py pc_host/extension_store.py pc_host/run_extension_checks.py` 通过。
+- `pc_host/.venv/Scripts/python.exe pc_host/run_extension_checks.py --host-only` 与 `--host-only --full` 通过。
+- 离屏 PyQt 探针确认 YEAR 页跑马灯帧变化、本地协议错误分类正确。
+- 全球城市/国家时区探针覆盖 Houston、Chicago、Los Angeles、Toronto、Paris、Berlin、Singapore、New Delhi、Sydney、Mexico City、Sao Paulo、Cairo、美国、日本、澳大利亚。
+
 ### v2.2 离线模式、DISP 与配置保护收口
 
 #### 已完成修改

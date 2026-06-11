@@ -228,6 +228,7 @@ class LedBarWidget(QtWidgets.QWidget):
 
 class DigitalTwinWidget(QtWidgets.QWidget):
     virtual_key_requested = QtCore.pyqtSignal(str)
+    virtual_key_long_requested = QtCore.pyqtSignal(str)
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
@@ -275,6 +276,8 @@ class DigitalTwinWidget(QtWidgets.QWidget):
 
         self.key_buttons: list[QtWidgets.QPushButton] = []
         self.key_button_by_name: dict[str, QtWidgets.QPushButton] = {}
+        self._key_press_timers: dict[QtWidgets.QPushButton, QtCore.QTimer] = {}
+        self._key_long_fired: set[QtWidgets.QPushButton] = set()
         self.key_button_base_style = "padding: 2px 4px;"
         key_tips = {
             "USER2": "USER2: 天气短显专用键；有缓存直接显示天气，无缓存时显示 NO WX",
@@ -312,8 +315,11 @@ class DigitalTwinWidget(QtWidgets.QWidget):
             font.setPointSize(6)
             font.setBold(True)
             button.setFont(font)
-            button.clicked.connect(
-                lambda checked=False, value=key_name: self.virtual_key_requested.emit(value)
+            button.pressed.connect(
+                lambda value=key_name, button=button: self._start_key_press(value, button)
+            )
+            button.released.connect(
+                lambda value=key_name, button=button: self._finish_key_press(value, button)
             )
             self.key_buttons.append(button)
             self.key_button_by_name[key_name] = button
@@ -323,6 +329,33 @@ class DigitalTwinWidget(QtWidgets.QWidget):
             self.grid.setColumnStretch(column, 1)
 
         outer.addLayout(self.grid)
+
+    def _start_key_press(self, key_name: str, button: QtWidgets.QPushButton) -> None:
+        self._key_long_fired.discard(button)
+        timer = self._key_press_timers.get(button)
+        if timer is None:
+            timer = QtCore.QTimer(self)
+            timer.setSingleShot(True)
+            self._key_press_timers[button] = timer
+        try:
+            timer.timeout.disconnect()
+        except TypeError:
+            pass
+        timer.timeout.connect(lambda key=key_name, button=button: self._emit_key_long(key, button))
+        timer.start(800)
+
+    def _emit_key_long(self, key_name: str, button: QtWidgets.QPushButton) -> None:
+        self._key_long_fired.add(button)
+        self.virtual_key_long_requested.emit(key_name)
+
+    def _finish_key_press(self, key_name: str, button: QtWidgets.QPushButton) -> None:
+        timer = self._key_press_timers.get(button)
+        if timer is not None and timer.isActive():
+            timer.stop()
+        if button in self._key_long_fired:
+            self._key_long_fired.discard(button)
+            return
+        self.virtual_key_requested.emit(key_name)
 
     def sizeHint(self) -> QtCore.QSize:
         self.ensurePolished()

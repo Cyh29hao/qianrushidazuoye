@@ -131,6 +131,7 @@ from extension_services import (
 )
 from extension_store import (
     AppConfig,
+    RING_TYPES,
     RuntimeState,
     SavedPlace,
     ScheduleItem,
@@ -532,16 +533,6 @@ class MainWindow(QtWidgets.QMainWindow):
         if hasattr(self, "status_features"):
             self.status_features.setText(self._footer_feature_text())
 
-    def eventFilter(self, obj, event):  # noqa: N802 - Qt API
-        if (
-            hasattr(self, "scheduleTable")
-            and obj is self.scheduleTable.viewport()
-            and event.type() == QtCore.QEvent.MouseButtonPress
-            and self.scheduleTable.indexAt(event.pos()).isValid() is False
-        ):
-            QtCore.QTimer.singleShot(0, self.reset_schedule_form)
-        return super().eventFilter(obj, event)
-
     def _right_panel_width_for(self, total_width: int) -> int:
         if total_width < 980:
             return 380
@@ -654,6 +645,14 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ui.statusbar.addPermanentWidget(self.status_github_button)
 
     def eventFilter(self, watched: QtCore.QObject, event: QtCore.QEvent) -> bool:
+        if (
+            hasattr(self, "scheduleTable")
+            and watched is self.scheduleTable.viewport()
+            and event.type() == QtCore.QEvent.MouseButtonPress
+            and self.scheduleTable.indexAt(event.pos()).isValid() is False
+        ):
+            QtCore.QTimer.singleShot(0, self.reset_schedule_form)
+            return False
         if event.type() == QtCore.QEvent.Wheel:
             if isinstance(watched, QtWidgets.QComboBox):
                 view = watched.view()
@@ -945,7 +944,7 @@ class MainWindow(QtWidgets.QMainWindow):
         return ["周一", "周二", "周三", "周四", "周五", "周六", "周日"][moment.weekday()]
 
     def _local_view_frame(self, visible: str, view_mode: str) -> tuple[str, int]:
-        if view_mode != "WEEKDAY" or len(visible) <= 8:
+        if len(visible) <= 8:
             return self._visible_text_to_frame(visible)
         key = f"{view_mode}:{visible}:{self.runtime_state.format}"
         if self.local_view_scroll_key != key:
@@ -1073,9 +1072,118 @@ class MainWindow(QtWidgets.QMainWindow):
     def _local_query_notice(self, action: str) -> None:
         self.log("WARN", f"!!! 当前为本地模式，显示的是上位机保存状态，并非板端实时返回：{action}")
 
+    def _parse_protocol_field_ints(
+        self,
+        parts: list[str],
+        fields: tuple[str, ...],
+    ) -> tuple[dict[str, int], str | None]:
+        if len(parts) < 1 + len(fields) * 2:
+            return {}, "SYNTAX"
+        result: dict[str, int] = {}
+        for field in fields:
+            if field not in parts:
+                return {}, "SYNTAX"
+            index = parts.index(field)
+            if index + 1 >= len(parts):
+                return {}, "SYNTAX"
+            try:
+                result[field] = int(parts[index + 1])
+            except ValueError:
+                return {}, "PARAM"
+        return result, None
+
+    def _validate_local_protocol_command(self, command: str) -> str | None:
+        upper = command.strip().upper()
+        if not upper:
+            return "SYNTAX"
+        if upper in {"*PING", "*RST"}:
+            return None
+        if upper.startswith("*GET:"):
+            query = upper.removeprefix("*GET:").strip()
+            return None if query in {"DATE", "TIME", "ALARM", "DISPLAY", "FORMAT", "MODE"} else "PARAM"
+        if upper.startswith("*SET:DATE "):
+            parts = upper.split()
+            values, error = self._parse_protocol_field_ints(parts, ("YEAR", "MONTH", "DATE"))
+            if error:
+                return error
+            year, month, day = values["YEAR"], values["MONTH"], values["DATE"]
+            qdate = QtCore.QDate(year, month, day)
+            return None if 2000 <= year <= 2099 and qdate.isValid() else "RANGE"
+        if upper.startswith("*SET:TIME "):
+            parts = upper.split()
+            values, error = self._parse_protocol_field_ints(parts, ("HOUR", "MINUTE", "SECOND"))
+            if error:
+                return error
+            hour, minute, second = values["HOUR"], values["MINUTE"], values["SECOND"]
+            return None if 0 <= hour <= 23 and 0 <= minute <= 59 and 0 <= second <= 59 else "RANGE"
+        if upper == "*SET:ALARM OFF":
+            return None
+        if upper.startswith("*SET:ALARM "):
+            parts = upper.split()
+            values, error = self._parse_protocol_field_ints(parts, ("HOUR", "MINUTE", "SECOND"))
+            if error:
+                return error
+            hour, minute, second = values["HOUR"], values["MINUTE"], values["SECOND"]
+            return None if 0 <= hour <= 23 and 0 <= minute <= 59 and 0 <= second <= 59 else "RANGE"
+        if upper.startswith("*SET:DISPLAY "):
+            return None if upper.removeprefix("*SET:DISPLAY ").strip() in {"ON", "OFF"} else "PARAM"
+        if upper.startswith("*SET:FORMAT "):
+            return None if upper.removeprefix("*SET:FORMAT ").strip() in {"LEFT", "RIGHT"} else "PARAM"
+        if upper.startswith("*SET:MODE "):
+            return None if upper.removeprefix("*SET:MODE ").strip() in {"DAY", "NIGHT"} else "PARAM"
+        if upper.startswith("*SET:LED "):
+            value = upper.removeprefix("*SET:LED ").strip()
+            if len(value) > 2:
+                return "LEN"
+            try:
+                parsed = int(value, 16)
+            except ValueError:
+                return "PARAM"
+            return None if 0 <= parsed <= 0xFF else "RANGE"
+        if upper.startswith("*SET:BEEP "):
+            value = upper.removeprefix("*SET:BEEP ").strip()
+            try:
+                parsed = int(value)
+            except ValueError:
+                return "PARAM"
+            return None if 1 <= parsed <= 10000 else "RANGE"
+        if upper.startswith("*SET:RING "):
+            value = upper.removeprefix("*SET:RING ").strip()
+            return None if value in RING_TYPES else "PARAM"
+        if upper.startswith("*SET:KEY "):
+            value = upper.removeprefix("*SET:KEY ").strip()
+            return None if value in {"USER1", "USER2", "DISP", "SPEED", "FORMAT", "EXT", "FUNC", "SHIFT", "ADD", "SAVE"} else "PARAM"
+        if upper.startswith("*SET:WEATHER DISP "):
+            parts = upper.split()
+            if len(parts) != 5 or parts[0] != "*SET:WEATHER" or parts[1] != "DISP" or parts[3] != "LED":
+                return "SYNTAX"
+            token = parts[2]
+            if len(token) != 8:
+                return "LEN"
+            if self._unsupported_7seg_chars(token.replace("_", " ")):
+                return "PARAM"
+            try:
+                led_value = int(parts[4], 16)
+            except ValueError:
+                return "PARAM"
+            return None if 0 <= led_value <= 0xFF else "RANGE"
+        if upper.startswith("*SET:MSG "):
+            text = command[9:].strip()
+            if not text:
+                return "SYNTAX"
+            if len(text) > 32:
+                return "LEN"
+            return "PARAM" if self._unsupported_7seg_chars(text) else None
+        return "PARAM"
+
     def _local_protocol_reply(self, command: str, *, query_already_handled: bool = False) -> None:
         cleaned = command.strip()
         upper = cleaned.upper()
+        error = self._validate_local_protocol_command(cleaned)
+        if error is not None:
+            self.log("RX", f"ERROR {error} (LOCAL)")
+            append_event_log(APP_DIR, "local_error", f"{cleaned} -> ERROR {error}")
+            return
         if upper == "*PING":
             self.status_latency.setText("LOCAL")
             self.log("RX", "*PONG LOCAL")
@@ -1606,42 +1714,40 @@ class MainWindow(QtWidgets.QMainWindow):
         axis = self.dashboardFigure.add_subplot(111)
         self._style_dashboard_axis(axis, colors)
         enabled_count = len([item for item in self.schedules if item.enabled])
-        weather_ok = 1 if self.last_weather_snapshot is not None else 0
-        serial_ok = 1 if self.is_connected else (0.6 if self._is_local_mode_active() else 0)
-        schedule_score = min(1.0, enabled_count / 5.0) if enabled_count else 0
-        values = [
-            1 if self.runtime_state.display_on else 0,
-            1 if self.config.auto_day_night else 0,
-            serial_ok,
-            weather_ok,
-            schedule_score,
+        total_count = len(self.schedules)
+        weather_ok = self.last_weather_snapshot is not None
+        serial_text = "串口" if self.is_connected else ("本地" if self._is_local_mode_active() else "未连")
+        statuses = [
+            ("显示", "开" if self.runtime_state.display_on else "关", 1 if self.runtime_state.display_on else 0.18, colors["primary"]),
+            ("昼夜", self.runtime_state.mode, 1 if self.runtime_state.mode == "DAY" else 0.72, colors["secondary"]),
+            ("连接", serial_text, 1 if self.is_connected else (0.62 if self._is_local_mode_active() else 0.25), colors["accent"]),
+            ("天气", "正常" if weather_ok else "待刷新", 1 if weather_ok else 0.35, colors["primary"] if weather_ok else colors["danger"]),
+            ("板载闹钟", f"{1 if self.runtime_state.alarm_enabled else 0}/1", 1 if self.runtime_state.alarm_enabled else 0.25, colors["secondary"]),
+            ("PC提醒", f"{enabled_count}/{max(1, total_count)}", max(0.2, min(1.0, enabled_count / max(1, total_count))), colors["accent"]),
         ]
-        labels = ["显示", "自动昼夜", "串口/本地", "天气", "提醒"]
-        axis.set_title("系统状态完成度", fontsize=11, pad=8)
-        bars = axis.barh(range(len(labels)), values, color=[
-            colors["primary"],
-            colors["secondary"],
-            colors["accent"],
-            colors["primary"] if weather_ok else colors["danger"],
-            colors["secondary"],
-        ])
-        axis.set_xlim(0, 1)
+        labels = [item[0] for item in statuses]
+        values = [item[2] for item in statuses]
+        axis.set_title("系统状态速览", fontsize=11, pad=8)
+        bars = axis.barh(range(len(labels)), values, color=[item[3] for item in statuses])
+        axis.set_xlim(0, 1.08)
         axis.set_yticks(range(len(labels)))
         axis.set_yticklabels(labels)
-        axis.set_xticks([0, 0.5, 1.0])
-        axis.set_xticklabels(["关/无", "部分", "正常"])
-        for bar, value in zip(bars, values):
+        axis.set_xticks([])
+        for bar, status in zip(bars, statuses):
             axis.text(
-                min(0.96, value + 0.03),
+                min(1.03, bar.get_width() + 0.03),
                 bar.get_y() + bar.get_height() / 2,
-                f"{int(value * 100)}%",
+                status[1],
                 color=colors["text"],
                 va="center",
                 fontsize=8,
             )
         if hasattr(self, "dashboardChartInfoLabel"):
             self.dashboardChartInfoLabel.setText(
-                f"显示 {'开' if self.runtime_state.display_on else '关'}，自动昼夜 {'开' if self.config.auto_day_night else '关'}，天气 {self._format_weather_age(self._selected_zone_now().replace(tzinfo=None))}。"
+                f"显示 {'开' if self.runtime_state.display_on else '关'}，自动昼夜 "
+                f"{'开' if self.config.auto_day_night else '关'}，板载闹钟 "
+                f"{1 if self.runtime_state.alarm_enabled else 0}/1，PC 提醒 {enabled_count}/{max(1, total_count)}，"
+                f"天气 {self._format_weather_age(self._selected_zone_now().replace(tzinfo=None))}。"
             )
 
     def _event_category_for_chart(self, kind: str, detail: str) -> str:
@@ -4653,6 +4759,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.cityInfoLabel.setText(
             f"经纬度: {place.latitude:.4f}, {place.longitude:.4f} | 时区: {place.timezone}"
         )
+        self.cityInfoLabel.setText(
+            f"国家/地区: {getattr(place, 'country', '') or '--'} | "
+            f"经纬度: {place.latitude:.4f}, {place.longitude:.4f} | 时区: {place.timezone}"
+        )
         self.weatherInfoLabel.setText(f"天气: {self.weather_summary_text}")
         self._refresh_network_time_label()
         self.ntpStatusLabel.setText(f"最近 NTP: {self.last_ntp_sync_text}")
@@ -4837,6 +4947,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ui.clearLogButton.clicked.connect(self.ui.logTextEdit.clear)
         self.ui.exportLogButton.clicked.connect(self.export_log)
         self.twin.virtual_key_requested.connect(self.send_virtual_key)
+        if hasattr(self.twin, "virtual_key_long_requested"):
+            self.twin.virtual_key_long_requested.connect(self.send_virtual_key_long)
         self.placeSlotCombo.currentIndexChanged.connect(self.select_saved_place)
         if self.lookupCityButton is not None:
             self.lookupCityButton.clicked.connect(self.lookup_city)
@@ -4938,6 +5050,11 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.log("WARN", "城市名为空，未定位。")
             return False
         previous_place = SavedPlace(**self._active_place().__dict__)
+        if log_message:
+            if city.strip().casefold() == previous_place.name.strip().casefold():
+                self.log("INFO", f"当前城市已定位，正在确认时区: {previous_place.name}")
+            else:
+                self.log("INFO", f"正在定位城市/国家: {city}")
         try:
             result = geocode_city(city)
         except Exception as exc:  # noqa: BLE001
@@ -4952,11 +5069,17 @@ class MainWindow(QtWidgets.QMainWindow):
         place.longitude = result.longitude
         place.timezone = result.timezone
         place.utc_offset_seconds = result.utc_offset_seconds
+        place.country = result.country
         self.config.saved_places[self.config.active_place_index] = place
         save_config(APP_DIR, self.config)
         self.sync_extension_widgets_from_config()
         if log_message:
-            self.log("INFO", f"已定位城市: {result.name} ({result.latitude:.4f}, {result.longitude:.4f})")
+            self.log(
+                "INFO",
+                f"城市已定位、时区已获取: {result.name} | {result.country or '--'} | "
+                f"{result.timezone} {format_utc_offset(result.utc_offset_seconds)} | "
+                f"{result.latitude:.4f}, {result.longitude:.4f}",
+            )
         return True
 
     def lookup_city(self) -> None:
@@ -5823,6 +5946,14 @@ class MainWindow(QtWidgets.QMainWindow):
         weather_token = self.weather_watchdog_token
         base_place = SavedPlace(**self._active_place().__dict__)
         city_name = city_text.strip() or base_place.name
+        if log_trigger:
+            if resolve_city:
+                if city_name.strip().casefold() == base_place.name.strip().casefold():
+                    self.log("INFO", f"{trigger_source}: 当前城市已定位，正在确认时区 {base_place.timezone}")
+                else:
+                    self.log("INFO", f"{trigger_source}: 正在定位城市/国家 {city_name} 并获取时区")
+            else:
+                self.log("INFO", f"{trigger_source}: 当前城市已定位、时区已获取，正在拉取天气")
         if hasattr(self, "weatherInfoLabel"):
             self.weatherInfoLabel.setText(f"天气: 正在更新 {city_name} ...")
         if hasattr(self, "syncWeatherApplyButton"):
@@ -5843,6 +5974,7 @@ class MainWindow(QtWidgets.QMainWindow):
                         longitude=result.longitude,
                         timezone=result.timezone,
                         utc_offset_seconds=result.utc_offset_seconds,
+                        country=result.country,
                     )
                     resolved_ok = True
                 snapshot = fetch_weather_snapshot(
@@ -5901,6 +6033,13 @@ class MainWindow(QtWidgets.QMainWindow):
                     f"城市/时区已更新: {resolved_place.name} | {resolved_place.timezone} | "
                     f"{format_utc_offset(resolved_place.utc_offset_seconds)}",
                 )
+                self.log(
+                    "INFO",
+                    f"城市已定位、时区已获取: {resolved_place.name} | "
+                    f"{getattr(resolved_place, 'country', '') or '--'} | "
+                    f"{resolved_place.timezone} {format_utc_offset(resolved_place.utc_offset_seconds)}",
+                )
+                self.log("INFO", f"正在拉取天气: {resolved_place.name}")
         if error is not None:
             self.pending_auto_test_after_apply = False
             self.last_weather_refresh_at = datetime.now()
@@ -6615,6 +6754,12 @@ class MainWindow(QtWidgets.QMainWindow):
         if not self.is_connected:
             if not heartbeat:
                 self.log("TX", cleaned)
+            local_error = self._validate_local_protocol_command(cleaned)
+            if local_error is not None:
+                if not heartbeat:
+                    self.log("RX", f"ERROR {local_error} (LOCAL)")
+                append_event_log(APP_DIR, "local_error", f"{cleaned} -> ERROR {local_error}")
+                return
             if expect:
                 self._handle_local_query(expect)
             else:
@@ -7136,6 +7281,44 @@ class MainWindow(QtWidgets.QMainWindow):
     def send_virtual_key(self, key_name: str) -> None:
         key = key_name.strip().upper()
         self._send_key_command_safely(key, "虚拟按键")
+
+    def send_virtual_key_long(self, key_name: str) -> None:
+        key = key_name.strip().upper()
+        self.twin.highlight_key(key, duration_ms=420)
+        self.log("INFO", f"虚拟长按 {key}")
+        if key == "USER1":
+            next_mode = "NIGHT" if self.last_mode == "DAY" else "DAY"
+            self._remember_mode_request(next_mode, "manual_ui")
+            self._set_mode_state(next_mode)
+            if self.config.auto_day_night:
+                self._disable_auto_day_night_due_to_manual("虚拟 USER1 长按", next_mode)
+            if self.is_connected:
+                self.send_command(f"*SET:MODE {next_mode}")
+            append_event_log(APP_DIR, "key_long", f"USER1->{next_mode}")
+            self._set_latest_event(f"USER1 长按 -> {next_mode}")
+            self.refresh_dashboard()
+            return
+        if key == "DISP":
+            self.runtime_state.display_on = not self.runtime_state.display_on
+            self.ui.displayToggleCombo.setCurrentText("ON" if self.runtime_state.display_on else "OFF")
+            self._save_runtime_state()
+            self._refresh_local_twin_frame()
+            if self.is_connected:
+                self.send_command(f"*SET:DISPLAY {'ON' if self.runtime_state.display_on else 'OFF'}")
+            append_event_log(APP_DIR, "key_long", f"DISP display {'ON' if self.runtime_state.display_on else 'OFF'}")
+            self._set_latest_event(f"DISP 长按 -> 显示 {'ON' if self.runtime_state.display_on else 'OFF'}")
+            self.refresh_dashboard()
+            return
+        if key == "FUNC":
+            self._send_key_command_safely("SAVE", "虚拟 FUNC 长按")
+            return
+        if key == "ADD":
+            self._send_key_command_safely("ADD", "虚拟 ADD 长按")
+            return
+        if key in {"USER2", "EXT", "FORMAT", "SPEED", "SHIFT", "SAVE"}:
+            self._send_key_command_safely(key, f"虚拟长按 {key}")
+            return
+        self.log("WARN", f"虚拟长按 {key} 暂无扩展动作，已忽略。")
 
     def send_raw_command(self) -> None:
         command = self.ui.rawCommandEdit.text().strip()

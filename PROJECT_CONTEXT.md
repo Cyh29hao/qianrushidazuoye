@@ -1,5 +1,15 @@
 # PROJECT_CONTEXT - 智能时钟联网系统
 
+## 2026-06-11 v2.2 全球时区、P1/P2 离线验收与虚拟长按收口
+- P1/数字孪生本地显示修复：离线 YEAR/星期等超过 8 位的页面统一走有限跑马灯，不再只对 WEEKDAY 特判；P1 年份页会滚动显示完整日期文本。
+- 日程管理表格空白点击取消选中已恢复。根因是 `MainWindow` 内存在两个 `eventFilter()`，前一个空白点击逻辑被后一个覆盖；现在已合并到唯一有效的事件过滤器。
+- PC 虚拟按键新增约 0.8 秒长按：`USER1` 长按切 DAY/NIGHT，`DISP` 长按切显示开关，`FUNC` 长按走保存/退出编辑语义，尽量对齐板端物理按键。
+- P2 协议测试在“不使用串口”模式下不再把错误命令统一回 `OK LOCAL`；本地校验器会返回 `ERROR RANGE/PARAM/SYNTAX/LEN (LOCAL)`，覆盖错误模板演示和老师对 ERROR 格式的要求。
+- 全球时区/天气输入增强：Houston、Chicago、New York、Los Angeles、London、Paris、Berlin、Singapore、New Delhi、Sydney 等代表城市中英文/英文名走内置预设；输入国家名如 `美国/USA/日本/Australia` 会定位到首都并保留国家字段。时区优先用 `zoneinfo` 精确计算 IANA/DST，打包环境缺 tzdata 时用内置 offset/DST 兜底。
+- 天气/时区流程日志补充“正在定位城市/国家、时区已获取、正在拉取天气、天气已刷新/失败”，便于用户看到一键操作的多阶段流程。
+- Matplotlib 系统状态图去掉百分比，改为“显示/昼夜/连接/天气/板载闹钟/PC提醒”逻辑顺序，显示 `0/1`、`1/5`、`正常/开` 等实际状态文案。
+- 验证：`pc_host/.venv/Scripts/python.exe -m py_compile ...` 通过；`run_extension_checks.py --host-only` 与 `--host-only --full` 通过；离屏 PyQt 探针确认 YEAR 页帧变化、本地协议错误分类正确；全球城市/国家探针确认 Houston/Chicago 为 `America/Chicago UTC-05:00`（当前夏令时），美国/USA 定位 Washington DC，日本定位 Tokyo，Australia/澳大利亚定位 Canberra。
+
 ## 2026-06-11 v2.2 离线调试与 release 配置保护收口
 - 本轮针对用户“不使用串口”调试体验修复：协议测试台离线发送 `*PING` 会显示 `TX *PING` 与 `RX *PONG LOCAL`；`*GET:TIME` 等查询会回 `OK ... (LOCAL)`，不再因为隐藏心跳日志或没有真板而看不到反馈。
 - 离线虚拟 `DISP` 修复双跳，稳定循环 `TIME -> DATE -> WEEKDAY -> YEAR -> TIME`；未连接串口时虚拟按键、FORMAT/MODE、滚动消息和 NTP 入口不再等待串口安静窗口/板端回读，直接更新影子状态和数字孪生，避免 PC 假死感。
