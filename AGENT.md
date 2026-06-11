@@ -101,4 +101,5 @@
 - `build_release/` 仍然不提交到 Git；只在汇报中说明本地 exe/zip 路径。如需 GitHub Release 附件，另行上传 zip，不把大型打包产物混进普通 commit。
 - 每版 release 文件夹和 zip 都必须包含当前最新的 MCU 工程副本，至少包括 `mcu/src/`、`mcu/Inc/`、`mcu/Driverlib/`、`mcu/RTE/`、`mcu/clock.uvprojx`、`mcu/clock.uvoptx`，方便用户直接打开 Keil5 编译烧录；仍然不要提交 `build_release/`。
 - 打包和烟测 release 时禁止污染用户当前配置。启动源码版或 exe 做烟测时必须设置临时 `SMARTCLOCK_PROFILE_DIR`，并在结束后删除该临时目录；不要修改已有 `pc_host/config.json`、release 目录中的用户配置、日志或日程文件。
+- 打包版正式运行的用户配置目录为 `%APPDATA%\SmartClockHost-v2.2`，后续重新打包、清理 `build_release/`、覆盖 release zip 或做 exe 烟测时都不能删除、覆盖或重置该目录。若需要迁移旧 release 目录中的 `config.json`、`runtime_state.json`、`schedules.json`、`logs/events.jsonl`，只能“目标不存在时复制”，不能覆盖用户已有 AppData 配置。
 - 若因为中文路径导致 PyInstaller/Qt hook 异常，优先使用 `C:\smartclock_latest` junction 或英文临时路径重新打包，不能跳过 exe 交付。

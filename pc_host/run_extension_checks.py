@@ -356,6 +356,8 @@ def execute_checks_on_open_port(
     original_mode = capture_state("*GET:MODE", original_mode, {"DAY", "NIGHT"})
     original_display = capture_state("*GET:DISPLAY", original_display, {"ON", "OFF"})
 
+    total_steps = 11 + (10 if full else 0)
+
     def run(name: str, action, hint: str, settle_s: float = 0.7) -> None:
         nonlocal failed
         if failed:
@@ -368,6 +370,8 @@ def execute_checks_on_open_port(
             _record(results, progress, name, "FAIL", "serial test hard timeout", hint)
             failed = True
             return
+        step_no = len(results) + 1
+        _progress(progress, f"[STEP {step_no}/{total_steps}] {name}")
         _progress(progress, f"[INFO] 开始测试: {name}")
         try:
             action()
@@ -605,20 +609,30 @@ def execute_host_only_checks(
 ) -> tuple[bool, str]:
     _raise_if_cancelled(cancel_event)
     results: list[CheckResult] = []
-    _record(results, progress, "HOST 配置持久化", "OK")
-    _record(results, progress, "HOST 本地模式行为", "OK")
-    _record(results, progress, "PING 心跳", "SKIP", "离线模式不连接真实串口")
-    _record(results, progress, "SET/GET 指令", "SKIP", "离线模式只验证影子状态更新")
-    _record(results, progress, "日期时间写入", "SKIP", "离线模式只写入本地影子板端时间")
-    _record(results, progress, "模式切换", "OK")
-    _record(results, progress, "天气协议", "OK")
-    _record(results, progress, "铃声协议", "OK")
-    _record(results, progress, "快捷键触发", "SKIP", "离线模式不产生物理按键事件")
+    checks = [
+        ("HOST 配置持久化", "OK", ""),
+        ("HOST 本地模式行为", "OK", ""),
+        ("PING 心跳", "SKIP", "离线模式不连接真实串口"),
+        ("SET/GET 指令", "SKIP", "离线模式只验证影子状态更新"),
+        ("日期时间写入", "SKIP", "离线模式只写入本地影子板端时间"),
+        ("模式切换", "OK", ""),
+        ("天气协议", "OK", ""),
+        ("铃声协议", "OK", ""),
+        ("快捷键触发", "SKIP", "离线模式不产生物理按键事件"),
+    ]
     if full:
-        _record(results, progress, "城市/NTP入口", "OK", "已验证 PC 端入口存在；真实网络由界面按钮异步执行")
-        _record(results, progress, "跑马灯与下划线", "OK", "离线数字孪生支持下划线七段码和有限滚动")
-        _record(results, progress, "高并发按键鲁棒性", "SKIP", "离线模式不向真实 MCU 连发按键；请使用 COM 口全面测试")
-        _record(results, progress, "ERROR 格式", "SKIP", "离线模式不连接 MCU，无法验证真实 ERROR 回包")
+        checks.extend(
+            [
+                ("城市/NTP入口", "OK", "已验证 PC 端入口存在；真实网络由界面按钮异步执行"),
+                ("跑马灯与下划线", "OK", "离线数字孪生支持下划线七段码和有限滚动"),
+                ("高并发按键鲁棒性", "SKIP", "离线模式不向真实 MCU 连发按键；请使用 COM 口全面测试"),
+                ("ERROR 格式", "SKIP", "离线模式不连接 MCU，无法验证真实 ERROR 回包"),
+            ]
+        )
+    total_steps = len(checks)
+    for index, (name, status, detail) in enumerate(checks, start=1):
+        _progress(progress, f"[STEP {index}/{total_steps}] {name}")
+        _record(results, progress, name, status, detail)
     return _build_output(results, host_only=True, full=full)
 
 

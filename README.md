@@ -187,7 +187,9 @@ build_release/SmartClockHost-v2.2/SmartClockHost.exe
 
 打包版为 PyInstaller onedir 形式，普通用户双击 `SmartClockHost.exe` 即可启动，不需要额外安装 Python。若同时提供压缩包，文件名通常为 `build_release/SmartClockHost-v2.2.zip`。
 
-打包/烟测时请使用临时运行态目录，例如设置 `SMARTCLOCK_PROFILE_DIR=tmp/release_smoke_profile` 后再启动 exe；这样不会覆盖已有 `config.json`、日程、运行状态或日志。正式使用时不设置该变量，程序会在 exe 所在目录保存用户配置。
+正式使用时不设置 `SMARTCLOCK_PROFILE_DIR`，打包版会把用户配置、日程、运行状态和日志保存到 Windows 用户目录 `%APPDATA%\SmartClockHost-v2.2`。这样以后替换新的 exe 或重新解压 release，不会抹掉已经试用过的配置数据。若旧 release 文件夹里已有 `config.json`、`runtime_state.json`、`schedules.json` 或 `logs/events.jsonl`，程序首次启动会复制到 AppData，但不会覆盖 AppData 中已有的新配置。
+
+打包/烟测时请使用临时运行态目录，例如设置 `SMARTCLOCK_PROFILE_DIR=tmp/release_smoke_profile` 后再启动 exe；这样不会覆盖正式使用时的 AppData 配置、日程、运行状态或日志。
 
 ### 4. 串口连接步骤
 
@@ -206,6 +208,8 @@ build_release/SmartClockHost-v2.2/SmartClockHost.exe
 
 ![Matplotlib 图表看板](docs/screenshots/home-matplotlib-timeline-1600x900.png)
 
+![Matplotlib 日志统计](docs/screenshots/home-matplotlib-log-stats-1600x900.png)
+
 ![黑夜模式图表看板](docs/screenshots/home-matplotlib-night-1600x900.png)
 
 ![系统设置与板端显示](docs/screenshots/system-settings-1280x720.png)
@@ -218,13 +222,14 @@ build_release/SmartClockHost-v2.2/SmartClockHost.exe
 
 串口连接状态放在页面上方“串口连接”模块；主页数据看板只保留适合展示的信息，包括当前时间、日期星期、城市天气、昼夜模式、下次提醒、系统状态和问候语。问候语会按时段显示“早上好 / 中午好 / 下午好 / 晚上好 / 夜深了”，用户名可在系统设置中修改。
 
-主页看板右上角提供“卡片看板 / Matplotlib 图表”切换。卡片看板保持原来的 6 张信息卡，适合课堂演示时快速说明当前状态；Matplotlib 图表看板用于完成扩展功能 E4，可在不离开主页的情况下切换三类筛选图：
+主页看板右上角提供“卡片看板 / Matplotlib 图表”切换。卡片看板保持原来的 6 张信息卡，适合课堂演示时快速说明当前状态；Matplotlib 图表看板用于完成扩展功能 E4，可在不离开主页的情况下切换四类筛选图：
 
 - 今日时间轴：展示当前城市时间、日照区间和今日下次提醒位置。
 - 提醒分布：按星期汇总已启用的单次日期提醒和每周提醒。
 - 系统状态：把显示开关、自动昼夜、串口/本地模式、天气缓存和提醒数量可视化。
+- 日志统计：统计过去 24 小时内板端显示、NTP/天气、闹钟日程、昼夜模式、自动测试、系统设置、错误警告等不同类型操作数量。
 
-图表会跟随白天/黑夜主题重绘，使用当前城市、天气缓存、板载闹钟和 PC 日程数据，不会抢占右侧数字孪生镜像，也不会改变 MCU 通信协议。
+图表会跟随白天/黑夜主题重绘，使用当前城市、天气缓存、板载闹钟、PC 日程和本地事件日志数据，不会抢占右侧数字孪生镜像，也不会改变 MCU 通信协议。图表刷新已做防抖和异常保护，即使 Matplotlib 单个图绘制失败，主程序也会继续运行并在日志提示。
 
 日期和时间编辑框用于设置板端时间。修改后点击对应设置按钮会通过串口发送到 MCU；离线模式下会修改 PC 本地镜像时间。
 
@@ -315,7 +320,7 @@ NTP 成功后，PC 会以获取到的城市时间作为基准，再用单调时�
 
 界面提供两个入口：`快速联合测试` 覆盖 PING、GET、日期时间写入、昼夜切到另一模式再切回、铃声和 USER2 天气短显实测；USER2 项会先下发天气缓存，再等待 `*EVT:DISP` 中出现天气 token，不能只凭 `OK` 通过。`全面联合测试` 会额外覆盖跑马灯下划线、DISP/SPEED/FORMAT/EXT 按键、高并发按键 burst 和全部 ERROR 类型。当前测试脚本按“上一项稳定后再下一项”的节奏执行，预计耗时约 45 秒/140 秒；任一串口项 FAIL 会立即停止后续项目，并在收尾时恢复测试前的 `FORMAT`、`MODE`、`DISPLAY` 和自动昼夜开关状态。测试运行时页脚会显示“测试中”，并忽略人工串口操作；如发现疑似硬件端卡死，会提示“请手动 RESET”。
 
-自动测试开始后会出现“中止测试”按钮。点击后不会立刻粗暴断串口，而是请求当前步骤尽快退出、停止后续测试项，并执行收尾恢复；测试结束后会回到启动测试前的左侧页面。测试输出框只显示每项测试做了什么、OK/FAIL 和结论，完整 TX/RX 仍保留在右侧日志区用于排查。
+自动测试开始后会出现“中止测试”按钮。点击后不会立刻粗暴断串口，而是请求当前步骤尽快退出、停止后续测试项，并执行收尾恢复；测试结束后会回到启动测试前的左侧页面。测试输出框按 `[当前/总数] 项目名` 显示进度，快速测试约 11 项，全面测试约 21 项；左侧只保留每项做了什么、OK/FAIL 和结论，完整 TX/RX 仍保留在右侧日志区用于排查。
 
 点击开始测试后，界面会显示预计测试时间。每完成一个测试点，会追加一行 `OK`、`FAIL` 或 `SKIP`。测试全部结束后，失败项会附带简短排查方向，便于定位是串口、板端响应、显示同步还是网络条件问题。
 

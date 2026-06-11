@@ -3,29 +3,45 @@ from __future__ import annotations
 import html
 import os
 import random
+import shutil
 import subprocess
 import sys
 import threading
 import time
-from collections import deque
+from collections import Counter, deque
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from bootstrap_qt import configure_qt_runtime
 
+APP_VERSION = "v2.2"
 APP_BASE_DIR = (
     Path(sys.executable).resolve().parent
     if getattr(sys, "frozen", False)
     else Path(__file__).resolve().parent
 )
-APP_DIR = Path(os.environ.get("SMARTCLOCK_PROFILE_DIR", APP_BASE_DIR)).resolve()
+
+
+def _resolve_profile_dir() -> Path:
+    explicit_profile = os.environ.get("SMARTCLOCK_PROFILE_DIR")
+    if explicit_profile:
+        return Path(explicit_profile).resolve()
+    if getattr(sys, "frozen", False):
+        appdata = os.environ.get("APPDATA")
+        if appdata:
+            return (Path(appdata) / "SmartClockHost-v2.2").resolve()
+        return (Path.home() / "AppData" / "Roaming" / "SmartClockHost-v2.2").resolve()
+    return APP_BASE_DIR
+
+
+APP_DIR = _resolve_profile_dir()
 BUNDLE_DIR = Path(getattr(sys, "_MEIPASS", APP_BASE_DIR))
 QT_RUNTIME = configure_qt_runtime(APP_BASE_DIR)
-APP_VERSION = "v2.2"
 GITHUB_URL = "https://github.com/Cyh29hao"
 LOGO_PATH = BUNDLE_DIR / "assets" / "clock_logo.svg"
 ICON_PATH = BUNDLE_DIR / "assets" / "clock_logo.ico"
 LOCAL_MODE_LABEL = "不使用串口"
+PROFILE_FILES = ("config.json", "runtime_state.json", "schedules.json")
 LED_BIT_LABELS = [
     ("D1", "心跳"),
     ("D2", "闹钟"),
@@ -36,6 +52,31 @@ LED_BIT_LABELS = [
     ("D7", "RIGHT"),
     ("D8", "手动覆盖"),
 ]
+
+
+def migrate_legacy_release_profile() -> None:
+    if not getattr(sys, "frozen", False):
+        return
+    if os.environ.get("SMARTCLOCK_PROFILE_DIR"):
+        return
+    if APP_DIR == APP_BASE_DIR:
+        return
+    legacy_has_data = any((APP_BASE_DIR / name).exists() for name in PROFILE_FILES) or (
+        APP_BASE_DIR / "logs" / "events.jsonl"
+    ).exists()
+    if not legacy_has_data:
+        return
+    APP_DIR.mkdir(parents=True, exist_ok=True)
+    for name in PROFILE_FILES:
+        source = APP_BASE_DIR / name
+        target = APP_DIR / name
+        if source.exists() and not target.exists():
+            shutil.copy2(source, target)
+    legacy_log = APP_BASE_DIR / "logs" / "events.jsonl"
+    target_log = APP_DIR / "logs" / "events.jsonl"
+    if legacy_log.exists() and not target_log.exists():
+        target_log.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(legacy_log, target_log)
 
 
 def _set_windows_app_user_model_id() -> None:
@@ -187,6 +228,7 @@ class CollapsibleNavWidget(QtWidgets.QWidget):
         self.items: list[tuple[str, QtWidgets.QWidget]] = []
         self.current_index = 0
         self.menu_open = False
+        self.option_buttons: list[QtWidgets.QPushButton] = []
 
         self.selector_button = QtWidgets.QPushButton(self)
         self.selector_button.setObjectName("accordionHeader")
@@ -194,10 +236,14 @@ class CollapsibleNavWidget(QtWidgets.QWidget):
         self.selector_button.clicked.connect(self.toggle_menu)
 
         self.menu_widget = QtWidgets.QWidget(self)
+        self.menu_widget.setObjectName("accordionPopup")
+        self.menu_widget.setWindowFlags(QtCore.Qt.Popup | QtCore.Qt.FramelessWindowHint)
+        self.menu_widget.setAttribute(QtCore.Qt.WA_StyledBackground, True)
         self.menu_layout = QtWidgets.QVBoxLayout(self.menu_widget)
-        self.menu_layout.setContentsMargins(0, 0, 0, 0)
-        self.menu_layout.setSpacing(8)
+        self.menu_layout.setContentsMargins(8, 8, 8, 8)
+        self.menu_layout.setSpacing(6)
         self.menu_widget.setVisible(False)
+        self.menu_widget.installEventFilter(self)
 
         self.stack = QtWidgets.QStackedWidget(self)
 
@@ -205,8 +251,14 @@ class CollapsibleNavWidget(QtWidgets.QWidget):
         self.main_layout.setContentsMargins(0, 0, 0, 0)
         self.main_layout.setSpacing(10)
         self.main_layout.addWidget(self.selector_button)
-        self.main_layout.addWidget(self.menu_widget)
         self.main_layout.addWidget(self.stack, 1)
+
+    def eventFilter(self, obj, event):  # noqa: N802 - Qt API
+        if obj is self.menu_widget and event.type() == QtCore.QEvent.Hide:
+            if self.menu_open:
+                self.menu_open = False
+                QtCore.QTimer.singleShot(0, self._refresh_selector_text)
+        return super().eventFilter(obj, event)
 
     def add_section(self, title: str, content: QtWidgets.QWidget) -> None:
         index = len(self.items)
@@ -218,13 +270,32 @@ class CollapsibleNavWidget(QtWidgets.QWidget):
         option_button.setCursor(QtCore.Qt.PointingHandCursor)
         option_button.clicked.connect(lambda _checked=False, idx=index: self.select_index(idx))
         self.menu_layout.addWidget(option_button)
+        self.option_buttons.append(option_button)
 
         if index == 0:
             self.select_index(0)
 
     def toggle_menu(self) -> None:
         self.menu_open = not self.menu_open
-        self.menu_widget.setVisible(self.menu_open)
+        if self.menu_open:
+            self._show_popup_menu()
+        else:
+            self.menu_widget.hide()
+        self._refresh_selector_text()
+
+    def _show_popup_menu(self) -> None:
+        width = max(self.selector_button.width(), 220)
+        height = self.menu_widget.sizeHint().height()
+        self.menu_widget.resize(width, height)
+        pos = self.selector_button.mapToGlobal(
+            QtCore.QPoint(0, self.selector_button.height() + 4)
+        )
+        self.menu_widget.move(pos)
+        self.menu_widget.show()
+
+    def _hide_popup_menu(self) -> None:
+        self.menu_open = False
+        self.menu_widget.hide()
         self._refresh_selector_text()
 
     def select_index(self, index: int) -> None:
@@ -232,8 +303,7 @@ class CollapsibleNavWidget(QtWidgets.QWidget):
             return
         self.current_index = index
         self.stack.setCurrentIndex(index)
-        self.menu_open = False
-        self.menu_widget.setVisible(False)
+        self._hide_popup_menu()
         self._refresh_selector_text()
 
     def _refresh_selector_text(self) -> None:
@@ -242,6 +312,10 @@ class CollapsibleNavWidget(QtWidgets.QWidget):
             return
         title = self.items[self.current_index][0]
         self.selector_button.setText(f"{'▼' if self.menu_open else '▶'} {title}")
+        for index, button in enumerate(self.option_buttons):
+            button.setProperty("selected", index == self.current_index)
+            button.style().unpolish(button)
+            button.style().polish(button)
 
 
 class MainWindow(QtWidgets.QMainWindow):
@@ -255,6 +329,7 @@ class MainWindow(QtWidgets.QMainWindow):
         install_stable_arrow_style()
         self.ui = Ui_MainWindow()
         self.ui.setupUi(self)
+        migrate_legacy_release_profile()
         ensure_storage(APP_DIR)
         self.config: AppConfig = load_config(APP_DIR)
         self.runtime_state: RuntimeState = load_runtime_state(APP_DIR)
@@ -282,6 +357,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.last_selected_zone_time = "--:--:--"
         self.last_dashboard_minute = ""
         self.dashboard_chart_filter = "timeline"
+        self.dashboard_chart_render_pending = False
+        self.dashboard_chart_last_error = ""
         self.last_display_event: tuple[str, int] | None = None
         self.last_led_event: int | None = None
         self.last_board_display_monotonic = 0.0
@@ -414,6 +491,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ping_timer = QtCore.QTimer(self)
         self.ping_timer.setInterval(2000)
         self.ping_timer.timeout.connect(self.send_ping)
+
+        self.dashboard_chart_timer = QtCore.QTimer(self)
+        self.dashboard_chart_timer.setSingleShot(True)
+        self.dashboard_chart_timer.setInterval(120)
+        self.dashboard_chart_timer.timeout.connect(self._render_dashboard_chart_now)
 
         self.refresh_ports()
         self.sync_extension_widgets_from_config()
@@ -1294,6 +1376,7 @@ class MainWindow(QtWidgets.QMainWindow):
             "timeline": getattr(self, "dashboardChartTimelineButton", None),
             "schedule": getattr(self, "dashboardChartScheduleButton", None),
             "status": getattr(self, "dashboardChartStatusButton", None),
+            "logs": getattr(self, "dashboardChartLogsButton", None),
         }
         for name, button in buttons.items():
             if button is None:
@@ -1317,16 +1400,32 @@ class MainWindow(QtWidgets.QMainWindow):
             button.style().unpolish(button)
             button.style().polish(button)
         if show_chart:
-            self._render_dashboard_chart()
+            self._schedule_dashboard_chart_render(force=True)
 
     def set_dashboard_chart_filter(self, filter_name: str) -> None:
-        if filter_name not in {"timeline", "schedule", "status"}:
+        if filter_name not in {"timeline", "schedule", "status", "logs"}:
             filter_name = "timeline"
         self.dashboard_chart_filter = filter_name
         self._set_dashboard_filter_buttons()
-        self._render_dashboard_chart()
+        self._schedule_dashboard_chart_render(force=True)
 
-    def _render_dashboard_chart(self) -> None:
+    def _schedule_dashboard_chart_render(self, *, force: bool = False) -> None:
+        if not hasattr(self, "dashboardStack") or self.dashboardStack.currentIndex() != 1:
+            return
+        if not MATPLOTLIB_AVAILABLE:
+            return
+        if force:
+            self.dashboard_chart_timer.stop()
+            self.dashboard_chart_render_pending = False
+            self._render_dashboard_chart_now()
+            return
+        if self.dashboard_chart_render_pending:
+            return
+        self.dashboard_chart_render_pending = True
+        self.dashboard_chart_timer.start()
+
+    def _render_dashboard_chart_now(self) -> None:
+        self.dashboard_chart_render_pending = False
         if (
             not MATPLOTLIB_AVAILABLE
             or not hasattr(self, "dashboardFigure")
@@ -1335,18 +1434,41 @@ class MainWindow(QtWidgets.QMainWindow):
             or self.dashboardCanvas is None
         ):
             return
-        colors = self._dashboard_chart_colors()
-        self.dashboardFigure.clear()
-        self.dashboardFigure.set_facecolor(colors["figure"])
-        filter_name = getattr(self, "dashboard_chart_filter", "timeline")
-        if filter_name == "schedule":
-            self._render_schedule_chart(colors)
-        elif filter_name == "status":
-            self._render_status_chart(colors)
-        else:
-            self._render_timeline_chart(colors)
-        self.dashboardFigure.tight_layout(pad=1.1)
-        self.dashboardCanvas.draw_idle()
+        try:
+            colors = self._dashboard_chart_colors()
+            self.dashboardFigure.clear()
+            self.dashboardFigure.set_facecolor(colors["figure"])
+            filter_name = getattr(self, "dashboard_chart_filter", "timeline")
+            if filter_name == "schedule":
+                self._render_schedule_chart(colors)
+            elif filter_name == "status":
+                self._render_status_chart(colors)
+            elif filter_name == "logs":
+                self._render_log_stats_chart(colors)
+            else:
+                self._render_timeline_chart(colors)
+            self.dashboardFigure.tight_layout(pad=1.0)
+            self.dashboardCanvas.draw_idle()
+            self.dashboard_chart_last_error = ""
+        except Exception as exc:  # noqa: BLE001
+            self.dashboard_chart_last_error = str(exc)
+            self.dashboardFigure.clear()
+            colors = self._dashboard_chart_colors()
+            self.dashboardFigure.set_facecolor(colors["figure"])
+            axis = self.dashboardFigure.add_subplot(111)
+            axis.set_facecolor(colors["axes"])
+            axis.axis("off")
+            axis.text(
+                0.5,
+                0.5,
+                "图表绘制失败，主程序已继续运行。\n请查看日志或重新切换筛选。",
+                color=colors["danger"],
+                ha="center",
+                va="center",
+                fontsize=10,
+            )
+            self.dashboardCanvas.draw_idle()
+            self.log("WARN", f"Matplotlib 图表绘制失败，已保护主窗口不退出：{exc}")
         self._set_dashboard_filter_buttons()
 
     def _render_timeline_chart(self, colors: dict[str, str]) -> None:
@@ -1490,6 +1612,105 @@ class MainWindow(QtWidgets.QMainWindow):
             self.dashboardChartInfoLabel.setText(
                 f"显示 {'开' if self.runtime_state.display_on else '关'}，自动昼夜 {'开' if self.config.auto_day_night else '关'}，天气 {self._format_weather_age(self._selected_zone_now().replace(tzinfo=None))}。"
             )
+
+    def _event_category_for_chart(self, kind: str, detail: str) -> str:
+        text = f"{kind} {detail}".upper()
+        if kind in {"ntp_sync", "auto_time_sync", "weather_error", "weather_timeout"} or "NTP" in text or "WEATHER" in text:
+            return "NTP/天气"
+        if kind in {"schedule_fire", "schedule_save", "schedule_delete", "alarm"} or "ALARM" in text or "SCHEDULE" in text:
+            return "闹钟/日程"
+        if kind in {"mode", "auto_mode", "auto_mode_disabled", "mode_resync"} or "MODE" in text or "DAY" in text or "NIGHT" in text:
+            return "昼夜模式"
+        if kind in {"key", "local_apply", "message_rejected", "state_recover"} or "KEY" in text or "MSG" in text or "DISPLAY" in text:
+            return "板端/显示"
+        if kind in {"test_run"} or "TEST" in text or "测试" in detail:
+            return "自动测试"
+        if kind in {"error", "ntp_error"} or "ERROR" in text or "WARN" in text:
+            return "错误/警告"
+        if kind in {"factory_reset", "user_name", "auto_day_night_toggle"}:
+            return "系统设置"
+        return "其它操作"
+
+    def _recent_operation_counts(self) -> Counter[str]:
+        cutoff = datetime.now() - timedelta(hours=24)
+        counts: Counter[str] = Counter()
+        for entry in load_recent_event_logs(APP_DIR, limit=1200):
+            when_text = str(entry.get("when", ""))
+            try:
+                when = datetime.strptime(when_text[:19], "%Y-%m-%d %H:%M:%S")
+            except ValueError:
+                continue
+            if when < cutoff:
+                continue
+            kind = str(entry.get("kind", "event") or "event")
+            detail = str(entry.get("detail", "") or "")
+            counts[self._event_category_for_chart(kind, detail)] += 1
+        return counts
+
+    def _render_log_stats_chart(self, colors: dict[str, str]) -> None:
+        axis = self.dashboardFigure.add_subplot(111)
+        self._style_dashboard_axis(axis, colors)
+        counts = self._recent_operation_counts()
+        preferred_order = [
+            "板端/显示",
+            "NTP/天气",
+            "闹钟/日程",
+            "昼夜模式",
+            "自动测试",
+            "系统设置",
+            "错误/警告",
+            "其它操作",
+        ]
+        labels = [label for label in preferred_order if counts.get(label, 0) > 0]
+        values = [counts[label] for label in labels]
+        axis.set_title("过去 24 小时操作统计", fontsize=11, pad=8)
+        if not labels:
+            axis.set_xlim(0, 1)
+            axis.set_ylim(0, 1)
+            axis.set_xticks([])
+            axis.set_yticks([])
+            axis.text(
+                0.5,
+                0.5,
+                "暂无可统计日志\n连接串口、刷新天气或运行测试后会自动出现",
+                color=colors["muted"],
+                fontsize=10,
+                ha="center",
+                va="center",
+            )
+            info = "过去 24 小时暂无操作日志；这不会影响主程序运行。"
+        else:
+            y_positions = list(range(len(labels)))
+            bar_colors = [
+                colors["primary"],
+                colors["secondary"],
+                colors["accent"],
+                colors["primary"],
+                colors["secondary"],
+                colors["accent"],
+                colors["danger"],
+                colors["muted"],
+            ][: len(labels)]
+            bars = axis.barh(y_positions, values, color=bar_colors, alpha=0.88)
+            axis.set_yticks(y_positions)
+            axis.set_yticklabels(labels)
+            axis.invert_yaxis()
+            axis.set_xlabel("次数")
+            axis.set_xlim(0, max(values) + 1)
+            for bar, value in zip(bars, values):
+                axis.text(
+                    value + 0.05,
+                    bar.get_y() + bar.get_height() / 2,
+                    str(value),
+                    color=colors["text"],
+                    va="center",
+                    fontsize=8,
+                )
+            total = sum(values)
+            top_label = labels[values.index(max(values))]
+            info = f"过去 24 小时记录 {total} 次操作；最活跃类型：{top_label}（{max(values)} 次）。"
+        if hasattr(self, "dashboardChartInfoLabel"):
+            self.dashboardChartInfoLabel.setText(info)
 
     def _greeting_text(self, now: datetime) -> str:
         name = (self.config.user_name or "用户").strip() or "用户"
@@ -2027,6 +2248,16 @@ class MainWindow(QtWidgets.QMainWindow):
             QPushButton#accordionOptionButton:pressed {{
                 background: {palette['button_pressed']};
             }}
+            QPushButton#accordionOptionButton[selected="true"] {{
+                background: {palette['button_pressed']};
+                border: 2px solid {palette['button_hover']};
+                padding: 5px 12px;
+            }}
+            QWidget#accordionPopup {{
+                background: {palette['group_bg']};
+                border: 1px solid {palette['group_border']};
+                border-radius: 10px;
+            }}
             QScrollArea {{
                 border: none;
                 background: transparent;
@@ -2069,7 +2300,7 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         self._apply_dynamic_theme_overrides(night, palette)
         if hasattr(self, "dashboardStack") and self.dashboardStack.currentIndex() == 1:
-            self._render_dashboard_chart()
+            self._schedule_dashboard_chart_render(force=True)
 
     def _apply_dynamic_theme_overrides(self, night: bool, palette: dict[str, str]) -> None:
         arrow_url = self._asset_qss_url(
@@ -3691,14 +3922,16 @@ class MainWindow(QtWidgets.QMainWindow):
         self.dashboardChartTimelineButton = QtWidgets.QPushButton("今日时间轴", side_frame)
         self.dashboardChartScheduleButton = QtWidgets.QPushButton("提醒分布", side_frame)
         self.dashboardChartStatusButton = QtWidgets.QPushButton("系统状态", side_frame)
+        self.dashboardChartLogsButton = QtWidgets.QPushButton("日志统计", side_frame)
         for button in (
             self.dashboardChartTimelineButton,
             self.dashboardChartScheduleButton,
             self.dashboardChartStatusButton,
+            self.dashboardChartLogsButton,
         ):
             button.setMinimumHeight(34)
             button.setCursor(QtCore.Qt.PointingHandCursor)
-        self.dashboardChartInfoLabel = QtWidgets.QLabel("展示当前城市时间、天气、提醒和系统状态。", side_frame)
+        self.dashboardChartInfoLabel = QtWidgets.QLabel("展示当前城市时间、天气、提醒、系统状态和 24 小时操作统计。", side_frame)
         self.dashboardChartInfoLabel.setWordWrap(True)
         self.dashboardChartInfoLabel.setProperty("dashboardSub", True)
         self.dashboardChartInfoLabel.setStyleSheet("")
@@ -3707,6 +3940,7 @@ class MainWindow(QtWidgets.QMainWindow):
         side_layout.addWidget(self.dashboardChartTimelineButton)
         side_layout.addWidget(self.dashboardChartScheduleButton)
         side_layout.addWidget(self.dashboardChartStatusButton)
+        side_layout.addWidget(self.dashboardChartLogsButton)
         side_layout.addWidget(self.dashboardChartInfoLabel, 1)
 
         layout.addWidget(chart_frame, 1)
@@ -4505,7 +4739,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 detail = entry.get("detail", "")
                 dashboard_event_list.addItem(f"{when} | {kind} | {detail}")
         if hasattr(self, "dashboardStack") and self.dashboardStack.currentIndex() == 1:
-            self._render_dashboard_chart()
+            self._schedule_dashboard_chart_render()
 
     def _wire_signals(self) -> None:
         self.ui.refreshPortsButton.clicked.connect(self.refresh_ports)
@@ -4527,6 +4761,10 @@ class MainWindow(QtWidgets.QMainWindow):
         if hasattr(self, "dashboardChartStatusButton"):
             self.dashboardChartStatusButton.clicked.connect(
                 lambda: self.set_dashboard_chart_filter("status")
+            )
+        if hasattr(self, "dashboardChartLogsButton"):
+            self.dashboardChartLogsButton.clicked.connect(
+                lambda: self.set_dashboard_chart_filter("logs")
             )
         self.ui.applyDateButton.clicked.connect(self.apply_date)
         self.ui.queryDateButton.clicked.connect(lambda: self.send_command("*GET:DATE", "DATE"))
@@ -6931,10 +7169,16 @@ class MainWindow(QtWidgets.QMainWindow):
         stripped = line.strip()
         if not stripped:
             return ""
+        if stripped.startswith("[STEP "):
+            marker_end = stripped.find("]")
+            if marker_end > 6:
+                marker = stripped[6:marker_end].strip()
+                name = stripped[marker_end + 1 :].strip()
+                return f"[{marker}] {name}"
         if stripped.startswith("[TX] ") or stripped.startswith("[RX] "):
             return ""
         if stripped.startswith("[INFO] 开始测试:"):
-            return "开始：" + stripped.split(":", 1)[1].strip()
+            return ""
         if stripped.startswith("[INFO] Rapid key burst"):
             return "开始：高并发按键鲁棒性测试"
         if stripped.startswith("[WARN] "):

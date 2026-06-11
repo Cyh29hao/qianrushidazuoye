@@ -4,6 +4,20 @@
 
 ## 2026-06-11
 
+### v2.2 exe 菜单卡顿与日志统计图收口
+
+#### 已完成修改
+- 左上角页面选择由“展开后挤压主布局”的内嵌菜单改为轻量弹出式菜单，避免打开菜单时触发左侧页面、右侧数字孪生和 Matplotlib 画布整体重排，降低 exe 卡顿/闪退风险。
+- Matplotlib 图表刷新改为按需防抖；图表绘制异常会退化为图内提示和日志 WARN，不再把主窗口带崩。
+- Matplotlib 图表新增“日志统计”筛选，按过去 24 小时统计板端/显示、NTP/天气、闹钟日程、昼夜模式、自动测试、系统设置、错误警告等操作数量。
+- 自动测试脚本进度输出新增 `[STEP 当前/总数]`；PC 左侧测试输出会显示 `[当前/总数] 项目名`，方便用户知道当前跑到哪里。
+- 打包版默认运行态从 exe 目录改为 `%APPDATA%\SmartClockHost-v2.2`；首次启动会把旧 release 文件夹中的配置/日程/运行状态/事件日志复制到 AppData，但不会覆盖已有 AppData 数据。打包/烟测仍可用 `SMARTCLOCK_PROFILE_DIR` 指向临时目录。
+
+#### 验证结果
+- `python -m py_compile pc_host/app.py pc_host/run_extension_checks.py pc_host/protocol.py pc_host/twin_widgets.py pc_host/extension_services.py pc_host/extension_store.py` 通过。
+- 源码版真实 Qt 探针通过：1600x900 下连续切换四个 Matplotlib 筛选、反复打开/关闭页面菜单，`dashboard_chart_last_error` 为空，右侧数字孪生保持 420px 未被挤掉。
+- `pc_host/run_extension_checks.py --host-only --full` 通过；进度 callback 显示 host-only full 共 13 项。
+
 ### v2.2 Matplotlib 数据可视化看板补齐
 
 #### 已完成修改
