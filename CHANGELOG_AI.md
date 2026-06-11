@@ -4,6 +4,26 @@
 
 ## 2026-06-11
 
+### v2.2 最终体验复测、冷启动与离线即时响应收口
+
+#### 已完成修改
+- Matplotlib 从启动时导入改为用户首次打开“Matplotlib 图表”时再懒加载，减少打包 exe 冷启动和打开菜单时的卡顿风险；图表页首次打开会显示加载提示，加载失败时只在图表区域提示，不会让主窗口退出。
+- 启动自动天气刷新延后约 18 秒，避免主界面刚出现时立刻发起网络请求；天气/NTP 仍保持后台线程和 timeout，不阻塞 UI、串口接收或数字孪生。
+- 串口端口扫描从 UI 主线程改为后台线程，`COM5` 自动发现仍保留，但 Windows 串口枚举不再卡住页面菜单、切页和按钮操作。
+- 本地/不使用串口路径改为轻量刷新：`DISP`、`USER2`、`*SET:MSG A_B_TEST` 等离线操作只更新影子状态、必要控件和数字孪生，不再每次触发全局主题/表单重刷。
+- 新增单次日程保存保护：如果用户打开页面太久导致“默认当前时间 +1 分钟”已经过期，新建单次提醒会自动顺延到当前时间 +1 分钟并写 INFO 日志；编辑已有提醒仍保持原来的过期警告，避免静默改用户数据。
+- 日程提醒在本地/未连接模式下也会写清楚铃声日志，说明只是记录本地提醒、不下发板端。
+
+#### 验证结果
+- `pc_host/.venv/Scripts/python.exe -m py_compile pc_host/app.py pc_host/protocol.py pc_host/twin_widgets.py pc_host/extension_services.py pc_host/extension_store.py pc_host/run_extension_checks.py` 通过。
+- `pc_host/.venv/Scripts/python.exe pc_host/run_extension_checks.py --host-only --full` 通过。
+- COM5 实板测试通过两轮：一次 `--port COM5` quick 通过；一次 `--port COM5 --full` 全面测试通过，覆盖 PING、GET、SET DATE/TIME、MODE DAY/NIGHT、WEATHER、RING、USER2 安全天气短显、`A_B_TEST` 下划线跑马灯、DISP/SPEED/FORMAT/EXT、高并发按键 burst 和 ERROR LEN/SYNTAX/PARAM/RANGE。
+- 本地模式真实 Qt 探针确认选择“不使用串口”后，`*PING`、连续 4 次 `*SET:KEY DISP`、`*SET:KEY USER1`、`*SET:KEY USER2`、`*SET:MSG A_B_TEST` 均在约 26-49 ms 内完成；DISP 循环为 `TIME -> DATE -> WEEKDAY -> YEAR -> TIME`，`USER2` 无天气显示 `NO WX`，下划线消息直接显示 `A_B_TEST`。
+- 源码 UI 探针确认用户机器约 `1080x639` 可用逻辑桌面下窗口为 `1015x600`，左右分栏约 `[569, 420]`，系统设置/闹钟与日程/调试与测试页横向滚动最大值为 `0`；菜单开合约 54-63 ms，切页约 14-90 ms。
+- Matplotlib 图表首次加载约 6.3 秒，四类筛选后续切换约 0.3-0.5 秒，`dashboard_chart_last_error` 为空；这是按需加载的可接受首次成本，不再拖慢普通启动和不看图表的演示流程。
+- v2.2 release 已重新打包：`build_release/SmartClockHost-v2.2/SmartClockHost.exe`、`build_release/SmartClockHost-v2.2.zip`、`for_submit/release/SmartClockHost-v2.2.zip` 均更新。打包/烟测使用临时 `SMARTCLOCK_PROFILE_DIR`，release 目录确认无 `config.json/runtime_state.json/schedules.json/logs` 残留。
+- 打包 exe 冷启动临时 profile 烟测：进程未闪退，5 秒已有进程，10 秒采样点短暂 `Responding=False`，15/25/35 秒均恢复 `Responding=True`。当前结论是未见闪退和长期假死，但低配/杀毒环境下首次 PyInstaller + Qt/Matplotlib 解包仍可能有十秒级短暂忙碌。
+
 ### v2.2 全球时区/P1-P2/虚拟长按收口
 
 #### 已完成修改

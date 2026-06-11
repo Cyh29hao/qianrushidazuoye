@@ -94,25 +94,38 @@ import serial
 from PyQt5 import QtCore, QtGui, QtWidgets
 from serial.tools import list_ports
 
-try:
-    import matplotlib
+FigureCanvas = None
+Figure = None
+MATPLOTLIB_AVAILABLE = None
 
-    matplotlib.use("Qt5Agg")
-    matplotlib.rcParams["font.sans-serif"] = [
-        "Microsoft YaHei",
-        "SimHei",
-        "Arial Unicode MS",
-        "DejaVu Sans",
-    ]
-    matplotlib.rcParams["axes.unicode_minus"] = False
-    from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
-    from matplotlib.figure import Figure
 
-    MATPLOTLIB_AVAILABLE = True
-except Exception:
-    FigureCanvas = None
-    Figure = None
-    MATPLOTLIB_AVAILABLE = False
+def ensure_matplotlib_loaded() -> bool:
+    """Load matplotlib only when the user opens the chart dashboard."""
+    global FigureCanvas, Figure, MATPLOTLIB_AVAILABLE
+    if MATPLOTLIB_AVAILABLE is not None:
+        return bool(MATPLOTLIB_AVAILABLE)
+    try:
+        import matplotlib
+
+        matplotlib.use("Qt5Agg")
+        matplotlib.rcParams["font.sans-serif"] = [
+            "Microsoft YaHei",
+            "SimHei",
+            "Arial Unicode MS",
+            "DejaVu Sans",
+        ]
+        matplotlib.rcParams["axes.unicode_minus"] = False
+        from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg
+        from matplotlib.figure import Figure as MatplotlibFigure
+
+        FigureCanvas = FigureCanvasQTAgg
+        Figure = MatplotlibFigure
+        MATPLOTLIB_AVAILABLE = True
+    except Exception:
+        FigureCanvas = None
+        Figure = None
+        MATPLOTLIB_AVAILABLE = False
+    return bool(MATPLOTLIB_AVAILABLE)
 
 from extension_services import (
     build_weather_led_mask,
@@ -324,6 +337,7 @@ class MainWindow(QtWidgets.QMainWindow):
     ntp_sync_finished = QtCore.pyqtSignal(object, object, str, int)
     test_point_finished = QtCore.pyqtSignal(str)
     test_run_finished = QtCore.pyqtSignal(str, bool)
+    ports_scanned = QtCore.pyqtSignal(list)
 
     def __init__(self) -> None:
         super().__init__()
@@ -441,9 +455,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self.boot_mirror_generation = 0
         self.startup_sync_pending = False
         self._startup_theme_polished = False
+        self.startup_weather_allowed_at = time.monotonic() + 18.0
         self.syncing_extension_widgets = False
         self.preferred_port_name = ""
         self.manual_port_choice_made = False
+        self.port_scan_in_progress = False
+        self.last_scanned_ports: list[str] = []
         self.serial_io_lock = threading.RLock()
         self.test_saved_auto_day_night: bool | None = None
         self.test_saved_runtime_state: RuntimeState | None = None
@@ -474,6 +491,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ntp_sync_finished.connect(self._finish_ntp_sync)
         self.test_point_finished.connect(self._append_test_output_line)
         self.test_run_finished.connect(self._finish_test_run)
+        self.ports_scanned.connect(self._finish_port_scan)
 
         self.port_timer = QtCore.QTimer(self)
         self.port_timer.setInterval(1500)
@@ -705,6 +723,42 @@ class MainWindow(QtWidgets.QMainWindow):
                         except OSError:
                             break
                         self._add_port_name(names, str(value_data))
+                        index += 1
+            except Exception:  # noqa: BLE001
+                pass
+        return names
+
+    @staticmethod
+    def _scan_serial_port_names_worker() -> list[str]:
+        names: list[str] = []
+
+        def add_name(text: str) -> None:
+            candidate = (text or "").strip()
+            if candidate.lower().startswith("com") and candidate[3:].isdigit():
+                candidate = f"COM{candidate[3:]}"
+            if candidate and candidate not in names:
+                names.append(candidate)
+
+        try:
+            for port in list_ports.comports():
+                add_name(getattr(port, "device", ""))
+        except Exception:  # noqa: BLE001
+            pass
+        if os.name == "nt":
+            try:
+                import winreg
+
+                with winreg.OpenKey(
+                    winreg.HKEY_LOCAL_MACHINE,
+                    r"HARDWARE\DEVICEMAP\SERIALCOMM",
+                ) as key:
+                    index = 0
+                    while True:
+                        try:
+                            _value_name, value_data, _value_type = winreg.EnumValue(key, index)
+                        except OSError:
+                            break
+                        add_name(str(value_data))
                         index += 1
             except Exception:  # noqa: BLE001
                 pass
@@ -1528,6 +1582,8 @@ class MainWindow(QtWidgets.QMainWindow):
         if not hasattr(self, "dashboardStack"):
             return
         show_chart = view == "chart"
+        if show_chart:
+            self._ensure_dashboard_chart_widgets()
         self.dashboardStack.setCurrentIndex(1 if show_chart else 0)
         for button, selected in (
             (getattr(self, "dashboardCardViewButton", None), not show_chart),
@@ -1551,7 +1607,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def _schedule_dashboard_chart_render(self, *, force: bool = False) -> None:
         if not hasattr(self, "dashboardStack") or self.dashboardStack.currentIndex() != 1:
             return
-        if not MATPLOTLIB_AVAILABLE:
+        if not self._ensure_dashboard_chart_widgets():
             return
         if force:
             self.dashboard_chart_timer.stop()
@@ -4038,25 +4094,19 @@ class MainWindow(QtWidgets.QMainWindow):
         self.dashboardChartTitle.setStyleSheet("")
         chart_layout.addWidget(self.dashboardChartTitle)
 
-        if MATPLOTLIB_AVAILABLE and Figure is not None and FigureCanvas is not None:
-            self.dashboardFigure = Figure(figsize=(5.0, 2.7), dpi=100)
-            self.dashboardCanvas = FigureCanvas(self.dashboardFigure)
-            self.dashboardCanvas.setSizePolicy(
-                QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding
-            )
-            chart_layout.addWidget(self.dashboardCanvas, 1)
-        else:
-            self.dashboardFigure = None
-            self.dashboardCanvas = None
-            missing_label = QtWidgets.QLabel(
-                "未安装 matplotlib，图表看板不可用。\n运行 pip install -r requirements.txt 后重启。",
-                chart_frame,
-            )
-            missing_label.setAlignment(QtCore.Qt.AlignCenter)
-            missing_label.setWordWrap(True)
-            missing_label.setProperty("dashboardSub", True)
-            missing_label.setStyleSheet("")
-            chart_layout.addWidget(missing_label, 1)
+        self.dashboardFigure = None
+        self.dashboardCanvas = None
+        self.dashboardChartHost = chart_frame
+        self.dashboardChartLayout = chart_layout
+        self.dashboardChartPlaceholder = QtWidgets.QLabel(
+            "点击左侧“Matplotlib 图表”后加载图表组件。\n首次加载可能需要 1-2 秒，主窗口会保持可操作。",
+            chart_frame,
+        )
+        self.dashboardChartPlaceholder.setAlignment(QtCore.Qt.AlignCenter)
+        self.dashboardChartPlaceholder.setWordWrap(True)
+        self.dashboardChartPlaceholder.setProperty("dashboardSub", True)
+        self.dashboardChartPlaceholder.setStyleSheet("")
+        chart_layout.addWidget(self.dashboardChartPlaceholder, 1)
 
         side_frame = QtWidgets.QFrame(page)
         side_frame.setProperty("dashboardCard", True)
@@ -4095,6 +4145,35 @@ class MainWindow(QtWidgets.QMainWindow):
         layout.addWidget(chart_frame, 1)
         layout.addWidget(side_frame)
         return page
+
+    def _ensure_dashboard_chart_widgets(self) -> bool:
+        if getattr(self, "dashboardCanvas", None) is not None:
+            return True
+        if not hasattr(self, "dashboardChartLayout"):
+            return False
+        if hasattr(self, "dashboardChartPlaceholder"):
+            self.dashboardChartPlaceholder.setText("正在加载 Matplotlib 图表组件...")
+            QtWidgets.QApplication.processEvents(QtCore.QEventLoop.ExcludeUserInputEvents)
+        if not ensure_matplotlib_loaded() or Figure is None or FigureCanvas is None:
+            if hasattr(self, "dashboardChartPlaceholder"):
+                self.dashboardChartPlaceholder.setText(
+                    "未安装 matplotlib，图表看板不可用。\n运行 pip install -r requirements.txt 后重启。"
+                )
+            self.dashboardFigure = None
+            self.dashboardCanvas = None
+            return False
+        if hasattr(self, "dashboardChartPlaceholder"):
+            self.dashboardChartLayout.removeWidget(self.dashboardChartPlaceholder)
+            self.dashboardChartPlaceholder.deleteLater()
+            del self.dashboardChartPlaceholder
+        self.dashboardFigure = Figure(figsize=(5.0, 2.7), dpi=100)
+        self.dashboardCanvas = FigureCanvas(self.dashboardFigure)
+        self.dashboardCanvas.setSizePolicy(
+            QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding
+        )
+        self.dashboardChartLayout.addWidget(self.dashboardCanvas, 1)
+        self._refresh_theme_from_mode()
+        return True
 
     def _build_dashboard_group(self, parent: QtWidgets.QWidget) -> QtWidgets.QGroupBox:
         dashboard_group = QtWidgets.QGroupBox("数据看板", parent)
@@ -5016,9 +5095,14 @@ class MainWindow(QtWidgets.QMainWindow):
             if zone_now.second == 0:
                 self.apply_auto_day_night(zone_now)
 
-        if self.last_weather_refresh_at is None or (
-            now - self.last_weather_refresh_at
-        ) >= timedelta(minutes=max(5, self.config.weather_refresh_minutes)):
+        if (
+            time.monotonic() >= self.startup_weather_allowed_at
+            and (
+                self.last_weather_refresh_at is None
+                or (now - self.last_weather_refresh_at)
+                >= timedelta(minutes=max(5, self.config.weather_refresh_minutes))
+            )
+        ):
             self.refresh_weather_and_push(log_trigger=False)
 
         schedule_changed = False
@@ -6248,8 +6332,15 @@ class MainWindow(QtWidgets.QMainWindow):
         if item.enabled and item.schedule_type == "once":
             now = self._selected_zone_now().replace(tzinfo=None)
             if self._next_schedule_time(item, now) is None:
-                self.log("WARN", "单次执行提醒的日期和时间已经过去，请选择未来时间或先停用该提醒。")
-                return
+                if index is None:
+                    target = self._default_near_future_datetime()
+                    self.scheduleDateEdit.setDate(QtCore.QDate(target.year, target.month, target.day))
+                    self.scheduleTimeEdit.setTime(QtCore.QTime(target.hour, target.minute, 0))
+                    item = self._collect_schedule_item(existing_id)
+                    self.log("INFO", "默认单次提醒时间已过期，已自动顺延到当前时间 +1 分钟，方便现场调试。")
+                else:
+                    self.log("WARN", "单次执行提醒的日期和时间已经过去，请选择未来时间或先停用该提醒。")
+                    return
         if index is None:
             self.schedules.append(item)
             self.log("INFO", f"已新增提醒: {item.title}")
@@ -6321,6 +6412,11 @@ class MainWindow(QtWidgets.QMainWindow):
                     f"日程提醒铃声: {item.title} -> {ring_name}，并追加 BEEP {confirm_beep_ms}ms 确认",
                 )
             self._send_serial_sequence(commands, gap_ms=260, allow_during_sync=True)
+        else:
+            self.log(
+                "INFO",
+                f"日程提醒铃声: {item.title} -> {ring_name}（本地/未连接模式，仅记录不下发板端）",
+            )
         if item.voice_text.strip() and not suppress_voice:
             speak_text(item.voice_text.strip())
         elif item.voice_text.strip() and suppress_voice:
@@ -6329,17 +6425,37 @@ class MainWindow(QtWidgets.QMainWindow):
         self.log("INFO", f"提醒触发: {item.title} | 铃声 {ring_name}")
         self.refresh_dashboard()
 
-    def refresh_ports(self) -> None:
+    def _port_combo_user_busy(self) -> bool:
         combo = self.ui.portCombo
         line_edit = combo.lineEdit()
-        if self.sender() is getattr(self, "port_timer", None):
-            view = combo.view()
-            user_is_selecting = view is not None and view.isVisible()
-            user_is_typing = line_edit is not None and line_edit.hasFocus()
-            if user_is_selecting or user_is_typing:
-                return
+        view = combo.view()
+        user_is_selecting = view is not None and view.isVisible()
+        user_is_typing = line_edit is not None and line_edit.hasFocus()
+        return bool(user_is_selecting or user_is_typing)
 
-        ports = self._scan_serial_port_names()
+    def refresh_ports(self) -> None:
+        if self.sender() is getattr(self, "port_timer", None) and self._port_combo_user_busy():
+            return
+        if self.port_scan_in_progress:
+            return
+        self.port_scan_in_progress = True
+
+        def worker() -> None:
+            ports = self._scan_serial_port_names_worker()
+            self._emit_signal_safe("ports_scanned", ports)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _finish_port_scan(self, ports: list[str]) -> None:
+        self.port_scan_in_progress = False
+        self.last_scanned_ports = list(ports)
+        if self._port_combo_user_busy():
+            return
+        self._apply_port_list_to_combo(ports)
+
+    def _apply_port_list_to_combo(self, ports: list[str]) -> None:
+        combo = self.ui.portCombo
+        line_edit = combo.lineEdit()
         fallback_ports = [] if ports else [f"COM{index}" for index in range(1, 17)]
 
         current = self._normalize_port_name(combo.currentText())
@@ -6681,7 +6797,8 @@ class MainWindow(QtWidgets.QMainWindow):
             append_event_log(APP_DIR, "local_apply", "PING -> PONG LOCAL")
             self.refresh_dashboard()
             return
-        self._apply_runtime_state_to_ui()
+        self._refresh_local_twin_frame()
+        self._refresh_single_alarm_ui()
         self._set_latest_event(action)
         append_event_log(APP_DIR, "local_apply", action)
         self._local_apply_notice(action)

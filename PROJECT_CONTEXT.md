@@ -1,5 +1,17 @@
 # PROJECT_CONTEXT - 智能时钟联网系统
 
+## 2026-06-11 v2.2 最终体验复测、冷启动与离线即时响应收口
+- 本轮继续围绕用户要求“像真实用户一样打开 exe 和联板体验所有功能”收口，只修 v2.2 主线，不再碰 `真正的最新版-v3.0-local`。
+- PC 端 Matplotlib 改为懒加载：启动时不再导入/创建 FigureCanvas，只有点击主页“Matplotlib 图表”才加载；首次加载会显示提示，失败只降级图表区域，不会闪退主窗口。
+- 启动自动天气刷新延后约 18 秒，避免 exe 冷启动刚进界面就立刻发网络请求；天气/NTP 仍走后台线程和 watchdog，不抢占串口/数字孪生。
+- 串口扫描后台化：`refresh_ports()` 不再在 UI 主线程直接跑 `list_ports.comports()`/Windows 注册表枚举，避免打开页面菜单或切页时撞上串口枚举卡顿。COM5 自动发现和手动输入 COM5 均保留。
+- 本地“不使用串口”路径轻量化：`*PING`、`DISP`、`USER2`、滚动消息等离线操作不再每次全量重刷主题和表单，只更新影子状态、数字孪生、必要状态标签和日志。本地探针测得 `DISP/USER2/MSG` 从秒级降到约 26-49 ms。
+- 日程提醒体验小修：新建单次提醒若默认“当前时间+1分钟”在页面停留过程中已过期，会自动顺延并写日志；本地/未连接触发日程时会记录铃声名称但说明不下发板端。
+- 本轮验证：Python `py_compile` 通过；`run_extension_checks.py --host-only --full` 通过；`run_extension_checks.py --port COM5` quick 通过；`run_extension_checks.py --port COM5 --full` 全面通过，覆盖 USER2、跑马灯下划线、DISP/SPEED/FORMAT/EXT、高并发按键和 ERROR 四类。
+- UI 探针：真实 Qt 窗口在约 `1080x639` 可用逻辑桌面下，窗口 `1015x600`，分栏 `[569, 420]`，系统设置/闹钟与日程/调试与测试横向滚动最大值均为 0；菜单开合约 54-63 ms；Matplotlib 首次加载约 6.3 秒，后续筛选约 0.3-0.5 秒。
+- v2.2 release 已重新打包：`build_release/SmartClockHost-v2.2/SmartClockHost.exe`、`build_release/SmartClockHost-v2.2.zip`、`for_submit/release/SmartClockHost-v2.2.zip` 已更新；release 目录确认不含 `config.json/runtime_state.json/schedules.json/logs`，正式配置继续保存在 `%APPDATA%\SmartClockHost-v2.2`。
+- 打包 exe 临时 profile 冷启动：未闪退；10 秒采样点仍有一次短暂 `Responding=False`，15/25/35 秒恢复 `Responding=True`。这是当前剩余体验风险：PyInstaller/Qt 首次加载仍可能短忙，但已不再影响后续功能测试和 COM5 联板。
+
 ## 2026-06-11 v2.2 全球时区、P1/P2 离线验收与虚拟长按收口
 - P1/数字孪生本地显示修复：离线 YEAR/星期等超过 8 位的页面统一走有限跑马灯，不再只对 WEEKDAY 特判；P1 年份页会滚动显示完整日期文本。
 - 日程管理表格空白点击取消选中已恢复。根因是 `MainWindow` 内存在两个 `eventFilter()`，前一个空白点击逻辑被后一个覆盖；现在已合并到唯一有效的事件过滤器。
