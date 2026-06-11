@@ -4,6 +4,22 @@
 
 ## 2026-06-11
 
+### v2.2 Matplotlib 数据可视化看板补齐
+
+#### 已完成修改
+- 主页数据看板新增“卡片看板 / Matplotlib 图表”切换，保留原有 6 张卡片看板。
+- Matplotlib 图表看板新增三类筛选：今日时间轴、提醒分布、系统状态；图表数据来自当前城市时间、天气缓存、板载闹钟和 PC 多日程提醒。
+- 图表随白天/黑夜主题重绘，不抢占右侧数字孪生镜像，不改变 MCU 串口协议。
+- `pc_host/requirements.txt` 从 UTF-16LE 转为 UTF-8，并新增 `matplotlib==3.10.3`。
+- README、逐条验收、当前状态总览、自主答辩准备、提交 PDF 大纲和交接文档已把 E4 从“轻量看板替代”更新为“Matplotlib 图表看板已完成”。
+
+#### 验证结果
+- `python -m py_compile pc_host/app.py pc_host/protocol.py pc_host/twin_widgets.py pc_host/extension_services.py pc_host/extension_store.py pc_host/run_extension_checks.py` 通过。
+- 源码版真实 Qt 窗口截图通过，覆盖主页卡片看板、Matplotlib 今日时间轴、提醒分布、系统状态和黑夜模式图表页；截图输出到 `tmp/`，其中两张已纳入 `docs/screenshots/`。
+- `pc_host/run_extension_checks.py --host-only --full` 通过。
+- PyInstaller clean build 已重新生成 `build_release/SmartClockHost-v2.2/SmartClockHost.exe` 和 `build_release/SmartClockHost-v2.2.zip`，`_internal` 内确认包含 Matplotlib/Numpy，release 目录包含最新 MCU 工程副本。
+- 打包 exe 使用临时 `SMARTCLOCK_PROFILE_DIR` 启动 8 秒未退出；release 目录未生成 `config.json/runtime_state.json/schedules.json/logs`，临时 profile 已清理。
+
 ### Plus 周计划 Codex 交接补记
 
 #### 已完成修改

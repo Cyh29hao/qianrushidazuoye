@@ -99,10 +99,10 @@ python -m PyQt5.uic.pyuic -o ui_main.py main.ui
   - `mcu/src/main.c` 主逻辑落地，覆盖开机画面、时钟/日期/周几显示、滚动、闹钟、编辑状态机、LED、蜂鸣、串口协议和事件上报。
   - 已生成 `mcu/obj/s800_clock.axf`，但昨晚又修改了 USER1/I2C/串口稳定性保护，正式提交前建议用 Keil5 重新编译并确认 `.axf` 与最新源码一致。
 - PC 侧已完成：
-  - `Python + PyQt5 + pyserial` 源码版可运行，`build_release/SmartClockHost-v2.2/SmartClockHost.exe` 打包版已生成。
-  - 已实现串口控制、数字孪生、日志、自动测试、NTP 对时、天气短显、自动昼夜、多日程提醒和本地离线演示。
+  - `Python + PyQt5 + pyserial + matplotlib` 源码版可运行，`build_release/SmartClockHost-v2.2/SmartClockHost.exe` 打包版已生成。
+  - 已实现串口控制、数字孪生、日志、自动测试、NTP 对时、天气短显、自动昼夜、多日程提醒、Matplotlib 数据可视化和本地离线演示。
 - 已完成的扩展/自主方向：
-  - `§4.2` 扩展功能中 E1/E2/E3 已完整实现，E4 采用轻量数据看板和事件日志方案。
+  - `§4.2` 扩展功能中 E1/E2/E3/E4 已完整实现；E4 在主页提供卡片看板与 Matplotlib 图表看板无缝切换。
   - `§4.3` 自主增加功能以“多日程/课程提醒系统”为主，配合铃声、板端标签、语音空文本规则和自动测试作为亮点。
 - 当前可重点讲的自主创新亮点：
   - GitHub 版本管理与阶段化 release，便于展示工程迭代过程。
@@ -110,7 +110,7 @@ python -m PyQt5.uic.pyuic -o ui_main.py main.ui
   - 快速/全面两套自动测试脚本，覆盖协议、显示、铃声、USER2、跑马灯、ERROR 格式和高并发按键鲁棒性。
   - 针对 NTP、天气、串口、按键连发和 RESET 的防卡死保护，两端状态对齐程度高。
   - 全球城市/时区支持，NTP 对时后按城市本地时间刷新。
-  - UI 面向展示和真实使用做了卡片看板、清晰日志、数字孪生和可操作调试区，普通用户双击 exe 即可体验。
+  - UI 面向展示和真实使用做了卡片看板、Matplotlib 图表看板、清晰日志、数字孪生和可操作调试区，普通用户双击 exe 即可体验。
 - 待最终提交前确认：
   - 用 Keil5 重新编译并实板烧录。
   - 录制不超过 5 分钟带旁白演示视频。
@@ -204,6 +204,10 @@ build_release/SmartClockHost-v2.2/SmartClockHost.exe
 
 ![主页数据看板](docs/screenshots/home-1280x720.png)
 
+![Matplotlib 图表看板](docs/screenshots/home-matplotlib-timeline-1600x900.png)
+
+![黑夜模式图表看板](docs/screenshots/home-matplotlib-night-1600x900.png)
+
 ![系统设置与板端显示](docs/screenshots/system-settings-1280x720.png)
 
 ![闹钟与日程管理](docs/screenshots/alarm-schedule-1280x720.png)
@@ -213,6 +217,14 @@ build_release/SmartClockHost-v2.2/SmartClockHost.exe
 ### 5. 主界面与数据看板
 
 串口连接状态放在页面上方“串口连接”模块；主页数据看板只保留适合展示的信息，包括当前时间、日期星期、城市天气、昼夜模式、下次提醒、系统状态和问候语。问候语会按时段显示“早上好 / 中午好 / 下午好 / 晚上好 / 夜深了”，用户名可在系统设置中修改。
+
+主页看板右上角提供“卡片看板 / Matplotlib 图表”切换。卡片看板保持原来的 6 张信息卡，适合课堂演示时快速说明当前状态；Matplotlib 图表看板用于完成扩展功能 E4，可在不离开主页的情况下切换三类筛选图：
+
+- 今日时间轴：展示当前城市时间、日照区间和今日下次提醒位置。
+- 提醒分布：按星期汇总已启用的单次日期提醒和每周提醒。
+- 系统状态：把显示开关、自动昼夜、串口/本地模式、天气缓存和提醒数量可视化。
+
+图表会跟随白天/黑夜主题重绘，使用当前城市、天气缓存、板载闹钟和 PC 日程数据，不会抢占右侧数字孪生镜像，也不会改变 MCU 通信协议。
 
 日期和时间编辑框用于设置板端时间。修改后点击对应设置按钮会通过串口发送到 MCU；离线模式下会修改 PC 本地镜像时间。
 

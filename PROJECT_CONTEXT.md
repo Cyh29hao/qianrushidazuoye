@@ -1,5 +1,12 @@
 # PROJECT_CONTEXT - 智能时钟联网系统
 
+## 2026-06-11 v2.2 Matplotlib 数据可视化补齐
+- 本轮补齐老师扩展功能 E4：主页“数据看板”新增“卡片看板 / Matplotlib 图表”切换，不替换原有 6 张卡片，也不改右侧数字孪生布局。
+- Matplotlib 图表看板提供三类筛选：`今日时间轴`（当前城市时间、日照区间、今日下次提醒）、`提醒分布`（按星期汇总已启用单次/每周提醒）、`系统状态`（显示、自动昼夜、串口/本地、天气缓存、提醒数量）。
+- 图表颜色随 DAY/NIGHT 主题重绘；截图已保存到 `docs/screenshots/home-matplotlib-timeline-1600x900.png` 和 `docs/screenshots/home-matplotlib-night-1600x900.png`。
+- `pc_host/requirements.txt` 已从 UTF-16LE 修正为 UTF-8，并新增 `matplotlib==3.10.3`。源码版首次运行需要重新安装依赖；打包版会随 exe 携带。
+- 文档口径已更新：E4 不再按“轻量替代”解释，而是作为已完成的 Matplotlib 可视化看板演示。v2.2 exe/zip 已重新打包，release 目录包含 Matplotlib/Numpy 运行文件和最新 MCU 工程副本；使用临时 `SMARTCLOCK_PROFILE_DIR` 烟测 8 秒通过且未污染 release 配置。
+
 ## 2026-06-11 Plus 周计划 Codex 交接记录
 - 本轮最终交接文档已写入 `docs/PLUS周计划Codex交接说明.md`。后续另一个 Codex 账号接手时，优先读该文件、`AGENT.md`、`CHANGELOG_AI.md`、`docs/当前项目状态总览.md` 和 `docs/大作业要求逐条验收对照.md`。
 - 当前代码状态：`gemini-ui-improvements` 与 `main` 均已推到 commit `e812ac5`；`v2.2` tag 已推送到 GitHub；本地工作树在交接前应保持干净。
@@ -280,7 +287,7 @@
 
 - 日程管理双击启停已在真正最新版中接线：`scheduleTable.itemDoubleClicked.connect(self.toggle_schedule_enabled)`。当前主菜单实际使用 `_build_alarm_schedule_page()` -> `_build_schedule_management_group()`，该活动页面已移除 `清空表单` 按钮；但废置的 `_build_schedule_dashboard_page()` 中仍残留 `scheduleResetButton` 代码，后续重构时注意不要误判。
 - 日程 UI 文案仍需收口：当前活动代码仍是 `单次日期`、`新增 / 更新提醒`，未完全变成旧任务书要求的 `单次执行`、按选中状态显示 `新增提醒/更新提醒/删除提醒`。
-- `pc_host/requirements.txt` 目前只有 PyQt5 与 pyserial，和新增参考文件建议的 Python 3.11.9、PyQt5 5.15.9、ntplib/requests/astral/matplotlib 不完全一致；当前实现使用标准库和 Open-Meteo 路线，不要贸然加依赖。
+- `pc_host/requirements.txt` 目前包含 PyQt5、pyserial 和 matplotlib；NTP、天气、时区仍主要使用标准库和现有 Open-Meteo 路线，不要为了“看起来完整”再贸然引入 ntplib/requests/astral 等新依赖。
 - MCU 本轮 7SEG、开机帧、1Hz 事件和 `USER1` 语义改动尚未用 Keil/真板编译烧录验证；当前本机只找到 MinGW `gcc`，未发现 `UV4`/`armclang`/`armcc`/`arm-none-eabi-gcc`。
 - 当前 PC 端 `.venv` 可运行 PyQt5；已用 Windows 原生 Qt 平台截图检查主页、系统设置、闹钟与日程管理、调试与测试的白天/黑夜模式。Qt offscreen 平台可能不渲染部分文字，最终视觉判断优先使用 Windows 原生平台或真实窗口。
 - 正式提交材料已开始准备：`submission/` 下已有提交目录说明、简介 PDF 大纲和演示视频脚本；`mcu/obj/s800_clock.axf` 已存在，但因 MCU 后续又改过稳定性保护，正式提交前仍应 Keil5 重新编译确认；简介 PDF、演示视频和正式截图集尚未生成。

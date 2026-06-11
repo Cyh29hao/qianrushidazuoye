@@ -53,6 +53,26 @@ import serial
 from PyQt5 import QtCore, QtGui, QtWidgets
 from serial.tools import list_ports
 
+try:
+    import matplotlib
+
+    matplotlib.use("Qt5Agg")
+    matplotlib.rcParams["font.sans-serif"] = [
+        "Microsoft YaHei",
+        "SimHei",
+        "Arial Unicode MS",
+        "DejaVu Sans",
+    ]
+    matplotlib.rcParams["axes.unicode_minus"] = False
+    from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+    from matplotlib.figure import Figure
+
+    MATPLOTLIB_AVAILABLE = True
+except Exception:
+    FigureCanvas = None
+    Figure = None
+    MATPLOTLIB_AVAILABLE = False
+
 from extension_services import (
     build_weather_led_mask,
     build_weather_token,
@@ -261,6 +281,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.last_ntp_sync_text = "未进行网络对时"
         self.last_selected_zone_time = "--:--:--"
         self.last_dashboard_minute = ""
+        self.dashboard_chart_filter = "timeline"
         self.last_display_event: tuple[str, int] | None = None
         self.last_led_event: int | None = None
         self.last_board_display_monotonic = 0.0
@@ -1231,6 +1252,245 @@ class MainWindow(QtWidgets.QMainWindow):
             return "1 分钟前更新"
         return f"{age_minutes} 分钟前更新"
 
+    def _dashboard_chart_colors(self) -> dict[str, str]:
+        night = self.config.theme_follow_mode and self.last_mode == "NIGHT"
+        if night:
+            return {
+                "figure": "#0f1b2a",
+                "axes": "#162436",
+                "text": "#e9f2ff",
+                "muted": "#9fb5c9",
+                "grid": "#2e4156",
+                "primary": "#65a9ff",
+                "secondary": "#5fd3b3",
+                "accent": "#ffd166",
+                "danger": "#ff7b7b",
+            }
+        return {
+            "figure": "#fffdfa",
+            "axes": "#fcfaf7",
+            "text": "#16324f",
+            "muted": "#627890",
+            "grid": "#d7d0c6",
+            "primary": "#1f5b8c",
+            "secondary": "#2b8a78",
+            "accent": "#d88a1f",
+            "danger": "#c94a4a",
+        }
+
+    def _style_dashboard_axis(self, axis, colors: dict[str, str]) -> None:
+        axis.set_facecolor(colors["axes"])
+        axis.tick_params(colors=colors["muted"], labelsize=8)
+        axis.xaxis.label.set_color(colors["muted"])
+        axis.yaxis.label.set_color(colors["muted"])
+        axis.title.set_color(colors["text"])
+        for spine in axis.spines.values():
+            spine.set_color(colors["grid"])
+        axis.grid(True, color=colors["grid"], alpha=0.35, linewidth=0.8)
+
+    def _set_dashboard_filter_buttons(self) -> None:
+        filter_name = getattr(self, "dashboard_chart_filter", "timeline")
+        buttons = {
+            "timeline": getattr(self, "dashboardChartTimelineButton", None),
+            "schedule": getattr(self, "dashboardChartScheduleButton", None),
+            "status": getattr(self, "dashboardChartStatusButton", None),
+        }
+        for name, button in buttons.items():
+            if button is None:
+                continue
+            button.setProperty("selected", name == filter_name)
+            button.style().unpolish(button)
+            button.style().polish(button)
+
+    def set_dashboard_view(self, view: str) -> None:
+        if not hasattr(self, "dashboardStack"):
+            return
+        show_chart = view == "chart"
+        self.dashboardStack.setCurrentIndex(1 if show_chart else 0)
+        for button, selected in (
+            (getattr(self, "dashboardCardViewButton", None), not show_chart),
+            (getattr(self, "dashboardChartViewButton", None), show_chart),
+        ):
+            if button is None:
+                continue
+            button.setProperty("selected", selected)
+            button.style().unpolish(button)
+            button.style().polish(button)
+        if show_chart:
+            self._render_dashboard_chart()
+
+    def set_dashboard_chart_filter(self, filter_name: str) -> None:
+        if filter_name not in {"timeline", "schedule", "status"}:
+            filter_name = "timeline"
+        self.dashboard_chart_filter = filter_name
+        self._set_dashboard_filter_buttons()
+        self._render_dashboard_chart()
+
+    def _render_dashboard_chart(self) -> None:
+        if (
+            not MATPLOTLIB_AVAILABLE
+            or not hasattr(self, "dashboardFigure")
+            or self.dashboardFigure is None
+            or not hasattr(self, "dashboardCanvas")
+            or self.dashboardCanvas is None
+        ):
+            return
+        colors = self._dashboard_chart_colors()
+        self.dashboardFigure.clear()
+        self.dashboardFigure.set_facecolor(colors["figure"])
+        filter_name = getattr(self, "dashboard_chart_filter", "timeline")
+        if filter_name == "schedule":
+            self._render_schedule_chart(colors)
+        elif filter_name == "status":
+            self._render_status_chart(colors)
+        else:
+            self._render_timeline_chart(colors)
+        self.dashboardFigure.tight_layout(pad=1.1)
+        self.dashboardCanvas.draw_idle()
+        self._set_dashboard_filter_buttons()
+
+    def _render_timeline_chart(self, colors: dict[str, str]) -> None:
+        axis = self.dashboardFigure.add_subplot(111)
+        self._style_dashboard_axis(axis, colors)
+        now = self._selected_zone_now().replace(tzinfo=None)
+        place = self._active_place()
+        axis.set_title(f"{place.name} 今日时间轴", fontsize=11, pad=8)
+        axis.set_xlim(0, 24)
+        axis.set_ylim(0, 4)
+        axis.set_yticks([1, 2, 3])
+        axis.set_yticklabels(["提醒", "日照", "当前"], color=colors["muted"])
+        axis.set_xticks([0, 6, 12, 18, 24])
+        axis.set_xlabel("小时")
+        axis.barh(2, 24, left=0, height=0.28, color=colors["grid"], alpha=0.55)
+        sunrise_hour = None
+        sunset_hour = None
+        if self.last_weather_snapshot is not None:
+            if self.last_weather_snapshot.sunrise_at is not None:
+                sunrise_hour = self.last_weather_snapshot.sunrise_at.hour + self.last_weather_snapshot.sunrise_at.minute / 60
+            if self.last_weather_snapshot.sunset_at is not None:
+                sunset_hour = self.last_weather_snapshot.sunset_at.hour + self.last_weather_snapshot.sunset_at.minute / 60
+        if sunrise_hour is None:
+            sunrise_hour = 6.0
+        if sunset_hour is None:
+            sunset_hour = 18.0
+        day_left = max(0.0, min(24.0, sunrise_hour))
+        day_width = max(0.1, min(24.0, sunset_hour) - day_left)
+        axis.barh(2, day_width, left=day_left, height=0.42, color=colors["accent"], alpha=0.82)
+        now_hour = now.hour + now.minute / 60 + now.second / 3600
+        axis.axvline(now_hour, color=colors["primary"], linewidth=2.2)
+        axis.scatter([now_hour], [3], s=78, color=colors["primary"], edgecolors=colors["figure"], zorder=4)
+        next_text, next_time = self._next_reminder_summary(now)
+        if next_time is not None and next_time.date() == now.date():
+            remind_hour = next_time.hour + next_time.minute / 60 + next_time.second / 3600
+            axis.scatter([remind_hour], [1], s=90, marker="D", color=colors["secondary"], edgecolors=colors["figure"], zorder=4)
+            axis.text(
+                min(23.4, remind_hour + 0.35),
+                1.15,
+                next_text[:14],
+                color=colors["text"],
+                fontsize=8,
+                va="bottom",
+            )
+        else:
+            axis.text(12, 1, "今日暂无待触发提醒", color=colors["muted"], fontsize=9, ha="center", va="center")
+        axis.text(now_hour, 3.25, now.strftime("%H:%M"), color=colors["primary"], fontsize=9, ha="center")
+        if hasattr(self, "dashboardChartInfoLabel"):
+            self.dashboardChartInfoLabel.setText(
+                f"当前 {now.strftime('%H:%M')}，日照约 {self.sunrise_text}-{self.sunset_text}；下次提醒：{next_text}。"
+            )
+
+    def _render_schedule_chart(self, colors: dict[str, str]) -> None:
+        axis = self.dashboardFigure.add_subplot(111)
+        self._style_dashboard_axis(axis, colors)
+        labels = ["一", "二", "三", "四", "五", "六", "日"]
+        counts = [0] * 7
+        once_count = 0
+        for item in self.schedules:
+            if not item.enabled:
+                continue
+            if item.schedule_type == "weekly":
+                for weekday in item.weekdays:
+                    if 0 <= weekday < 7:
+                        counts[weekday] += 1
+            else:
+                once_count += 1
+                try:
+                    target = datetime.strptime(item.target_date, "%Y-%m-%d")
+                    counts[target.weekday()] += 1
+                except ValueError:
+                    pass
+        axis.set_title("已启用提醒分布", fontsize=11, pad=8)
+        if not any(counts):
+            axis.set_xlim(-0.5, 6.5)
+            axis.set_ylim(0, 1)
+            axis.set_xticks(range(7))
+            axis.set_xticklabels(labels)
+            axis.text(3, 0.5, "暂无启用提醒", color=colors["muted"], fontsize=11, ha="center", va="center")
+        else:
+            bars = axis.bar(range(7), counts, color=colors["secondary"], alpha=0.9)
+            axis.set_xticks(range(7))
+            axis.set_xticklabels(labels)
+            axis.set_ylabel("条数")
+            axis.set_ylim(0, max(counts) + 1)
+            for bar, value in zip(bars, counts):
+                if value:
+                    axis.text(
+                        bar.get_x() + bar.get_width() / 2,
+                        value + 0.05,
+                        str(value),
+                        ha="center",
+                        va="bottom",
+                        color=colors["text"],
+                        fontsize=8,
+                    )
+        if hasattr(self, "dashboardChartInfoLabel"):
+            enabled_count = len([item for item in self.schedules if item.enabled])
+            self.dashboardChartInfoLabel.setText(
+                f"启用提醒 {enabled_count} 条，其中单次日期 {once_count} 条；柱形图按触发星期汇总。"
+            )
+
+    def _render_status_chart(self, colors: dict[str, str]) -> None:
+        axis = self.dashboardFigure.add_subplot(111)
+        self._style_dashboard_axis(axis, colors)
+        enabled_count = len([item for item in self.schedules if item.enabled])
+        weather_ok = 1 if self.last_weather_snapshot is not None else 0
+        serial_ok = 1 if self.is_connected else (0.6 if self._is_local_mode_active() else 0)
+        schedule_score = min(1.0, enabled_count / 5.0) if enabled_count else 0
+        values = [
+            1 if self.runtime_state.display_on else 0,
+            1 if self.config.auto_day_night else 0,
+            serial_ok,
+            weather_ok,
+            schedule_score,
+        ]
+        labels = ["显示", "自动昼夜", "串口/本地", "天气", "提醒"]
+        axis.set_title("系统状态完成度", fontsize=11, pad=8)
+        bars = axis.barh(range(len(labels)), values, color=[
+            colors["primary"],
+            colors["secondary"],
+            colors["accent"],
+            colors["primary"] if weather_ok else colors["danger"],
+            colors["secondary"],
+        ])
+        axis.set_xlim(0, 1)
+        axis.set_yticks(range(len(labels)))
+        axis.set_yticklabels(labels)
+        axis.set_xticks([0, 0.5, 1.0])
+        axis.set_xticklabels(["关/无", "部分", "正常"])
+        for bar, value in zip(bars, values):
+            axis.text(
+                min(0.96, value + 0.03),
+                bar.get_y() + bar.get_height() / 2,
+                f"{int(value * 100)}%",
+                color=colors["text"],
+                va="center",
+                fontsize=8,
+            )
+        if hasattr(self, "dashboardChartInfoLabel"):
+            self.dashboardChartInfoLabel.setText(
+                f"显示 {'开' if self.runtime_state.display_on else '关'}，自动昼夜 {'开' if self.config.auto_day_night else '关'}，天气 {self._format_weather_age(self._selected_zone_now().replace(tzinfo=None))}。"
+            )
+
     def _greeting_text(self, now: datetime) -> str:
         name = (self.config.user_name or "用户").strip() or "用户"
         if 5 <= now.hour < 11:
@@ -1460,6 +1720,11 @@ class MainWindow(QtWidgets.QMainWindow):
             }}
             QPushButton:pressed, QToolButton:pressed {{
                 background: {palette['button_pressed']};
+            }}
+            QPushButton[selected="true"] {{
+                background: {palette['button_pressed']};
+                border: 2px solid {palette['button_hover']};
+                padding: 4px 9px;
             }}
             QPushButton:disabled, QToolButton:disabled {{
                 background: {palette['button_disabled']};
@@ -1803,6 +2068,8 @@ class MainWindow(QtWidgets.QMainWindow):
             """
         )
         self._apply_dynamic_theme_overrides(night, palette)
+        if hasattr(self, "dashboardStack") and self.dashboardStack.currentIndex() == 1:
+            self._render_dashboard_chart()
 
     def _apply_dynamic_theme_overrides(self, night: bool, palette: dict[str, str]) -> None:
         arrow_url = self._asset_qss_url(
@@ -3373,6 +3640,79 @@ class MainWindow(QtWidgets.QMainWindow):
         layout.addStretch(1)
         return card, value_label, sub_label
 
+    def _build_matplotlib_dashboard_page(self, parent: QtWidgets.QWidget) -> QtWidgets.QWidget:
+        page = QtWidgets.QWidget(parent)
+        layout = QtWidgets.QHBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
+
+        chart_frame = QtWidgets.QFrame(page)
+        chart_frame.setProperty("dashboardCard", True)
+        chart_frame.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
+        chart_layout = QtWidgets.QVBoxLayout(chart_frame)
+        chart_layout.setContentsMargins(10, 8, 10, 8)
+        chart_layout.setSpacing(6)
+
+        self.dashboardChartTitle = QtWidgets.QLabel("Matplotlib 可视化看板", chart_frame)
+        self.dashboardChartTitle.setProperty("dashboardTitle", True)
+        self.dashboardChartTitle.setStyleSheet("")
+        chart_layout.addWidget(self.dashboardChartTitle)
+
+        if MATPLOTLIB_AVAILABLE and Figure is not None and FigureCanvas is not None:
+            self.dashboardFigure = Figure(figsize=(5.0, 2.7), dpi=100)
+            self.dashboardCanvas = FigureCanvas(self.dashboardFigure)
+            self.dashboardCanvas.setSizePolicy(
+                QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding
+            )
+            chart_layout.addWidget(self.dashboardCanvas, 1)
+        else:
+            self.dashboardFigure = None
+            self.dashboardCanvas = None
+            missing_label = QtWidgets.QLabel(
+                "未安装 matplotlib，图表看板不可用。\n运行 pip install -r requirements.txt 后重启。",
+                chart_frame,
+            )
+            missing_label.setAlignment(QtCore.Qt.AlignCenter)
+            missing_label.setWordWrap(True)
+            missing_label.setProperty("dashboardSub", True)
+            missing_label.setStyleSheet("")
+            chart_layout.addWidget(missing_label, 1)
+
+        side_frame = QtWidgets.QFrame(page)
+        side_frame.setProperty("dashboardCard", True)
+        side_frame.setFixedWidth(190)
+        side_layout = QtWidgets.QVBoxLayout(side_frame)
+        side_layout.setContentsMargins(10, 10, 10, 10)
+        side_layout.setSpacing(8)
+
+        filter_title = QtWidgets.QLabel("图表筛选", side_frame)
+        filter_title.setProperty("dashboardTitle", True)
+        filter_title.setStyleSheet("")
+        self.dashboardChartTimelineButton = QtWidgets.QPushButton("今日时间轴", side_frame)
+        self.dashboardChartScheduleButton = QtWidgets.QPushButton("提醒分布", side_frame)
+        self.dashboardChartStatusButton = QtWidgets.QPushButton("系统状态", side_frame)
+        for button in (
+            self.dashboardChartTimelineButton,
+            self.dashboardChartScheduleButton,
+            self.dashboardChartStatusButton,
+        ):
+            button.setMinimumHeight(34)
+            button.setCursor(QtCore.Qt.PointingHandCursor)
+        self.dashboardChartInfoLabel = QtWidgets.QLabel("展示当前城市时间、天气、提醒和系统状态。", side_frame)
+        self.dashboardChartInfoLabel.setWordWrap(True)
+        self.dashboardChartInfoLabel.setProperty("dashboardSub", True)
+        self.dashboardChartInfoLabel.setStyleSheet("")
+
+        side_layout.addWidget(filter_title)
+        side_layout.addWidget(self.dashboardChartTimelineButton)
+        side_layout.addWidget(self.dashboardChartScheduleButton)
+        side_layout.addWidget(self.dashboardChartStatusButton)
+        side_layout.addWidget(self.dashboardChartInfoLabel, 1)
+
+        layout.addWidget(chart_frame, 1)
+        layout.addWidget(side_frame)
+        return page
+
     def _build_dashboard_group(self, parent: QtWidgets.QWidget) -> QtWidgets.QGroupBox:
         dashboard_group = QtWidgets.QGroupBox("数据看板", parent)
         dashboard_group.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
@@ -3380,12 +3720,25 @@ class MainWindow(QtWidgets.QMainWindow):
         dashboard_layout.setContentsMargins(12, 28, 12, 10)
         dashboard_layout.setSpacing(8)
 
+        header_row = QtWidgets.QHBoxLayout()
+        header_row.setContentsMargins(0, 0, 0, 0)
+        header_row.setSpacing(8)
+
         self.greetingLabel = QtWidgets.QLabel("早上好，用户！", dashboard_group)
         self.greetingLabel.setProperty("dashboardGreeting", True)
         self.greetingLabel.setWordWrap(True)
         self.greetingLabel.setStyleSheet("")
-        dashboard_layout.addWidget(self.greetingLabel)
+        self.dashboardCardViewButton = QtWidgets.QPushButton("卡片看板", dashboard_group)
+        self.dashboardChartViewButton = QtWidgets.QPushButton("Matplotlib 图表", dashboard_group)
+        for button in (self.dashboardCardViewButton, self.dashboardChartViewButton):
+            button.setMinimumHeight(32)
+            button.setCursor(QtCore.Qt.PointingHandCursor)
+        header_row.addWidget(self.greetingLabel, 1)
+        header_row.addWidget(self.dashboardCardViewButton)
+        header_row.addWidget(self.dashboardChartViewButton)
+        dashboard_layout.addLayout(header_row)
 
+        self.dashboardStack = QtWidgets.QStackedWidget(dashboard_group)
         card_grid = QtWidgets.QGridLayout()
         card_grid.setHorizontalSpacing(8)
         card_grid.setVerticalSpacing(8)
@@ -3420,7 +3773,17 @@ class MainWindow(QtWidgets.QMainWindow):
         card_grid.addWidget(mode_card, 1, 0)
         card_grid.addWidget(schedule_card, 1, 1)
         card_grid.addWidget(system_card, 1, 2)
-        dashboard_layout.addLayout(card_grid)
+
+        card_page = QtWidgets.QWidget(dashboard_group)
+        card_page.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
+        card_page_layout = QtWidgets.QVBoxLayout(card_page)
+        card_page_layout.setContentsMargins(0, 0, 0, 0)
+        card_page_layout.addLayout(card_grid)
+        self.dashboardStack.addWidget(card_page)
+        self.dashboardStack.addWidget(self._build_matplotlib_dashboard_page(dashboard_group))
+        self.dashboardStack.setCurrentIndex(0)
+        QtCore.QTimer.singleShot(0, lambda: self.set_dashboard_view("cards"))
+        dashboard_layout.addWidget(self.dashboardStack, 1)
         return dashboard_group
 
     def _build_alarm_schedule_page(self) -> QtWidgets.QScrollArea:
@@ -4141,12 +4504,30 @@ class MainWindow(QtWidgets.QMainWindow):
                 kind = entry.get("kind", "event")
                 detail = entry.get("detail", "")
                 dashboard_event_list.addItem(f"{when} | {kind} | {detail}")
+        if hasattr(self, "dashboardStack") and self.dashboardStack.currentIndex() == 1:
+            self._render_dashboard_chart()
 
     def _wire_signals(self) -> None:
         self.ui.refreshPortsButton.clicked.connect(self.refresh_ports)
         self.ui.portCombo.currentTextChanged.connect(self._remember_selected_port)
         self.ui.connectButton.clicked.connect(self.connect_and_apply_port)
         self.ui.disconnectButton.clicked.connect(self.disconnect_port)
+        if hasattr(self, "dashboardCardViewButton"):
+            self.dashboardCardViewButton.clicked.connect(lambda: self.set_dashboard_view("cards"))
+        if hasattr(self, "dashboardChartViewButton"):
+            self.dashboardChartViewButton.clicked.connect(lambda: self.set_dashboard_view("chart"))
+        if hasattr(self, "dashboardChartTimelineButton"):
+            self.dashboardChartTimelineButton.clicked.connect(
+                lambda: self.set_dashboard_chart_filter("timeline")
+            )
+        if hasattr(self, "dashboardChartScheduleButton"):
+            self.dashboardChartScheduleButton.clicked.connect(
+                lambda: self.set_dashboard_chart_filter("schedule")
+            )
+        if hasattr(self, "dashboardChartStatusButton"):
+            self.dashboardChartStatusButton.clicked.connect(
+                lambda: self.set_dashboard_chart_filter("status")
+            )
         self.ui.applyDateButton.clicked.connect(self.apply_date)
         self.ui.queryDateButton.clicked.connect(lambda: self.send_command("*GET:DATE", "DATE"))
         self.ui.applyTimeButton.clicked.connect(self.apply_time)
