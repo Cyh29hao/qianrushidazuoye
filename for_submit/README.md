@@ -187,7 +187,9 @@ build_release/SmartClockHost-v2.2/SmartClockHost.exe
 
 打包版为 PyInstaller onedir 形式，普通用户双击 `SmartClockHost.exe` 即可启动，不需要额外安装 Python。若同时提供压缩包，文件名通常为 `build_release/SmartClockHost-v2.2.zip`。
 
-打包/烟测时请使用临时运行态目录，例如设置 `SMARTCLOCK_PROFILE_DIR=tmp/release_smoke_profile` 后再启动 exe；这样不会覆盖已有 `config.json`、日程、运行状态或日志。正式使用时不设置该变量，程序会在 exe 所在目录保存用户配置。
+正式使用时不设置 `SMARTCLOCK_PROFILE_DIR`，打包版会把用户配置、日程、运行状态和日志保存到 Windows 用户目录 `%APPDATA%\SmartClockHost-v2.2`。这样以后替换新的 exe 或重新解压 release，不会抹掉已经试用过的配置数据。若旧 release 文件夹里已有 `config.json`、`runtime_state.json`、`schedules.json` 或 `logs/events.jsonl`，程序首次启动会复制到 AppData，但不会覆盖 AppData 中已有的新配置。
+
+打包/烟测时请使用临时运行态目录，例如设置 `SMARTCLOCK_PROFILE_DIR=tmp/release_smoke_profile` 后再启动 exe；这样不会覆盖正式使用时的 AppData 配置、日程、运行状态或日志。
 
 ### 4. 串口连接步骤
 

@@ -1073,6 +1073,37 @@ class MainWindow(QtWidgets.QMainWindow):
     def _local_query_notice(self, action: str) -> None:
         self.log("WARN", f"!!! 当前为本地模式，显示的是上位机保存状态，并非板端实时返回：{action}")
 
+    def _local_protocol_reply(self, command: str, *, query_already_handled: bool = False) -> None:
+        cleaned = command.strip()
+        upper = cleaned.upper()
+        if upper == "*PING":
+            self.status_latency.setText("LOCAL")
+            self.log("RX", "*PONG LOCAL")
+            self._set_latest_event("PONG 本地模拟")
+            append_event_log(APP_DIR, "local_apply", "PING -> PONG LOCAL")
+        elif upper.startswith("*GET:"):
+            query = upper.removeprefix("*GET:").strip()
+            if not query_already_handled:
+                self._handle_local_query(query)
+            moment = self._get_runtime_datetime()
+            if query == "DATE":
+                reply = f"{moment.year % 100:02d}.{moment.month:02d}.{moment.day:02d}"
+            elif query == "TIME":
+                reply = f"{moment.hour:02d}.{moment.minute:02d}.{moment.second:02d}"
+            elif query == "FORMAT":
+                reply = self.runtime_state.format
+            elif query == "MODE":
+                reply = self.runtime_state.mode
+            elif query == "ALARM":
+                reply = self.runtime_state.alarm_time if self.runtime_state.alarm_enabled else "OFF"
+            elif query == "DISPLAY":
+                reply = "ON" if self.runtime_state.display_on else "OFF"
+            else:
+                reply = "UNKNOWN"
+            self.log("RX", f"OK {reply} (LOCAL)")
+        else:
+            self.log("RX", "OK LOCAL")
+
     def _parse_alarm_time_text(self, text: str) -> QtCore.QTime:
         normalized = (text or "").strip().replace(".", ":")
         alarm_time = QtCore.QTime.fromString(normalized, "HH:mm:ss")
@@ -1619,10 +1650,22 @@ class MainWindow(QtWidgets.QMainWindow):
             return "NTP/天气"
         if kind in {"schedule_fire", "schedule_save", "schedule_delete", "alarm"} or "ALARM" in text or "SCHEDULE" in text:
             return "闹钟/日程"
-        if kind in {"mode", "auto_mode", "auto_mode_disabled", "mode_resync"} or "MODE" in text or "DAY" in text or "NIGHT" in text:
-            return "昼夜模式"
-        if kind in {"key", "local_apply", "message_rejected", "state_recover"} or "KEY" in text or "MSG" in text or "DISPLAY" in text:
+        display_markers = (
+            "DISP",
+            "DISPLAY",
+            "KEY",
+            "MSG",
+            "LED",
+            "BEEP",
+            "FORMAT",
+            "USER1",
+            "USER2",
+        )
+        if kind in {"key", "message_rejected", "state_recover"} or any(marker in text for marker in display_markers):
             return "板端/显示"
+        mode_markers = ("MODE", "DAY", "NIGHT", "昼夜", "白天", "黑夜")
+        if kind in {"mode", "auto_mode", "auto_mode_disabled", "mode_resync"} or any(marker in text for marker in mode_markers):
+            return "昼夜模式"
         if kind in {"test_run"} or "TEST" in text or "测试" in detail:
             return "自动测试"
         if kind in {"error", "ntp_error"} or "ERROR" in text or "WARN" in text:
@@ -4366,8 +4409,9 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         self.pending_queries.clear()
         self.last_ping_monotonic = None
-        self._mark_manual_serial_window(f"协议台: {command.split()[0]}", duration_s=2.0)
-        if command.upper() == "*RST":
+        if self.is_connected:
+            self._mark_manual_serial_window(f"协议台: {command.split()[0]}", duration_s=2.0)
+        if command.upper() == "*RST" and self.is_connected:
             self.pending_soft_reset_sync = True
             self.soft_reset_deadline_monotonic = time.monotonic() + 5.0
             self.log("INFO", "协议台发送 RST：等待板端复位响应，随后自动执行一次 NTP 对时。")
@@ -5312,6 +5356,14 @@ class MainWindow(QtWidgets.QMainWindow):
         allow_during_sync: bool = False,
         allow_during_test: bool = False,
     ) -> None:
+        if not self.is_connected:
+            for command in commands:
+                self.send_command(
+                    command,
+                    allow_during_sync=allow_during_sync,
+                    allow_during_test=allow_during_test,
+                )
+            return
         for index, command in enumerate(commands):
             QtCore.QTimer.singleShot(
                 index * gap_ms,
@@ -5569,6 +5621,24 @@ class MainWindow(QtWidgets.QMainWindow):
         fallback_on_fail: bool = False,
         query_after: bool = False,
     ) -> bool:
+        if not self.is_connected:
+            place, zone_now, offset_seconds = self._active_place_time_context()
+            snapshot = zone_now.replace(tzinfo=None, microsecond=0)
+            self._set_runtime_datetime(snapshot)
+            self.ui.dateEdit.setDate(QtCore.QDate(snapshot.year, snapshot.month, snapshot.day))
+            self.ui.timeEdit.setTime(QtCore.QTime(snapshot.hour, snapshot.minute, snapshot.second))
+            self.last_ntp_sync_text = (
+                f"{trigger_source}: 本地模式 {snapshot.strftime('%Y-%m-%d %H:%M:%S')} @ "
+                f"{place.name} {place.timezone} {format_utc_offset(offset_seconds)}"
+            )
+            self.last_selected_zone_time = snapshot.strftime("%Y-%m-%d %H:%M:%S")
+            if hasattr(self, "ntpStatusLabel"):
+                self.ntpStatusLabel.setText(f"最近 NTP: {self.last_ntp_sync_text}")
+            self._refresh_local_twin_frame()
+            self.refresh_dashboard()
+            self.log("WARN", f"!!! 当前未连接串口，已用当前城市/PC 时间更新上位机本地时钟，不等待 NTP/板端写入。")
+            append_event_log(APP_DIR, "auto_time_sync", self.last_ntp_sync_text)
+            return True
         if self._serial_auto_quiet_active():
             self.log(
                 "INFO",
@@ -6353,6 +6423,8 @@ class MainWindow(QtWidgets.QMainWindow):
         upper = command.upper()
         moment = self._get_runtime_datetime()
         action = command
+        if upper.startswith("*GET:"):
+            return
         if upper.startswith("*SET:DATE "):
             parts = upper.split()
             try:
@@ -6466,6 +6538,9 @@ class MainWindow(QtWidgets.QMainWindow):
         elif upper.startswith("*SET:BEEP "):
             action = f"蜂鸣预览 -> {upper.removeprefix('*SET:BEEP ').strip()} ms"
         elif upper == "*PING":
+            self._set_latest_event("PING -> PONG LOCAL")
+            append_event_log(APP_DIR, "local_apply", "PING -> PONG LOCAL")
+            self.refresh_dashboard()
             return
         self._apply_runtime_state_to_ui()
         self._set_latest_event(action)
@@ -6538,10 +6613,14 @@ class MainWindow(QtWidgets.QMainWindow):
             self.log("WARN", f"对时写入正在进行，已暂缓/忽略本次指令: {cleaned}")
             return
         if not self.is_connected:
+            if not heartbeat:
+                self.log("TX", cleaned)
             if expect:
                 self._handle_local_query(expect)
             else:
                 self._apply_local_command(cleaned)
+            if not heartbeat:
+                self._local_protocol_reply(cleaned, query_already_handled=bool(expect))
             return
         if expect:
             self.pending_queries.append(expect)
@@ -6951,9 +7030,10 @@ class MainWindow(QtWidgets.QMainWindow):
         value = "RIGHT" if self.ui.formatCombo.currentText() == "LEFT" else "LEFT"
         self.ui.formatCombo.setCurrentText(value)
         self.send_command(f"*SET:FORMAT {value}")
-        QtCore.QTimer.singleShot(
-            180, lambda: self.send_command("*GET:FORMAT", "FORMAT")
-        )
+        if self.is_connected:
+            QtCore.QTimer.singleShot(
+                180, lambda: self.send_command("*GET:FORMAT", "FORMAT")
+            )
 
     def apply_mode(self) -> None:
         value = "NIGHT" if self.ui.modeCombo.currentText() == "DAY" else "DAY"
@@ -6976,9 +7056,10 @@ class MainWindow(QtWidgets.QMainWindow):
                 self._disable_auto_day_night_due_to_manual("上位机", value)
         self._remember_mode_request(value, "manual_ui")
         self.send_command(f"*SET:MODE {value}")
-        QtCore.QTimer.singleShot(
-            180, lambda: self.send_command("*GET:MODE", "MODE")
-        )
+        if self.is_connected:
+            QtCore.QTimer.singleShot(
+                180, lambda: self.send_command("*GET:MODE", "MODE")
+            )
 
     def send_beep(self) -> None:
         self.send_command(f"*SET:BEEP {self.ui.beepSpinBox.value()}")
@@ -6992,7 +7073,8 @@ class MainWindow(QtWidgets.QMainWindow):
         if not text:
             self.log("WARN", "消息为空，未发送。")
             return
-        self._mark_manual_serial_window("滚动消息", duration_s=2.2)
+        if self.is_connected:
+            self._mark_manual_serial_window("滚动消息", duration_s=2.2)
         self._send_serial_sequence(
             ["*SET:DISPLAY ON", f"*SET:MSG {self._board_message_payload(text)}"],
             gap_ms=180,
@@ -7015,6 +7097,9 @@ class MainWindow(QtWidgets.QMainWindow):
         if key == "USER2":
             self.log("INFO", f"{source_text} USER2 已走安全天气短显路径，不直接发送原始 USER2 按键。")
             self._trigger_user2_weather_short_display(source_text)
+            return True
+        if not self.is_connected:
+            self.send_command(f"*SET:KEY {key}")
             return True
         now = time.monotonic()
         if self.test_run_in_progress:
@@ -7065,8 +7150,9 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         self.pending_queries.clear()
         self.last_ping_monotonic = None
-        self._mark_manual_serial_window(f"RAW: {command.split()[0]}", duration_s=2.0)
-        if command.upper() == "*RST":
+        if self.is_connected:
+            self._mark_manual_serial_window(f"RAW: {command.split()[0]}", duration_s=2.0)
+        if command.upper() == "*RST" and self.is_connected:
             self.pending_soft_reset_sync = True
             self.soft_reset_deadline_monotonic = time.monotonic() + 5.0
             self.log("INFO", "RAW 发送 RST：等待板端复位响应，随后自动执行一次 NTP 对时。")

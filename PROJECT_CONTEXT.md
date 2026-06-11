@@ -1,5 +1,12 @@
 # PROJECT_CONTEXT - 智能时钟联网系统
 
+## 2026-06-11 v2.2 离线调试与 release 配置保护收口
+- 本轮针对用户“不使用串口”调试体验修复：协议测试台离线发送 `*PING` 会显示 `TX *PING` 与 `RX *PONG LOCAL`；`*GET:TIME` 等查询会回 `OK ... (LOCAL)`，不再因为隐藏心跳日志或没有真板而看不到反馈。
+- 离线虚拟 `DISP` 修复双跳，稳定循环 `TIME -> DATE -> WEEKDAY -> YEAR -> TIME`；未连接串口时虚拟按键、FORMAT/MODE、滚动消息和 NTP 入口不再等待串口安静窗口/板端回读，直接更新影子状态和数字孪生，避免 PC 假死感。
+- Matplotlib 过去 24 小时“日志统计”分类修正：`DISP/DISPLAY/KEY/MSG/LED/FORMAT/USER2` 算“板端/显示”，`MODE/DAY/NIGHT` 算“昼夜模式”，避免按 DISP 被误记成昼夜模式。
+- 新增 `scripts/build_v22_release.ps1`，以后 v2.2 打包统一走该脚本：重打包前只在目标不存在时迁移旧 release 运行态到 `%APPDATA%\SmartClockHost-v2.2`，烟测强制使用临时 `SMARTCLOCK_PROFILE_DIR`，不会覆盖用户已试用配置。
+- 已验证：Python 语法检查通过；离线 PyQt 探针通过；`run_extension_checks.py --host-only --full` 通过；测试前后 `%APPDATA%\SmartClockHost-v2.2` 的 `config.json/runtime_state.json/schedules.json` 时间戳未被改动；v2.2 exe/zip 已用新脚本重新生成并完成临时 profile 烟测。
+
 ## 2026-06-11 v2.2 exe 菜单卡顿/闪退风险与日志统计图收口
 - 本轮针对用户反馈的“打包 exe 打开最上方菜单时界面卡、UI 糊成一坨、偶发闪退”做稳定性收口：左上角页面选择从内嵌展开菜单改为弹出式菜单，不再改变主内容布局高度，避免菜单展开时触发左页、右侧数字孪生、日志区和 Matplotlib 画布整体重排。
 - Matplotlib 图表刷新改为按需防抖，并给绘图过程加保护：单个图绘制失败时在图内显示错误提示并写 WARN 日志，主窗口继续运行。

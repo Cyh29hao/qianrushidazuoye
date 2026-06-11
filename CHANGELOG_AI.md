@@ -4,6 +4,22 @@
 
 ## 2026-06-11
 
+### v2.2 离线模式、DISP 与配置保护收口
+
+#### 已完成修改
+- 未连接串口/选择“不使用串口”时，协议测试台发送 `*PING` 也会显示 `TX *PING` 与 `RX *PONG LOCAL`，即使隐藏心跳日志也不会吞掉手动 PING。
+- 修复离线虚拟 `DISP` 双跳问题：未连接串口时按键只执行一次本地模拟，稳定循环 `TIME -> DATE -> WEEKDAY -> YEAR -> TIME`，不再只剩两个状态。
+- Matplotlib “日志统计”分类修正：`DISP/DISPLAY/KEY/MSG/LED/FORMAT/USER2` 归入“板端/显示”，纯 `MODE/DAY/NIGHT` 归入“昼夜模式”，避免按 DISP 被误统计成昼夜模式。
+- 未连接串口时，虚拟按键、滚动消息、FORMAT/MODE 查询和 NTP 入口不再套用串口安静窗口/延迟回读；本地模式直接更新影子状态与数字孪生，避免 PC 程序看起来“未响应”。
+- 新增 `scripts/build_v22_release.ps1`：重打包前会把旧 release 目录里的运行态只在目标不存在时迁移到 `%APPDATA%\SmartClockHost-v2.2`，烟测强制使用临时 `SMARTCLOCK_PROFILE_DIR`，避免覆盖用户试用配置。
+- `for_submit/README.md` 修正旧口径：打包版正式配置目录为 `%APPDATA%\SmartClockHost-v2.2`，不是 exe 所在目录。
+
+#### 验证结果
+- `python -m py_compile pc_host/app.py pc_host/protocol.py pc_host/twin_widgets.py pc_host/extension_services.py pc_host/extension_store.py pc_host/run_extension_checks.py` 通过。
+- 离线 PyQt 探针通过：协议台 `*PING` 有 `TX/RX`，虚拟 DISP 五次序列为 `DATE/WEEKDAY/YEAR/TIME/DATE`，`DISP` 与 `MODE` 统计分类分开，`*GET:TIME` 有本地 `OK ... (LOCAL)` 回显。
+- `python pc_host/run_extension_checks.py --host-only --full` 通过；正式 AppData 配置文件时间戳未被本轮测试改动。
+- 使用 `scripts/build_v22_release.ps1` 重新生成 `build_release/SmartClockHost-v2.2/SmartClockHost.exe`、`build_release/SmartClockHost-v2.2.zip` 和 `for_submit/release/SmartClockHost-v2.2.zip`；exe 使用临时 `SMARTCLOCK_PROFILE_DIR` 启动 10 秒未退出，release 目录无 `config.json/runtime_state.json/schedules.json/logs` 残留。
+
 ### v2.2 exe 菜单卡顿与日志统计图收口
 
 #### 已完成修改
