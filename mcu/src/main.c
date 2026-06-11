@@ -52,6 +52,9 @@
 #define REMOTE_FUNC_COOLDOWN_MS    900UL
 #define DISP_LONG_PRESS_TICKS      80U
 #define I2C_WAIT_GUARD_LOOPS       50000UL
+#define MAIN_SCAN_BUDGET           4U
+#define MAIN_TICK10_BUDGET         2U
+#define MAIN_TICK100_BUDGET        2U
 #define TIME_BACKUP_SAVE_MS        10000UL
 #define TIME_BACKUP_EEPROM_ADDR    0x0000UL
 #define TIME_BACKUP_MAGIC          0x53434C4BU
@@ -393,29 +396,37 @@ int main(void)
     UART_WriteLine("S800 CLOCK READY");
 
     while (1) {
+        uint8_t budget;
+
         UART_Poll();
 
-        while (g_scanTicks != 0U) {
+        budget = MAIN_SCAN_BUDGET;
+        while ((g_scanTicks != 0U) && (budget != 0U)) {
             g_scanTicks--;
+            budget--;
             Display_ScanNextDigit();
         }
 
-        while (g_ticks10ms != 0U) {
+        budget = MAIN_TICK10_BUDGET;
+        while ((g_ticks10ms != 0U) && (budget != 0U)) {
             g_ticks10ms--;
+            budget--;
             Tick10ms();
         }
 
-        while (g_ticks100ms != 0U) {
+        budget = MAIN_TICK100_BUDGET;
+        while ((g_ticks100ms != 0U) && (budget != 0U)) {
             g_ticks100ms--;
+            budget--;
             Tick100ms();
         }
 
-        while (g_ticks500ms != 0U) {
+        if (g_ticks500ms != 0U) {
             g_ticks500ms--;
             Tick500ms();
         }
 
-        while (g_ticks1000ms != 0U) {
+        if (g_ticks1000ms != 0U) {
             g_ticks1000ms--;
             Tick1000ms();
         }

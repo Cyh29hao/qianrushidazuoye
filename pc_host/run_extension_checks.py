@@ -18,16 +18,17 @@ from protocol import (
     build_set_time_command,
     build_set_weather_command,
     parse_line,
+    token_to_text,
 )
 
 ProgressCallback = Callable[[str], None]
 SERIAL_ESTIMATED_SECONDS = 45
-SERIAL_FULL_ESTIMATED_SECONDS = 140
+SERIAL_FULL_ESTIMATED_SECONDS = 150
 HOST_ONLY_ESTIMATED_SECONDS = 5
 HOST_ONLY_FULL_ESTIMATED_SECONDS = 9
 SERIAL_COMMAND_GAP_S = 0.55
 SERIAL_HARD_TIMEOUT_S = 70.0
-SERIAL_FULL_HARD_TIMEOUT_S = 180.0
+SERIAL_FULL_HARD_TIMEOUT_S = 195.0
 
 
 class CheckCancelled(RuntimeError):
@@ -322,6 +323,103 @@ def send_user2_expect_weather_display(
     raise RuntimeError(f"USER2 safe weather display {expected} not observed; lines={lines}")
 
 
+def _display_line_is_hh_mm_ss(line: str) -> bool:
+    parsed = parse_line(line)
+    if parsed.kind != "event" or parsed.name != "DISP" or not parsed.extra:
+        return False
+    try:
+        dp_mask = int(parsed.extra[0], 16)
+    except ValueError:
+        return False
+    text = token_to_text(parsed.data, dp_mask).strip()
+    parts = text.split(".")
+    if len(parts) != 3:
+        return False
+    if any(len(part) != 2 or not part.isdigit() for part in parts):
+        return False
+    hour, minute, second = (int(part) for part in parts)
+    return 0 <= hour <= 23 and 0 <= minute <= 59 and 0 <= second <= 59
+
+
+def enter_func_time_edit_expect_hms(
+    port: Any,
+    progress: ProgressCallback | None = None,
+    cancel_event: Event | None = None,
+    restore_mode: str = "DAY",
+    restore_format: str = "LEFT",
+) -> list[str]:
+    lines: list[str] = []
+    safe_restore_mode = restore_mode.strip().upper()
+    if safe_restore_mode not in {"DAY", "NIGHT"}:
+        safe_restore_mode = "DAY"
+    safe_restore_format = restore_format.strip().upper()
+    if safe_restore_format not in {"LEFT", "RIGHT"}:
+        safe_restore_format = "LEFT"
+    _progress(
+        progress,
+        "[INFO] FUNC edit probe: normalize DISPLAY/FORMAT, switch NIGHT, then FUNC(date)->FUNC(time); "
+        "NIGHT 下 HH.MM.SS 属于正确编辑显示",
+    )
+    for command in ("*SET:DISPLAY ON", "*SET:FORMAT LEFT", "*SET:MODE NIGHT", "*SET:KEY FUNC", "*SET:KEY FUNC"):
+        lines.extend(
+            send_expect_ok(
+                port,
+                command,
+                timeout_s=2.6,
+                progress=progress,
+                cancel_event=cancel_event,
+            )
+        )
+        if command == "*SET:KEY FUNC":
+            _progress(progress, "[INFO] 等待远程 FUNC 冷却，避免第二次 FUNC 被板端防抖合并")
+            lines.extend(settle_serial(port, seconds=1.05, progress=progress, cancel_event=cancel_event))
+    deadline = time.monotonic() + 3.5
+    observed = any(_display_line_is_hh_mm_ss(line) for line in lines)
+    while time.monotonic() < deadline:
+        extra = read_lines(port, timeout_s=0.35, cancel_event=cancel_event)
+        for line in extra:
+            _progress(progress, f"[RX] {line}")
+            lines.append(line)
+            if _display_line_is_hh_mm_ss(line):
+                observed = True
+        if observed:
+            break
+    try:
+        lines.extend(
+            send_expect_ok(
+                port,
+                "*SET:KEY EXT",
+                timeout_s=2.0,
+                progress=progress,
+                cancel_event=cancel_event,
+            )
+        )
+        lines.extend(
+            send_expect_ok(
+                port,
+                f"*SET:MODE {safe_restore_mode}",
+                timeout_s=2.0,
+                progress=progress,
+                cancel_event=cancel_event,
+            )
+        )
+        lines.extend(
+            send_expect_ok(
+                port,
+                f"*SET:FORMAT {safe_restore_format}",
+                timeout_s=2.0,
+                progress=progress,
+                cancel_event=cancel_event,
+            )
+        )
+    except Exception as exc:  # noqa: BLE001
+        _progress(progress, f"[WARN] FUNC edit probe recovery failed: {exc}")
+    if not observed:
+        raise RuntimeError(f"FUNC time edit HH.MM.SS display not observed; lines={lines}")
+    _progress(progress, "[INFO] FUNC time edit HH.MM.SS display observed and recovered with EXT")
+    return lines
+
+
 def execute_checks_on_open_port(
     port: Any,
     progress: ProgressCallback | None = None,
@@ -356,7 +454,7 @@ def execute_checks_on_open_port(
     original_mode = capture_state("*GET:MODE", original_mode, {"DAY", "NIGHT"})
     original_display = capture_state("*GET:DISPLAY", original_display, {"ON", "OFF"})
 
-    total_steps = 11 + (10 if full else 0)
+    total_steps = 11 + (11 if full else 0)
 
     def run(name: str, action, hint: str, settle_s: float = 0.7) -> None:
         nonlocal failed
@@ -523,6 +621,18 @@ def execute_checks_on_open_port(
                 f"检查 {key_name} 按键映射、显示状态恢复和数字孪生同步。",
                 settle_s=0.0,
             )
+        run(
+            "FUNC TIME EDIT",
+            lambda: enter_func_time_edit_expect_hms(
+                port,
+                progress=progress,
+                cancel_event=cancel_event,
+                restore_mode=original_mode,
+                restore_format=original_format,
+            ),
+            "检查 FUNC 进入日期/时间编辑，且 NIGHT 下时间编辑页显示 HH.MM.SS 不应被 PC 误纠偏。",
+            settle_s=0.4,
+        )
         run(
             "RAPID KEY BURST",
             rapid_key_burst_probe,

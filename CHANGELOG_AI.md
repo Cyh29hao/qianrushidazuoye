@@ -4,6 +4,19 @@
 
 ## 2026-06-11
 
+### v2.2 NIGHT/FUNC edit and smoothness closeout
+#### Done
+- PC NIGHT display correction now respects board edit state. During FUNC/SHIFT/ADD/SAVE edit windows, `HH.MM.SS` is allowed in NIGHT mode because it is the correct time-edit page display. Normal NIGHT time display still remains `HH.MM`.
+- DAY/NIGHT theme refresh is now deferred and coalesced after the triggering action returns. Startup, runtime-state application, and newly created Matplotlib widgets still apply theme immediately to avoid first-frame NIGHT white backgrounds.
+- Comprehensive automated serial test adds `FUNC TIME EDIT`: it normalizes DISPLAY/FORMAT, switches to NIGHT, enters FUNC date/time edit, waits for a real `HH.MM.SS` display frame, exits with EXT, and restores the previous MODE/FORMAT.
+- MCU main loop now processes display scan ticks and timed tasks with small per-loop budgets before returning to `UART_Poll()`. This reduces the risk that display scanning, I2C latency, marquee scrolling, or rapid tests starve UART and make the board look frozen.
+
+#### Verified
+- `pc_host/.venv/Scripts/python.exe -m py_compile pc_host/app.py pc_host/protocol.py pc_host/twin_widgets.py pc_host/extension_services.py pc_host/extension_store.py pc_host/run_extension_checks.py` passed.
+- `pc_host/.venv/Scripts/python.exe pc_host/run_extension_checks.py --host-only --full` passed.
+- UI smoothness probe: `_set_mode_state(DAY/NIGHT)` returned in about 1.5 ms, virtual USER1 long press in about 12 ms, virtual DISP in about 9 ms, and NIGHT+FUNC edit guard did not trigger night-display self-correction.
+- Existing COM5 firmware still passed quick serial checks, but full serial testing later exposed a board/serial no-response after marquee activity. The MCU scheduler fix above addresses that root cause and must be verified after flashing the updated firmware.
+
 ### v2.2 最终体验复测、冷启动与离线即时响应收口
 
 #### 已完成修改

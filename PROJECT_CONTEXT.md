@@ -1,5 +1,12 @@
 # PROJECT_CONTEXT - 智能时钟联网系统
 
+## 2026-06-11 v2.2 NIGHT/FUNC 编辑与流畅性收口
+- 修正 PC 端 NIGHT 显示自纠逻辑：板端进入 FUNC/SHIFT/ADD/SAVE 编辑窗口时，NIGHT 下显示 `HH.MM.SS` 被视为“编辑时间页的正确显示”，PC 不再误判为夜间规则异常并回写 `*SET:MODE NIGHT`。普通 NIGHT 时间页仍保持 `HH.MM`，若非编辑态出现完整时分秒，仍会触发一次自纠。
+- PC 主题刷新改为“首启/新控件立即刷新，后续 DAY/NIGHT 切换延迟合并刷新”：启动和 Matplotlib 首次创建控件仍同步套主题，避免 NIGHT 首启白底；用户切换 DAY/NIGHT、虚拟 USER1 长按等操作先快速返回，再由 Qt 事件循环合并应用 QSS。离屏探针测得 `_set_mode_state()` 约 1.5 ms 返回，虚拟 USER1 长按约 12 ms，虚拟 DISP 约 9 ms。
+- 全面自动测试新增 `FUNC TIME EDIT`：脚本会强制 DISPLAY ON、FORMAT LEFT、切到 NIGHT，再执行 FUNC(date)->FUNC(time)，等待真实 `HH.MM.SS` 显示帧，并用 EXT 退出编辑后恢复测试前 MODE/FORMAT。测试总步数从 21 增至 22，串口 full 预计耗时更新到约 150 秒。
+- MCU 主循环增加预算式调度：每轮最多处理少量显示扫描和定时 tick，然后回到 `UART_Poll()`。这是为防止显示扫描/I2C 或跑马灯状态积压时饿死串口轮询，减少乱按、跑马灯、全面测试期间板端无响应风险。协议未变，但需要重新 Keil5 编译烧录后才能生效。
+- 验证：PC `py_compile` 通过；`run_extension_checks.py --host-only --full` 通过；流畅性探针通过且 FUNC 编辑保护下未触发夜间自纠；旧固件 COM5 quick 通过。旧固件 COM5 full 在跑马灯项后出现串口无响应，已据此修改 MCU 主循环，最终 full 联板结论需烧录新固件后复测。
+
 ## 2026-06-11 v2.2 最终体验复测、冷启动与离线即时响应收口
 - 本轮继续围绕用户要求“像真实用户一样打开 exe 和联板体验所有功能”收口，只修 v2.2 主线，不再碰 `真正的最新版-v3.0-local`。
 - PC 端 Matplotlib 改为懒加载：启动时不再导入/创建 FigureCanvas，只有点击主页“Matplotlib 图表”才加载；首次加载会显示提示，失败只降级图表区域，不会闪退主窗口。

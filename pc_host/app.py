@@ -427,6 +427,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.last_tx_command = ""
         self.last_tx_monotonic = 0.0
         self.last_night_display_fix_monotonic = 0.0
+        self.board_edit_display_guard_until = 0.0
+        self.theme_refresh_pending = False
         self.ring_command_supported: bool | None = None
         self.last_test_summary = "未运行"
         self.last_test_ok = False
@@ -521,7 +523,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.refresh_schedule_table()
         self.refresh_dashboard()
         self.refresh_place_combo_labels()
-        self._refresh_theme_from_mode()
+        self._refresh_theme_from_mode(immediate=True)
         QtCore.QTimer.singleShot(0, self._finalize_startup_theme)
         QtCore.QTimer.singleShot(180, self._finalize_startup_theme)
         self.log("INFO", "PC 上位机已启动，等待连接 S800。")
@@ -583,7 +585,7 @@ class MainWindow(QtWidgets.QMainWindow):
         splitter.setSizes([left_width, right_width])
 
     def _finalize_startup_theme(self) -> None:
-        self._refresh_theme_from_mode()
+        self._refresh_theme_from_mode(immediate=True)
         self._startup_theme_polished = True
 
     def _build_statusbar(self) -> None:
@@ -1405,7 +1407,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ui.ledHexEdit.setText(f"{self.runtime_state.led_mask:02X}")
         self.ui.messageEdit.setText(self.runtime_state.message_text)
         self._refresh_local_twin_frame()
-        self._refresh_theme_from_mode()
+        self._refresh_theme_from_mode(immediate=True)
         self._refresh_single_alarm_ui()
 
     def _selected_zone_now(self, utc_moment: datetime | None = None) -> datetime:
@@ -3276,7 +3278,18 @@ class MainWindow(QtWidgets.QMainWindow):
         group.setMaximumHeight(456)
         group.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
 
-    def _refresh_theme_from_mode(self) -> None:
+    def _refresh_theme_from_mode(self, *, immediate: bool = False) -> None:
+        if immediate:
+            self.theme_refresh_pending = False
+            self._apply_theme()
+            return
+        if self.theme_refresh_pending:
+            return
+        self.theme_refresh_pending = True
+        QtCore.QTimer.singleShot(0, self._apply_deferred_theme_refresh)
+
+    def _apply_deferred_theme_refresh(self) -> None:
+        self.theme_refresh_pending = False
         self._apply_theme()
 
     def _refine_layout_legacy(self) -> None:
@@ -4172,7 +4185,7 @@ class MainWindow(QtWidgets.QMainWindow):
             QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding
         )
         self.dashboardChartLayout.addWidget(self.dashboardCanvas, 1)
-        self._refresh_theme_from_mode()
+        self._refresh_theme_from_mode(immediate=True)
         return True
 
     def _build_dashboard_group(self, parent: QtWidgets.QWidget) -> QtWidgets.QGroupBox:
@@ -6661,12 +6674,20 @@ class MainWindow(QtWidgets.QMainWindow):
         hour, minute, second = (int(part) for part in parts)
         return 0 <= hour <= 23 and 0 <= minute <= 59 and 0 <= second <= 59
 
+    def _mark_board_edit_display_guard(self, source: str = "", duration_s: float = 6.0) -> None:
+        self.board_edit_display_guard_until = max(
+            self.board_edit_display_guard_until,
+            time.monotonic() + duration_s,
+        )
+
     def _correct_night_display_if_needed(self, token: str, dp_mask: int) -> None:
         if self.last_mode != "NIGHT":
             return
         if not self._display_frame_is_full_hms(token, dp_mask):
             return
         now = time.monotonic()
+        if now < self.board_edit_display_guard_until:
+            return
         if now - self.last_night_display_fix_monotonic < 3.0:
             return
         self.last_night_display_fix_monotonic = now
@@ -6786,6 +6807,10 @@ class MainWindow(QtWidgets.QMainWindow):
                 self._advance_local_display_view_from_disp_key()
                 action = f"虚拟按键 DISP -> {self.runtime_state.view_mode}"
             elif key in {"FUNC", "SHIFT", "ADD", "SAVE", "EXT"}:
+                if key in {"FUNC", "SHIFT", "ADD", "SAVE"}:
+                    self._mark_board_edit_display_guard(f"local key {key}", duration_s=6.0)
+                else:
+                    self._mark_board_edit_display_guard("local key EXT", duration_s=1.2)
                 self._schedule_single_alarm_query(f"本地虚拟按键 {key}", delay_ms=650)
             self._save_runtime_state()
         elif upper.startswith("*SET:RING "):
@@ -7093,6 +7118,10 @@ class MainWindow(QtWidgets.QMainWindow):
             key = parsed.data.strip().upper()
             self.twin.highlight_key(key)
             append_event_log(APP_DIR, "key", key)
+            if key in {"FUNC", "SHIFT", "ADD", "SAVE"}:
+                self._mark_board_edit_display_guard(f"board key {key}", duration_s=6.0)
+            elif key == "EXT":
+                self._mark_board_edit_display_guard("board key EXT", duration_s=1.2)
             if key == "USER1":
                 self.refresh_dashboard()
                 self.request_user1_time_sync("USER1")
@@ -7147,6 +7176,7 @@ class MainWindow(QtWidgets.QMainWindow):
             return
 
         if parsed.name == "EDIT" and parsed.extra:
+            self._mark_board_edit_display_guard(f"board edit {parsed.data}", duration_s=1.2)
             self.log("INFO", f"板端保存 {parsed.data}: {parsed.extra[0]}")
             append_event_log(APP_DIR, "edit", f"{parsed.data}: {parsed.extra[0]}")
             if parsed.data.strip().upper() == "ALARM":
@@ -7387,6 +7417,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.pending_queries.clear()
         self.last_ping_monotonic = None
         self._mark_manual_serial_window(f"{source_text}: {key}", duration_s=max(1.4, cooldown + 0.5))
+        if key in {"FUNC", "SHIFT", "ADD", "SAVE"}:
+            self._mark_board_edit_display_guard(f"{source_text} {key}", duration_s=6.0)
+        elif key == "EXT":
+            self._mark_board_edit_display_guard(f"{source_text} EXT", duration_s=1.2)
         if key == "DISP":
             self._advance_local_display_view_from_disp_key()
             self._set_latest_event(f"{source_text} DISP -> {self.runtime_state.view_mode}")
