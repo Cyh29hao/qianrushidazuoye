@@ -4,6 +4,25 @@
 
 ## 2026-06-16
 
+### v2.2 Matplotlib dashboard UI and startup serial robustness
+
+#### Done
+- Changed the Matplotlib dashboard filter controls from a tall single column to a compact 2x2 grid, with smaller fixed-height buttons and tighter spacing so the four buttons cannot overlap in the right-side filter card.
+- Shortened the Matplotlib system-status helper text to exactly two lines: display/auto-day-night/alarm on the first line, PC reminders/weather on the second line.
+- Added background Matplotlib backend preloading after startup. Entering the chart page no longer performs a blocking import on the click path; while the backend is still loading, the chart area shows a non-blocking loading message.
+- Hardened serial startup: connecting a COM port now clears stale serial buffers, pending queries, ping state, and unfinished sync-write state; lifecycle NTP waits for a short serial-stability window.
+- Tightened sync-write OK handling so only `OK` for the most recent `*SET:DATE` or `*SET:TIME` advances the NTP write phase. Startup `OK` replies from mode/weather/ping commands can no longer leave the UI stuck in “sync in progress”.
+- Rebuilt the local v2.2 release exe/zip after the UI and serial changes.
+
+#### Verified
+- `python -m py_compile pc_host/app.py pc_host/protocol.py pc_host/run_extension_checks.py pc_host/run_teacher_protocol_regression.py` passed.
+- `pc_host/run_extension_checks.py --host-only` passed.
+- `pc_host/run_teacher_protocol_regression.py --port COM5` passed 18/18.
+- `pc_host/run_extension_checks.py --port COM5` passed quick serial checks.
+- Source-window screenshot check: first chart click returned in about 6.7 ms; filter button rectangles did not overlap; system-status text was 2 lines.
+- COM5 source-window startup check: app opened with COM5 already present, connected successfully, NTP DATE/TIME write completed, GET readback returned DATE/TIME/FORMAT/MODE/ALARM/DISPLAY, and all busy flags returned false.
+- Packaged exe screenshot check: window appeared, Matplotlib status dashboard rendered with separated 2x2 filter buttons and two-line system-status text; `IsHungAppWindow` reported false.
+
 ### v2.2 teacher testcmdV2.1 serial full-score closeout
 
 #### Done

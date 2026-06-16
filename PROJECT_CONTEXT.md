@@ -1,5 +1,12 @@
 # PROJECT_CONTEXT - 智能时钟联网系统
 
+## 2026-06-16 v2.2 Matplotlib UI and serial-start robustness closeout
+- 本轮只按用户指定修程序问题，不制作 PDF：Matplotlib 看板右侧四个筛选按钮由单列改为 2x2 紧凑网格，并降低按钮高度/间距，避免在小右侧面板中互相挤压或重叠。
+- Matplotlib “系统状态”说明文字缩短为固定两行：显示/自动昼夜/闹钟一行，PC 提醒/天气一行，避免三行小字溢出。
+- 首次打开 Matplotlib 图表体验优化：启动后后台预热 Matplotlib import；点击图表页时不再同步阻塞加载，未完成时先显示“后台加载中，可操作其它功能”，主线程只在后端 ready 后创建 FigureCanvas 并渲染。
+- 串口连接鲁棒性加固：打开 COM 口后清理输入/输出缓冲、pending query、旧写时状态和 ping 状态；连接成功和板端 READY 后延迟/合并生命周期 NTP，给串口稳定窗口；对时 OK 只在最近发送命令确实是 `*SET:DATE` 或 `*SET:TIME` 时推进阶段，避免 MODE/WEATHER/PING 等启动响应误推进对时状态。
+- 验证：`py_compile` 通过；host-only 检查通过；COM5 teacher regression 18/18 通过；COM5 quick 联合测试通过；源码真实窗口截图确认首次切图表返回约 6.7 ms、按钮无重叠、说明 2 行；COM5 真实窗口确认连接后 NTP 写入、DATE/TIME/GET 回读完成且 busy flags 全部恢复 false；v2.2 release 已重打包，exe 截图确认按钮分开、说明 2 行、进程未假死。
+
 ## 2026-06-16 v2.2 teacher testcmdV2.1 full-score serial closeout
 - 用户提供老师新发 `testcmdV2.1` 串口命令测试子集后，已按 COM5 真机测试结果完成协议收口。老师原始 100 条命令结果为 `OK 92`、`ERROR 8`、`TIMEOUT 0`，评分脚本给出 `10.0/10.0`。
 - 8 个 `ERROR` 是测试集中用于验证非法命令拒绝能力的预期错误，不应通过放宽非法输入来“减少 ERROR”。答辩口径应强调“合法命令无 TIMEOUT，非法命令正确拒绝，评分满分”。

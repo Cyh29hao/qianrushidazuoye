@@ -97,13 +97,15 @@ from serial.tools import list_ports
 FigureCanvas = None
 Figure = None
 MATPLOTLIB_AVAILABLE = None
+MATPLOTLIB_LOAD_IN_PROGRESS = False
 
 
 def ensure_matplotlib_loaded() -> bool:
     """Load matplotlib only when the user opens the chart dashboard."""
-    global FigureCanvas, Figure, MATPLOTLIB_AVAILABLE
+    global FigureCanvas, Figure, MATPLOTLIB_AVAILABLE, MATPLOTLIB_LOAD_IN_PROGRESS
     if MATPLOTLIB_AVAILABLE is not None:
         return bool(MATPLOTLIB_AVAILABLE)
+    MATPLOTLIB_LOAD_IN_PROGRESS = True
     try:
         import matplotlib
 
@@ -125,6 +127,8 @@ def ensure_matplotlib_loaded() -> bool:
         FigureCanvas = None
         Figure = None
         MATPLOTLIB_AVAILABLE = False
+    finally:
+        MATPLOTLIB_LOAD_IN_PROGRESS = False
     return bool(MATPLOTLIB_AVAILABLE)
 
 from extension_services import (
@@ -339,6 +343,7 @@ class MainWindow(QtWidgets.QMainWindow):
     test_point_finished = QtCore.pyqtSignal(str)
     test_run_finished = QtCore.pyqtSignal(str, bool)
     ports_scanned = QtCore.pyqtSignal(list)
+    dashboard_chart_backend_loaded = QtCore.pyqtSignal(bool)
 
     def __init__(self) -> None:
         super().__init__()
@@ -375,6 +380,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.dashboard_chart_filter = "timeline"
         self.dashboard_chart_render_pending = False
         self.dashboard_chart_last_error = ""
+        self.dashboard_chart_load_requested = False
+        self.dashboard_chart_preload_started = False
         self.last_display_event: tuple[str, int] | None = None
         self.last_led_event: int | None = None
         self.last_board_display_monotonic = 0.0
@@ -495,6 +502,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.test_point_finished.connect(self._append_test_output_line)
         self.test_run_finished.connect(self._finish_test_run)
         self.ports_scanned.connect(self._finish_port_scan)
+        self.dashboard_chart_backend_loaded.connect(self._finish_dashboard_chart_preload)
 
         self.port_timer = QtCore.QTimer(self)
         self.port_timer.setInterval(1500)
@@ -527,6 +535,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._refresh_theme_from_mode(immediate=True)
         QtCore.QTimer.singleShot(0, self._finalize_startup_theme)
         QtCore.QTimer.singleShot(180, self._finalize_startup_theme)
+        QtCore.QTimer.singleShot(1600, self._preload_dashboard_chart_backend)
         self.log("INFO", "PC 上位机已启动，等待连接 S800。")
 
     def showEvent(self, event: QtGui.QShowEvent) -> None:  # noqa: N802 - Qt API
@@ -1609,8 +1618,6 @@ class MainWindow(QtWidgets.QMainWindow):
         if not hasattr(self, "dashboardStack"):
             return
         show_chart = view == "chart"
-        if show_chart:
-            self._ensure_dashboard_chart_widgets()
         self.dashboardStack.setCurrentIndex(1 if show_chart else 0)
         for button, selected in (
             (getattr(self, "dashboardCardViewButton", None), not show_chart),
@@ -1622,6 +1629,10 @@ class MainWindow(QtWidgets.QMainWindow):
             button.style().unpolish(button)
             button.style().polish(button)
         if show_chart:
+            if not self._ensure_dashboard_chart_widgets():
+                self.dashboard_chart_load_requested = True
+                self._preload_dashboard_chart_backend()
+                return
             self._schedule_dashboard_chart_render(force=True)
 
     def set_dashboard_chart_filter(self, filter_name: str) -> None:
@@ -1827,10 +1838,9 @@ class MainWindow(QtWidgets.QMainWindow):
             )
         if hasattr(self, "dashboardChartInfoLabel"):
             self.dashboardChartInfoLabel.setText(
-                f"显示 {'开' if self.runtime_state.display_on else '关'}，自动昼夜 "
-                f"{'开' if self.config.auto_day_night else '关'}，板载闹钟 "
-                f"{1 if self.runtime_state.alarm_enabled else 0}/1，PC 提醒 {enabled_count}/{max(1, total_count)}，"
-                f"天气 {self._format_weather_age(self._selected_zone_now().replace(tzinfo=None))}。"
+                f"显示{'开' if self.runtime_state.display_on else '关'} / 自动昼夜{'开' if self.config.auto_day_night else '关'} / "
+                f"闹钟{1 if self.runtime_state.alarm_enabled else 0}/1\n"
+                f"PC提醒{enabled_count}/{max(1, total_count)} / 天气{self._format_weather_age(self._selected_zone_now().replace(tzinfo=None))}"
             )
 
     def _event_category_for_chart(self, kind: str, detail: str) -> str:
@@ -4150,8 +4160,8 @@ class MainWindow(QtWidgets.QMainWindow):
         side_frame.setProperty("dashboardCard", True)
         side_frame.setFixedWidth(190)
         side_layout = QtWidgets.QVBoxLayout(side_frame)
-        side_layout.setContentsMargins(10, 10, 10, 10)
-        side_layout.setSpacing(8)
+        side_layout.setContentsMargins(8, 8, 8, 8)
+        side_layout.setSpacing(6)
 
         filter_title = QtWidgets.QLabel("图表筛选", side_frame)
         filter_title.setProperty("dashboardTitle", True)
@@ -4166,18 +4176,25 @@ class MainWindow(QtWidgets.QMainWindow):
             self.dashboardChartStatusButton,
             self.dashboardChartLogsButton,
         ):
-            button.setMinimumHeight(34)
+            button.setMinimumHeight(28)
+            button.setMaximumHeight(32)
+            button.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
             button.setCursor(QtCore.Qt.PointingHandCursor)
-        self.dashboardChartInfoLabel = QtWidgets.QLabel("展示当前城市时间、天气、提醒、系统状态和 24 小时操作统计。", side_frame)
+        self.dashboardChartInfoLabel = QtWidgets.QLabel("展示时间、天气、提醒、状态和 24 小时日志。", side_frame)
         self.dashboardChartInfoLabel.setWordWrap(True)
         self.dashboardChartInfoLabel.setProperty("dashboardSub", True)
         self.dashboardChartInfoLabel.setStyleSheet("")
 
         side_layout.addWidget(filter_title)
-        side_layout.addWidget(self.dashboardChartTimelineButton)
-        side_layout.addWidget(self.dashboardChartScheduleButton)
-        side_layout.addWidget(self.dashboardChartStatusButton)
-        side_layout.addWidget(self.dashboardChartLogsButton)
+        filter_grid = QtWidgets.QGridLayout()
+        filter_grid.setContentsMargins(0, 0, 0, 0)
+        filter_grid.setHorizontalSpacing(6)
+        filter_grid.setVerticalSpacing(6)
+        filter_grid.addWidget(self.dashboardChartTimelineButton, 0, 0)
+        filter_grid.addWidget(self.dashboardChartScheduleButton, 0, 1)
+        filter_grid.addWidget(self.dashboardChartStatusButton, 1, 0)
+        filter_grid.addWidget(self.dashboardChartLogsButton, 1, 1)
+        side_layout.addLayout(filter_grid)
         side_layout.addWidget(self.dashboardChartInfoLabel, 1)
 
         layout.addWidget(chart_frame, 1)
@@ -4189,9 +4206,15 @@ class MainWindow(QtWidgets.QMainWindow):
             return True
         if not hasattr(self, "dashboardChartLayout"):
             return False
+        if MATPLOTLIB_AVAILABLE is None or MATPLOTLIB_LOAD_IN_PROGRESS:
+            if hasattr(self, "dashboardChartPlaceholder"):
+                self.dashboardChartPlaceholder.setText(
+                    "正在后台加载 Matplotlib 图表组件...\n可以先操作其它功能。"
+                )
+            self._preload_dashboard_chart_backend()
+            return False
         if hasattr(self, "dashboardChartPlaceholder"):
             self.dashboardChartPlaceholder.setText("正在加载 Matplotlib 图表组件...")
-            QtWidgets.QApplication.processEvents(QtCore.QEventLoop.ExcludeUserInputEvents)
         if not ensure_matplotlib_loaded() or Figure is None or FigureCanvas is None:
             if hasattr(self, "dashboardChartPlaceholder"):
                 self.dashboardChartPlaceholder.setText(
@@ -4212,6 +4235,30 @@ class MainWindow(QtWidgets.QMainWindow):
         self.dashboardChartLayout.addWidget(self.dashboardCanvas, 1)
         self._refresh_theme_from_mode(immediate=True)
         return True
+
+    def _preload_dashboard_chart_backend(self) -> None:
+        if self.dashboard_chart_preload_started or MATPLOTLIB_AVAILABLE is not None:
+            return
+        self.dashboard_chart_preload_started = True
+
+        def worker() -> None:
+            ok = ensure_matplotlib_loaded()
+            self._emit_signal_safe("dashboard_chart_backend_loaded", ok)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _finish_dashboard_chart_preload(self, ok: bool) -> None:
+        self.dashboard_chart_preload_started = False
+        if not ok:
+            if hasattr(self, "dashboardChartPlaceholder"):
+                self.dashboardChartPlaceholder.setText(
+                    "Matplotlib 图表组件加载失败。\n其它功能不受影响。"
+                )
+            return
+        if self.dashboard_chart_load_requested and hasattr(self, "dashboardStack"):
+            self.dashboard_chart_load_requested = False
+            if self.dashboardStack.currentIndex() == 1 and self._ensure_dashboard_chart_widgets():
+                self._schedule_dashboard_chart_render(force=True)
 
     def _build_dashboard_group(self, parent: QtWidgets.QWidget) -> QtWidgets.QGroupBox:
         dashboard_group = QtWidgets.QGroupBox("数据看板", parent)
@@ -5390,6 +5437,10 @@ class MainWindow(QtWidgets.QMainWindow):
     def _handle_sync_write_ok(self) -> bool:
         if not self.sync_in_progress or not self.sync_write_phase:
             return False
+        phase = self.sync_write_phase
+        expected_prefix = "*SET:DATE" if phase == "DATE" else "*SET:TIME"
+        if not self.last_tx_command.strip().upper().startswith(expected_prefix):
+            return False
         if self.sync_write_phase == "DATE":
             self.sync_write_phase = "TIME"
             QtCore.QTimer.singleShot(180, self._sync_host_time_step2)
@@ -6565,18 +6616,36 @@ class MainWindow(QtWidgets.QMainWindow):
             self.serial_port = None
             self.refresh_dashboard()
             return False
+        try:
+            self.serial_port.reset_input_buffer()
+            self.serial_port.reset_output_buffer()
+        except Exception:  # noqa: BLE001
+            pass
 
         self.local_mode_active = False
         self.status_connection.setText(port_name)
         now_perf = time.perf_counter()
         self.last_serial_rx_monotonic = now_perf
         self.last_tx_monotonic = 0.0
+        self.last_tx_command = ""
+        self.last_ping_monotonic = None
+        self.pending_queries.clear()
+        self.read_buffer = ""
+        if self.sync_in_progress or self.sync_write_phase:
+            self.sync_watchdog_token += 1
+            self.sync_in_progress = False
+            self.sync_snapshot = None
+            self.sync_write_phase = ""
+            self.sync_date_retry_done = False
+            self.sync_query_after_finish = False
+            self._restore_sync_buttons_if_idle()
         self.serial_recovery_stage = 0
         self._mark_board_weather_cache_dirty()
         self.poll_timer.start()
         self.ping_timer.start()
         self.board_ready_seen = False
         self.mode_resync_guard_until = time.monotonic() + 4.0
+        self._mark_manual_serial_window("串口连接稳定窗口", duration_s=1.1)
         self.log("INFO", f"已连接 {port_name}")
         self.refresh_dashboard()
         return True
@@ -6602,7 +6671,7 @@ class MainWindow(QtWidgets.QMainWindow):
             return False
         self._schedule_lifecycle_ntp(
             "串口连接成功",
-            delay_ms=180,
+            delay_ms=1200,
             fallback_on_fail=True,
             query_after=True,
         )
@@ -6616,7 +6685,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if not self.connect_port():
             return
         if self.is_connected:
-            self.log("INFO", "连接完成：已自动启动一次 NTP 对时并写入板端，未自动运行联测脚本。")
+            self.log("INFO", "连接完成：将等待串口稳定后自动执行一次 NTP 对时，未自动运行联测脚本。")
             return
 
     def disconnect_port(self, log_message: bool = True) -> None:
@@ -6629,6 +6698,16 @@ class MainWindow(QtWidgets.QMainWindow):
         self.serial_recovery_stage = 0
         self._mark_board_weather_cache_dirty()
         self.manual_ping_log_until = 0.0
+        if self.sync_in_progress or self.sync_write_phase:
+            self.sync_watchdog_token += 1
+            self.sync_in_progress = False
+            self.sync_snapshot = None
+            self.sync_write_phase = ""
+            self.sync_date_retry_done = False
+            self.sync_query_after_finish = False
+            self._restore_sync_buttons_if_idle()
+            if log_message:
+                self.log("WARN", "串口断开：已清理未完成的对时写入状态。")
         if self.serial_port is not None:
             try:
                 if self.serial_port.is_open:
@@ -7027,9 +7106,10 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.startup_sync_pending = True
                 self.pending_soft_reset_sync = False
                 self.soft_reset_deadline_monotonic = 0.0
+                self._mark_manual_serial_window("板端启动稳定窗口", duration_s=0.9)
                 self._schedule_lifecycle_ntp(
                     "板端启动",
-                    delay_ms=160,
+                    delay_ms=900,
                     fallback_on_fail=True,
                     query_after=False,
                 )
