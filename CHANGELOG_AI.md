@@ -2,6 +2,29 @@
 
 只记录阶段性最终修改、关键文件、验证结果和未解决问题；不记录无关对话。
 
+## 2026-06-16
+
+### v2.2 teacher testcmdV2.1 serial full-score closeout
+
+#### Done
+- MCU serial parser now accepts the teacher test suite's grouped field/value grammar for DATE, TIME, and ALARM while preserving the existing alternating field/value grammar used by older PC flows.
+- Ambiguous abbreviations were tightened: intentionally invalid tokens such as `MONT`, `MI`, and `FOR` are rejected instead of being accepted by over-broad prefix matching.
+- `*RST` replies before display refresh work, display events sanitize unsupported bytes, and the startup stack was increased from 512 B to 2048 B to avoid stack-pressure-induced binary output and serial lockups.
+- PC command builders and UI send paths now emit the grouped grammar expected by `testcmdV2.1`; local protocol validation accepts both the new grouped form and the legacy alternating form.
+- Added `pc_host/run_teacher_protocol_regression.py` for a focused COM-port regression covering teacher grammar, expected invalid-command rejection, and `*RST`/PING responsiveness.
+- README, project context, changelog, status, acceptance, and defense notes now document the latest COM5 evidence and the correct explanation for the remaining raw `ERROR` count.
+
+#### Verified
+- Keil5 build completed with `0 Error(s), 0 Warning(s)` and the COM5 board flash verified with `Verify OK`.
+- Teacher `testcmdV2.1` original 100-command run produced `OK 92`, `ERROR 8`, `TIMEOUT 0`, score `10.0/10.0`.
+- `pc_host/run_teacher_protocol_regression.py --port COM5` passed 18/18 repeatedly.
+- `pc_host/run_extension_checks.py --port COM5 --full` passed 22 checks.
+- Real PC UI COM5 smoke verified DATE, TIME, ALARM, MODE, and PING write/readback; screenshot stored under `docs/testcmdV2.1新要求评估_2026-06-14/修复后复测/`.
+- v2.2 release exe/zip was rebuilt after the PC protocol changes.
+
+#### Notes
+- The raw 8 `ERROR` responses are expected invalid-command tests. Future changes must not reduce them by accepting invalid commands; judge this suite by the generated score file and TIMEOUT count.
+
 ## 2026-06-11
 
 ### v2.2 NIGHT/FUNC edit and smoothness closeout

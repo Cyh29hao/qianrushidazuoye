@@ -1,5 +1,13 @@
 # PROJECT_CONTEXT - 智能时钟联网系统
 
+## 2026-06-16 v2.2 teacher testcmdV2.1 full-score serial closeout
+- 用户提供老师新发 `testcmdV2.1` 串口命令测试子集后，已按 COM5 真机测试结果完成协议收口。老师原始 100 条命令结果为 `OK 92`、`ERROR 8`、`TIMEOUT 0`，评分脚本给出 `10.0/10.0`。
+- 8 个 `ERROR` 是测试集中用于验证非法命令拒绝能力的预期错误，不应通过放宽非法输入来“减少 ERROR”。答辩口径应强调“合法命令无 TIMEOUT，非法命令正确拒绝，评分满分”。
+- MCU `mcu/src/main.c` 支持老师分组参数语法：`DATE YEAR MONTH DATE values`、`TIME HOUR MIN SEC values`、`ALARM HOUR MIN SEC values`，同时保留原 PC 交替参数兼容；缩写边界收紧，`MONT/MI/FOR` 等错误缩写不再误收。
+- MCU 启动栈从 512 B 扩到 2048 B；主循环 UART 轮询和显示事件输出继续加固，解决曾出现的二进制显示字节和串口无响应风险。
+- PC `protocol.py`、`app.py`、`run_extension_checks.py` 已同步老师语法；新增 `pc_host/run_teacher_protocol_regression.py` 做严格串口回归。
+- 验证：Keil5 构建 `0 Error(s), 0 Warning(s)`，烧录 `Verify OK`；严格回归 18/18 连续通过；老师 testcmdV2.1 评分 10.0/10.0；PC UI COM5 日期/时间/闹钟/模式/PING 真实读写通过；v2.2 release 已重新打包。
+
 ## 2026-06-11 v2.2 NIGHT/FUNC 编辑与流畅性收口
 - 修正 PC 端 NIGHT 显示自纠逻辑：板端进入 FUNC/SHIFT/ADD/SAVE 编辑窗口时，NIGHT 下显示 `HH.MM.SS` 被视为“编辑时间页的正确显示”，PC 不再误判为夜间规则异常并回写 `*SET:MODE NIGHT`。普通 NIGHT 时间页仍保持 `HH.MM`，若非编辑态出现完整时分秒，仍会触发一次自纠。
 - PC 主题刷新改为“首启/新控件立即刷新，后续 DAY/NIGHT 切换延迟合并刷新”：启动和 Matplotlib 首次创建控件仍同步套主题，避免 NIGHT 首启白底；用户切换 DAY/NIGHT、虚拟 USER1 长按等操作先快速返回，再由 Qt 事件循环合并应用 QSS。离屏探针测得 `_set_mode_state()` 约 1.5 ms 返回，虚拟 USER1 长按约 12 ms，虚拟 DISP 约 9 ms。

@@ -679,7 +679,7 @@ def execute_checks_on_open_port(
             "ERROR RANGE",
             lambda: send_expect_error(
                 port,
-                "*SET:DATE YEAR 2026 MONTH 13 DATE 01",
+                "*SET:DATE YEAR MONTH DATE 2026 13 01",
                 "RANGE",
                 timeout_s=2.0,
                 progress=progress,

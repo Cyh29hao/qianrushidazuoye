@@ -1,0 +1,54 @@
+============================================================
+  串口协议自动评分报告
+  日志: testcmd_log_524031910102_20260614_224909.txt
+============================================================
+
+【大小写不敏感】  3/6 通过  → 1.0/2.0 分
+    L026 ❌ 全小写 *set:time...  [ERROR PARAM]
+    L027 ❌ 混合大小写 *Set:Time...  [ERROR PARAM]
+    L028 ❌ 随机混合  [ERROR PARAM]
+    L029 ✅ *get:TIME  [OK 13.14.06]
+    L030 ✅ *ping  [*PONG 121]
+    L031 ✅ *rst  [OK]
+
+【空格容错】  2/4 通过  → 1.0/2.0 分
+    L033 ❌ 双空格 SET:DATE  [ERROR PARAM]
+    L034 ❌ 三空格 SET:TIME  [ERROR PARAM]
+    L035 ✅ *GET:  TIME  [OK 13.14.06]
+    L036 ✅ *PING  (尾空格)  [*PONG 122]
+
+【缩写合法】  4/8 通过  → 1.0/2.0 分
+    L038 ❌ MIN (合法最小缩写)  [ERROR PARAM]
+    L039 ❌ MINU (合法)  [ERROR PARAM]
+    L040 ❌ MINUT (合法)  [ERROR PARAM]
+    L041 ✅ DISP (合法最小缩写)  [OK]
+    L042 ✅ DISPL (合法)  [OK]
+    L043 ❌ ALARM中 MIN/SEC  [ERROR PARAM]
+    L044 ✅ MONT (非法！MONTH全大写不可缩写) → 应返回ERROR  [ERROR PARAM]
+    L045 ✅ MI   (非法！低于MIN最小展开) → 应返回ERROR  [ERROR PARAM]
+
+【多参数组合≥3种】  1/6 通过  → 0.3/2.0 分
+    L047 ❌ 三参: YEAR MONTH DATE  [ERROR PARAM]
+    L049 ❌ 双参: YEAR DATE  [ERROR PARAM]
+    L050 ❌ 双参: MONTH DATE  [ERROR PARAM]
+    L051 ✅ 单参: YEAR  [OK]
+    L052 ❌ 双参: HOUR SEC  [ERROR PARAM]
+    L053 ❌ 双参: HOUR MIN  [ERROR PARAM]
+
+【FORMAT RIGHT逆序+小数点】  4/7 通过  → 1.1/2.0 分
+    L057 ✅ SET:FORMAT LEFT  [OK]
+    L058 ❌ LEFT查时间 → 以'12.'开头  [OK 13.14.06]
+    L059 ✅ SET:FORMAT RIGHT  [OK]
+    L060 ❌ RIGHT查时间 → 以'.21'结尾(hour=12逆序)  [OK 60.41.31]
+    L061 ✅ RIGHT查日期 → 有数据  [OK 21.60.82]
+    L062 ✅ SET:FORMAT LEFT  [OK]
+    L063 ❌ LEFT恢复 → 以'12.'开头  [OK 13.14.06]
+
+────────────────────────────────────────────────────────────
+  串口协议小计: 4.5 / 10.0 分
+────────────────────────────────────────────────────────────
+
+【额外观察（不计入本项评分）】
+    L069 ✅ *SET:MSG 无参数→应返回ERROR  [ERROR PARAM]
+
+============================================================

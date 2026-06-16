@@ -38,8 +38,9 @@
 
 ## 还需要你亲自完成
 
-1. 用 Keil5 重新编译并烧录 `mcu/clock.uvprojx`，确认板端开机显示 `V2.2`。
-2. 使用真实 S800 + COM5 跑一遍快速/全面联合测试。
-3. 录制不超过 5 分钟演示视频，建议按 `submission/演示视频_5分钟脚本初稿.md` 执行。
-4. 根据 `submission/简介PDF_4-8页初稿大纲.md` 制作最终 PDF。
-5. 按老师要求命名最终 zip。
+1. 录制不超过 5 分钟演示视频，建议按 `submission/演示视频_5分钟脚本初稿.md` 执行。
+2. 根据 `submission/简介PDF_4-8页初稿大纲.md` 制作最终 PDF，并写入 testcmdV2.1 `10.0/10.0`、`TIMEOUT 0` 的证据。
+3. 按老师要求命名最终 zip。
+4. 提交前可选复核：COM5 跑老师 testcmdV2.1 或 `pc_host/run_teacher_protocol_regression.py --port COM5`，确认仍无 TIMEOUT。
+
+已完成的硬件/串口证据：Keil5 最新工程 `0 Error(s), 0 Warning(s)`，COM5 烧录 `Verify OK`，老师 testcmdV2.1 原始测试 `OK 92`、`ERROR 8`、`TIMEOUT 0`、评分 `10.0/10.0`。

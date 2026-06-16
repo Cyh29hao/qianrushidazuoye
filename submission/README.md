@@ -59,8 +59,8 @@
 | 老师要求 | 当前项目位置 | 当前状态 |
 | --- | --- | --- |
 | 全部 S800 板与 PC 端源代码，含 `.ui` | `mcu/`、`pc_host/` | 已具备。 |
-| MCU 可烧写文件 `obj/xxx.axf` | `mcu/obj/s800_clock.axf` | 已存在；昨晚修改 MCU 后，正式提交前仍建议 Keil5 重新编译确认。 |
-| PC 端 `requirements.txt` | `pc_host/requirements.txt` | 已具备，包含 PyQt5 与 pyserial。 |
+| MCU 可烧写文件 `obj/xxx.axf` | `mcu/obj/s800_clock.axf` | 已用 Keil5 重新编译最新工程，构建 `0 Error(s), 0 Warning(s)`，COM5 烧录校验 `Verify OK`。 |
+| PC 端 `requirements.txt` | `pc_host/requirements.txt` | 已具备，包含 PyQt5、pyserial 与 matplotlib。 |
 | 简介 PDF，4-8 页 | 待生成：`docs/大作业524031910102-陈云海.pdf` | 已有大纲，尚未排版导出。 |
 | 演示视频，≤5 分钟带旁白 | 待录制：`docs/演示视频.mp4` | 已有脚本大纲，尚未录制。 |
 | 根目录 `README.md`，说明编译/运行命令 | `README.md` | 已更新到 v2.2 状态。 |
@@ -113,9 +113,6 @@
 
 ## 6. 提交前必须再做的事
 
-1. Keil5 重新 Build，确认 `mcu/obj/s800_clock.axf` 是最新源码产物。
-2. 烧录实板，按 `docs/test-guide.md` 跑一遍关键场景。
-3. 用真实 COM5 测：连接自动 NTP、RESET 自动 NTP、USER1 连击、USER2 天气短显、跑马灯、日程触发。
-4. 打开打包版 `build_release/SmartClockHost-v2.2/SmartClockHost.exe` 做一次白天/黑夜 UI 检查。
-5. 生成简介 PDF 和演示视频，并按命名规则放入 `docs/`。
-6. 按本文件目录结构复制一份干净提交目录，再压缩为 `大作业524031910102-陈云海.zip`。
+1. 生成简介 PDF 和演示视频，并按命名规则放入 `docs/`。
+2. 按本文件目录结构复制一份干净提交目录，再压缩为 `大作业524031910102-陈云海.zip`。
+3. 提交前可快速复核：老师 testcmdV2.1 评分文件为 `10.0/10.0`、`TIMEOUT 0`；打包版 `SmartClockHost-v2.2.exe` 能打开；README 与答辩速查文档能解释 8 个预期 `ERROR`。

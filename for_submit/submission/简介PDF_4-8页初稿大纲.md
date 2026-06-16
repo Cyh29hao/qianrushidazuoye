@@ -53,6 +53,7 @@ PC 上位机
 
 - 115200, 8N1, ASCII 行协议。
 - 支持大小写不敏感、空格容错、合法缩写。
+- DATE/TIME/ALARM 支持老师 testcmdV2.1 的“字段组 + 数值组”语法，同时兼容旧 PC 交替参数语法。
 - 支持 `*RST`、`*SET:*`、`*GET:*`、`*PING`、`*EVT:*`。
 - 错误统一返回 `ERROR <reason>`。
 - `FORMAT RIGHT` 下 `GET` 与显示同步逆序，小数点使用 `dpHex` 保持物理位一致。
@@ -110,16 +111,19 @@ PC 上位机
 - 难点 1：7SEG 小数点物理位与 RIGHT 逆序。
 - 难点 2：RESET/连接/NTP/天气/协议测试并发，容易抢串口。
 - 难点 3：USER1 连续短按/长按容易触发 NTP 和模式切换风暴。
+- 难点 4：老师 testcmdV2.1 对合法命令、非法命令和 TIMEOUT 都会自动评分，不能只追求原始 `ERROR` 数低。
 - 解决：
   - PC 串口互斥、NTP token、weather timeout、serial watchdog。
-  - MCU USER1 冷却、I2C 忙等上限、消息状态机超时恢复。
-  - 自动测试快速/全面两档。
+  - MCU USER1 冷却、I2C 忙等上限、消息状态机超时恢复、启动栈扩到 2048 B。
+  - 自动测试快速/全面两档，另加老师 testcmdV2.1 和自建严格回归。
+  - 老师原始测试结果 `OK 92`、`ERROR 8`、`TIMEOUT 0`、评分 `10.0/10.0`；8 个 `ERROR` 是非法命令预期拒绝。
 
 建议截图/素材：
 
 - PC 主界面白天和黑夜模式各一张。
 - 数字孪生和实物同屏。
 - 自动测试输出 PASS。
+- 老师 testcmdV2.1 评分 `10.0/10.0`、`TIMEOUT 0`。
 - USER2 天气短显。
 - 日程触发日志。
 

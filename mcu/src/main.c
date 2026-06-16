@@ -190,6 +190,17 @@ typedef struct {
     uint8_t dp_mask;
 } DisplayFrame;
 
+typedef struct {
+    char field[16];
+    char value[16];
+} ParamPair;
+
+typedef enum {
+    PARAM_PAIRS_OK = 0,
+    PARAM_PAIRS_EMPTY,
+    PARAM_PAIRS_SYNTAX
+} ParamPairResult;
+
 static void Clock_Init(void);
 static void GPIO_Init(void);
 static void I2C0_Init(void);
@@ -266,6 +277,10 @@ static bool MatchToken(const char *token, const char *canonical,
                        uint8_t minLen);
 static const char *SkipSpaces(const char *text);
 static const char *ReadToken(const char *text, char *out, uint8_t outSize);
+static ParamPairResult ParseParameterPairs(const char *params,
+                                           ParamPair *pairs,
+                                           uint8_t maxPairs,
+                                           uint8_t *pairCount);
 static bool ParseUint(const char *token, uint32_t *value);
 static bool ParseHexByte(const char *token, uint8_t *value);
 static char ToUpperAscii(char value);
@@ -405,6 +420,7 @@ int main(void)
             g_scanTicks--;
             budget--;
             Display_ScanNextDigit();
+            UART_Poll();
         }
 
         budget = MAIN_TICK10_BUDGET;
@@ -412,6 +428,7 @@ int main(void)
             g_ticks10ms--;
             budget--;
             Tick10ms();
+            UART_Poll();
         }
 
         budget = MAIN_TICK100_BUDGET;
@@ -419,16 +436,19 @@ int main(void)
             g_ticks100ms--;
             budget--;
             Tick100ms();
+            UART_Poll();
         }
 
         if (g_ticks500ms != 0U) {
             g_ticks500ms--;
             Tick500ms();
+            UART_Poll();
         }
 
         if (g_ticks1000ms != 0U) {
             g_ticks1000ms--;
             Tick1000ms();
+            UART_Poll();
         }
     }
 }
@@ -1684,12 +1704,15 @@ static void EmitDisplayEvent(void)
     uint8_t index;
 
     for (index = 0U; index < DISPLAY_WIDTH; index++) {
-        if (g_currentFrame.chars[index] == ' ') {
+        char value = g_currentFrame.chars[index];
+        if (value == ' ') {
             payload[index] = '_';
-        } else if (g_currentFrame.chars[index] == '_') {
+        } else if (value == '_') {
             payload[index] = '~';
+        } else if (IsDisplaySupportedChar(value) != false) {
+            payload[index] = value;
         } else {
-            payload[index] = g_currentFrame.chars[index];
+            payload[index] = '_';
         }
     }
     payload[DISPLAY_WIDTH] = '\0';
@@ -2181,6 +2204,61 @@ static const char *ReadToken(const char *text, char *out, uint8_t outSize)
     return text;
 }
 
+static ParamPairResult ParseParameterPairs(const char *params,
+                                           ParamPair *pairs,
+                                           uint8_t maxPairs,
+                                           uint8_t *pairCount)
+{
+    char tokens[6][16];
+    uint8_t tokenCount = 0U;
+    uint8_t index;
+    uint8_t count;
+    bool alternating = true;
+
+    params = SkipSpaces(params);
+    while (*params != '\0') {
+        if (tokenCount >= (uint8_t)(maxPairs * 2U)) {
+            return PARAM_PAIRS_SYNTAX;
+        }
+        params = ReadToken(params, tokens[tokenCount], sizeof(tokens[0]));
+        if (tokens[tokenCount][0] == '\0') {
+            return PARAM_PAIRS_SYNTAX;
+        }
+        tokenCount++;
+        params = SkipSpaces(params);
+    }
+
+    if (tokenCount == 0U) {
+        return PARAM_PAIRS_EMPTY;
+    }
+    if ((tokenCount & 0x01U) != 0U) {
+        return PARAM_PAIRS_SYNTAX;
+    }
+
+    count = (uint8_t)(tokenCount / 2U);
+    if (count > maxPairs) {
+        return PARAM_PAIRS_SYNTAX;
+    }
+    if (count > 1U) {
+        uint32_t ignored;
+        alternating = ParseUint(tokens[1], &ignored);
+    }
+
+    for (index = 0U; index < count; index++) {
+        uint8_t fieldIndex = alternating ? (uint8_t)(index * 2U) : index;
+        uint8_t valueIndex = alternating ?
+                             (uint8_t)(fieldIndex + 1U) :
+                             (uint8_t)(count + index);
+        uint8_t copyIndex;
+        for (copyIndex = 0U; copyIndex < sizeof(pairs[index].field); copyIndex++) {
+            pairs[index].field[copyIndex] = tokens[fieldIndex][copyIndex];
+            pairs[index].value[copyIndex] = tokens[valueIndex][copyIndex];
+        }
+    }
+    *pairCount = count;
+    return PARAM_PAIRS_OK;
+}
+
 static bool ParseUint(const char *token, uint32_t *value)
 {
     uint32_t result = 0U;
@@ -2445,8 +2523,8 @@ static void UART_ProcessLine(char *line)
 
     if (MatchToken(params, "*RST", 4U) != false) {
         ResetRuntimeState();
-        RefreshDisplayAndLeds(true);
         UART_ReplyOk(NULL);
+        RefreshDisplayAndLeds(true);
         EmitModeEvent();
         return;
     }
@@ -2480,7 +2558,7 @@ static void UART_ProcessLine(char *line)
             HandleSetDisplay(params);
             return;
         }
-        if (MatchToken(token, "FORMAT", 3U) != false) {
+        if (MatchToken(token, "FORMAT", 6U) != false) {
             HandleSetFormat(params);
             return;
         }
@@ -2534,37 +2612,40 @@ static void UART_ProcessLine(char *line)
 static void HandleSetDate(const char *params)
 {
     DateTime nextValue = g_now;
-    char field[16];
-    char valueToken[16];
+    ParamPair pairs[3];
+    ParamPairResult pairResult;
     uint32_t parsed;
-    uint8_t sawField = 0U;
+    uint8_t pairCount = 0U;
+    uint8_t index;
 
-    params = SkipSpaces(params);
-    while (*params != '\0') {
-        params = ReadToken(params, field, sizeof(field));
-        params = SkipSpaces(params);
-        if (*params == '\0') {
-            UART_ReplyError("SYNTAX");
-            return;
-        }
-        params = ReadToken(params, valueToken, sizeof(valueToken));
-        if (ParseUint(valueToken, &parsed) == false) {
+    pairResult = ParseParameterPairs(params, pairs, 3U, &pairCount);
+    if (pairResult == PARAM_PAIRS_EMPTY) {
+        UART_ReplyError("PARAM");
+        return;
+    }
+    if (pairResult != PARAM_PAIRS_OK) {
+        UART_ReplyError("SYNTAX");
+        return;
+    }
+
+    for (index = 0U; index < pairCount; index++) {
+        if (ParseUint(pairs[index].value, &parsed) == false) {
             UART_ReplyError("PARAM");
             return;
         }
-        if (MatchToken(field, "YEAR", 4U) != false) {
+        if (MatchToken(pairs[index].field, "YEAR", 4U) != false) {
             if ((parsed < 2000U) || (parsed > 2099U)) {
                 UART_ReplyError("RANGE");
                 return;
             }
             nextValue.year = (uint16_t)parsed;
-        } else if (MatchToken(field, "MONTH", 3U) != false) {
+        } else if (MatchToken(pairs[index].field, "MONTH", 5U) != false) {
             if ((parsed < 1U) || (parsed > 12U)) {
                 UART_ReplyError("RANGE");
                 return;
             }
             nextValue.month = (uint8_t)parsed;
-        } else if (MatchToken(field, "DATE", 4U) != false) {
+        } else if (MatchToken(pairs[index].field, "DATE", 4U) != false) {
             if ((parsed < 1U) || (parsed > 31U)) {
                 UART_ReplyError("RANGE");
                 return;
@@ -2574,13 +2655,6 @@ static void HandleSetDate(const char *params)
             UART_ReplyError("PARAM");
             return;
         }
-        sawField = 1U;
-        params = SkipSpaces(params);
-    }
-
-    if (sawField == 0U) {
-        UART_ReplyError("PARAM");
-        return;
     }
 
     if (nextValue.day > DaysInMonth(nextValue.year, nextValue.month)) {
@@ -2605,37 +2679,40 @@ static void HandleSetDate(const char *params)
 static void HandleSetTime(const char *params)
 {
     DateTime nextValue = g_now;
-    char field[16];
-    char valueToken[16];
+    ParamPair pairs[3];
+    ParamPairResult pairResult;
     uint32_t parsed;
-    uint8_t sawField = 0U;
+    uint8_t pairCount = 0U;
+    uint8_t index;
 
-    params = SkipSpaces(params);
-    while (*params != '\0') {
-        params = ReadToken(params, field, sizeof(field));
-        params = SkipSpaces(params);
-        if (*params == '\0') {
-            UART_ReplyError("SYNTAX");
-            return;
-        }
-        params = ReadToken(params, valueToken, sizeof(valueToken));
-        if (ParseUint(valueToken, &parsed) == false) {
+    pairResult = ParseParameterPairs(params, pairs, 3U, &pairCount);
+    if (pairResult == PARAM_PAIRS_EMPTY) {
+        UART_ReplyError("PARAM");
+        return;
+    }
+    if (pairResult != PARAM_PAIRS_OK) {
+        UART_ReplyError("SYNTAX");
+        return;
+    }
+
+    for (index = 0U; index < pairCount; index++) {
+        if (ParseUint(pairs[index].value, &parsed) == false) {
             UART_ReplyError("PARAM");
             return;
         }
-        if (MatchToken(field, "HOUR", 4U) != false) {
+        if (MatchToken(pairs[index].field, "HOUR", 4U) != false) {
             if (parsed > 23U) {
                 UART_ReplyError("RANGE");
                 return;
             }
             nextValue.hour = (uint8_t)parsed;
-        } else if (MatchToken(field, "MINUTE", 3U) != false) {
+        } else if (MatchToken(pairs[index].field, "MINUTE", 3U) != false) {
             if (parsed > 59U) {
                 UART_ReplyError("RANGE");
                 return;
             }
             nextValue.minute = (uint8_t)parsed;
-        } else if (MatchToken(field, "SECOND", 3U) != false) {
+        } else if (MatchToken(pairs[index].field, "SECOND", 3U) != false) {
             if (parsed > 59U) {
                 UART_ReplyError("RANGE");
                 return;
@@ -2645,13 +2722,6 @@ static void HandleSetTime(const char *params)
             UART_ReplyError("PARAM");
             return;
         }
-        sawField = 1U;
-        params = SkipSpaces(params);
-    }
-
-    if (sawField == 0U) {
-        UART_ReplyError("PARAM");
-        return;
     }
 
     g_now.hour = nextValue.hour;
@@ -2667,10 +2737,11 @@ static void HandleSetTime(const char *params)
 static void HandleSetAlarm(const char *params)
 {
     AlarmState nextValue = g_alarm;
-    char field[16];
-    char valueToken[16];
+    ParamPair pairs[3];
+    ParamPairResult pairResult;
     uint32_t parsed;
-    uint8_t sawField = 0U;
+    uint8_t pairCount = 0U;
+    uint8_t index;
 
     params = SkipSpaces(params);
     if (MatchToken(params, "OFF", 3U) != false) {
@@ -2682,31 +2753,34 @@ static void HandleSetAlarm(const char *params)
         return;
     }
 
-    while (*params != '\0') {
-        params = ReadToken(params, field, sizeof(field));
-        params = SkipSpaces(params);
-        if (*params == '\0') {
-            UART_ReplyError("SYNTAX");
-            return;
-        }
-        params = ReadToken(params, valueToken, sizeof(valueToken));
-        if (ParseUint(valueToken, &parsed) == false) {
+    pairResult = ParseParameterPairs(params, pairs, 3U, &pairCount);
+    if (pairResult == PARAM_PAIRS_EMPTY) {
+        UART_ReplyError("PARAM");
+        return;
+    }
+    if (pairResult != PARAM_PAIRS_OK) {
+        UART_ReplyError("SYNTAX");
+        return;
+    }
+
+    for (index = 0U; index < pairCount; index++) {
+        if (ParseUint(pairs[index].value, &parsed) == false) {
             UART_ReplyError("PARAM");
             return;
         }
-        if (MatchToken(field, "HOUR", 4U) != false) {
+        if (MatchToken(pairs[index].field, "HOUR", 4U) != false) {
             if (parsed > 23U) {
                 UART_ReplyError("RANGE");
                 return;
             }
             nextValue.hour = (uint8_t)parsed;
-        } else if (MatchToken(field, "MINUTE", 3U) != false) {
+        } else if (MatchToken(pairs[index].field, "MINUTE", 3U) != false) {
             if (parsed > 59U) {
                 UART_ReplyError("RANGE");
                 return;
             }
             nextValue.minute = (uint8_t)parsed;
-        } else if (MatchToken(field, "SECOND", 3U) != false) {
+        } else if (MatchToken(pairs[index].field, "SECOND", 3U) != false) {
             if (parsed > 59U) {
                 UART_ReplyError("RANGE");
                 return;
@@ -2716,13 +2790,6 @@ static void HandleSetAlarm(const char *params)
             UART_ReplyError("PARAM");
             return;
         }
-        sawField = 1U;
-        params = SkipSpaces(params);
-    }
-
-    if (sawField == 0U) {
-        UART_ReplyError("PARAM");
-        return;
     }
 
     nextValue.enabled = 1U;
@@ -3011,7 +3078,7 @@ static void HandleGet(const char *params)
         UART_ReplyOk((g_displayEnabled != 0U) ? "ON" : "OFF");
         return;
     }
-    if (MatchToken(token, "FORMAT", 3U) != false) {
+    if (MatchToken(token, "FORMAT", 6U) != false) {
         UART_ReplyOk((g_displayFormat == FORMAT_RIGHT) ? "RIGHT" : "LEFT");
         return;
     }

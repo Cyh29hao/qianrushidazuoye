@@ -166,6 +166,7 @@ from extension_store import (
 )
 from protocol import (
     ParsedLine,
+    build_set_alarm_command,
     build_set_date_command,
     build_set_ring_command,
     build_set_time_command,
@@ -1133,19 +1134,35 @@ class MainWindow(QtWidgets.QMainWindow):
         parts: list[str],
         fields: tuple[str, ...],
     ) -> tuple[dict[str, int], str | None]:
-        if len(parts) < 1 + len(fields) * 2:
+        payload = parts[1:]
+        if not payload or len(payload) % 2 != 0:
             return {}, "SYNTAX"
+        pair_count = len(payload) // 2
+        if pair_count != len(fields):
+            return {}, "SYNTAX"
+
+        try:
+            int(payload[1])
+            alternating = True
+        except ValueError:
+            alternating = False
+
         result: dict[str, int] = {}
-        for field in fields:
-            if field not in parts:
-                return {}, "SYNTAX"
-            index = parts.index(field)
-            if index + 1 >= len(parts):
+        for index in range(pair_count):
+            if alternating:
+                field = payload[index * 2]
+                value_token = payload[index * 2 + 1]
+            else:
+                field = payload[index]
+                value_token = payload[pair_count + index]
+            if field not in fields or field in result:
                 return {}, "SYNTAX"
             try:
-                result[field] = int(parts[index + 1])
+                result[field] = int(value_token)
             except ValueError:
                 return {}, "PARAM"
+        if set(result) != set(fields):
+            return {}, "SYNTAX"
         return result, None
 
     def _validate_local_protocol_command(self, command: str) -> str | None:
@@ -1167,19 +1184,27 @@ class MainWindow(QtWidgets.QMainWindow):
             return None if 2000 <= year <= 2099 and qdate.isValid() else "RANGE"
         if upper.startswith("*SET:TIME "):
             parts = upper.split()
-            values, error = self._parse_protocol_field_ints(parts, ("HOUR", "MINUTE", "SECOND"))
+            values, error = self._parse_protocol_field_ints(parts, ("HOUR", "MIN", "SEC"))
+            if error:
+                values, error = self._parse_protocol_field_ints(parts, ("HOUR", "MINUTE", "SECOND"))
             if error:
                 return error
-            hour, minute, second = values["HOUR"], values["MINUTE"], values["SECOND"]
+            hour = values["HOUR"]
+            minute = values.get("MIN", values.get("MINUTE", 0))
+            second = values.get("SEC", values.get("SECOND", 0))
             return None if 0 <= hour <= 23 and 0 <= minute <= 59 and 0 <= second <= 59 else "RANGE"
         if upper == "*SET:ALARM OFF":
             return None
         if upper.startswith("*SET:ALARM "):
             parts = upper.split()
-            values, error = self._parse_protocol_field_ints(parts, ("HOUR", "MINUTE", "SECOND"))
+            values, error = self._parse_protocol_field_ints(parts, ("HOUR", "MIN", "SEC"))
+            if error:
+                values, error = self._parse_protocol_field_ints(parts, ("HOUR", "MINUTE", "SECOND"))
             if error:
                 return error
-            hour, minute, second = values["HOUR"], values["MINUTE"], values["SECOND"]
+            hour = values["HOUR"]
+            minute = values.get("MIN", values.get("MINUTE", 0))
+            second = values.get("SEC", values.get("SECOND", 0))
             return None if 0 <= hour <= 23 and 0 <= minute <= 59 and 0 <= second <= 59 else "RANGE"
         if upper.startswith("*SET:DISPLAY "):
             return None if upper.removeprefix("*SET:DISPLAY ").strip() in {"ON", "OFF"} else "PARAM"
@@ -4459,9 +4484,9 @@ class MainWindow(QtWidgets.QMainWindow):
             ("GET 显示开关 | *GET:DISPLAY", "*GET:DISPLAY"),
             ("GET FORMAT | *GET:FORMAT", "*GET:FORMAT"),
             ("GET MODE | *GET:MODE", "*GET:MODE"),
-            ("SET 日期 | *SET:DATE YEAR 2026 MONTH 6 DATE 9", "*SET:DATE YEAR 2026 MONTH 6 DATE 9"),
-            ("SET 时间 | *SET:TIME HOUR 12 MINUTE 30 SECOND 45", "*SET:TIME HOUR 12 MINUTE 30 SECOND 45"),
-            ("SET 闹钟 | *SET:ALARM HOUR 07 MINUTE 30 SECOND 00", "*SET:ALARM HOUR 07 MINUTE 30 SECOND 00"),
+            ("SET 日期 | *SET:DATE YEAR MONTH DATE 2026 06 09", "*SET:DATE YEAR MONTH DATE 2026 06 09"),
+            ("SET 时间 | *SET:TIME HOUR MIN SEC 12 30 45", "*SET:TIME HOUR MIN SEC 12 30 45"),
+            ("SET 闹钟 | *SET:ALARM HOUR MIN SEC 07 30 00", "*SET:ALARM HOUR MIN SEC 07 30 00"),
             ("关闭闹钟 | *SET:ALARM OFF", "*SET:ALARM OFF"),
             ("显示 ON | *SET:DISPLAY ON", "*SET:DISPLAY ON"),
             ("显示 OFF | *SET:DISPLAY OFF", "*SET:DISPLAY OFF"),
@@ -4491,7 +4516,7 @@ class MainWindow(QtWidgets.QMainWindow):
             ("错误 LEN | *SET:MSG 40位超长消息", "*SET:MSG 1234567890123456789012345678901234567890"),
             ("错误 SYNTAX | *SET:TIME HOUR", "*SET:TIME HOUR"),
             ("错误 PARAM | *SET:MODE DUSK", "*SET:MODE DUSK"),
-            ("错误 RANGE | *SET:TIME HOUR 99 MINUTE 00 SECOND 00", "*SET:TIME HOUR 99 MINUTE 00 SECOND 00"),
+            ("错误 RANGE | *SET:TIME HOUR MIN SEC 99 00 00", "*SET:TIME HOUR MIN SEC 99 00 00"),
         ]
 
     def _configure_protocol_test_group(self) -> None:
@@ -5393,7 +5418,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 f"*SET:DATE YEAR {self.sync_snapshot.year:04d} "
                 f"MONTH {self.sync_snapshot.month:02d} DATE {self.sync_snapshot.day:02d}"
             )
-            self.log("WARN", "板端对 SET DATE 返回 ERROR PARAM，已用两位月/日兼容格式重试一次。")
+            self.log("WARN", "板端对老师分组格式返回 ERROR PARAM，已用旧版交替格式重试一次。")
             QtCore.QTimer.singleShot(
                 220,
                 lambda command=retry: self.send_command(command, allow_during_sync=True),
@@ -6704,9 +6729,10 @@ class MainWindow(QtWidgets.QMainWindow):
         if upper.startswith("*SET:DATE "):
             parts = upper.split()
             try:
-                year = int(parts[parts.index("YEAR") + 1])
-                month = int(parts[parts.index("MONTH") + 1])
-                day = int(parts[parts.index("DATE") + 1])
+                values, error = self._parse_protocol_field_ints(parts, ("YEAR", "MONTH", "DATE"))
+                if error:
+                    raise ValueError(error)
+                year, month, day = values["YEAR"], values["MONTH"], values["DATE"]
                 moment = moment.replace(year=year, month=month, day=day)
                 self._set_runtime_datetime(moment)
                 self.ui.dateEdit.setDate(QtCore.QDate(year, month, day))
@@ -6716,9 +6742,14 @@ class MainWindow(QtWidgets.QMainWindow):
         elif upper.startswith("*SET:TIME "):
             parts = upper.split()
             try:
-                hour = int(parts[parts.index("HOUR") + 1])
-                minute = int(parts[parts.index("MINUTE") + 1])
-                second = int(parts[parts.index("SECOND") + 1])
+                values, error = self._parse_protocol_field_ints(parts, ("HOUR", "MIN", "SEC"))
+                if error:
+                    values, error = self._parse_protocol_field_ints(parts, ("HOUR", "MINUTE", "SECOND"))
+                if error:
+                    raise ValueError(error)
+                hour = values["HOUR"]
+                minute = values.get("MIN", values.get("MINUTE", 0))
+                second = values.get("SEC", values.get("SECOND", 0))
                 moment = moment.replace(hour=hour, minute=minute, second=second)
                 self._set_runtime_datetime(moment)
                 self.ui.timeEdit.setTime(QtCore.QTime(hour, minute, second))
@@ -6731,9 +6762,14 @@ class MainWindow(QtWidgets.QMainWindow):
         elif upper.startswith("*SET:ALARM "):
             parts = upper.split()
             try:
-                hour = int(parts[parts.index("HOUR") + 1])
-                minute = int(parts[parts.index("MINUTE") + 1])
-                second = int(parts[parts.index("SECOND") + 1])
+                values, error = self._parse_protocol_field_ints(parts, ("HOUR", "MIN", "SEC"))
+                if error:
+                    values, error = self._parse_protocol_field_ints(parts, ("HOUR", "MINUTE", "SECOND"))
+                if error:
+                    raise ValueError(error)
+                hour = values["HOUR"]
+                minute = values.get("MIN", values.get("MINUTE", 0))
+                second = values.get("SEC", values.get("SECOND", 0))
                 self._apply_alarm_state_from_text(
                     f"{hour:02d}:{minute:02d}:{second:02d}",
                     "本地设置单闹钟",
@@ -7247,17 +7283,20 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def apply_date(self) -> None:
         date = self.ui.dateEdit.date()
-        command = (
-            f"*SET:DATE YEAR {date.year():04d} "
-            f"MONTH {date.month()} DATE {date.day()}"
-        )
+        command = build_set_date_command(datetime(date.year(), date.month(), date.day()))
         self.send_command(command)
 
     def apply_time(self) -> None:
         time_value = self.ui.timeEdit.time()
-        command = (
-            f"*SET:TIME HOUR {time_value.hour():02d} "
-            f"MINUTE {time_value.minute():02d} SECOND {time_value.second():02d}"
+        command = build_set_time_command(
+            datetime(
+                2000,
+                1,
+                1,
+                time_value.hour(),
+                time_value.minute(),
+                time_value.second(),
+            )
         )
         self.send_command(command)
 
@@ -7270,9 +7309,10 @@ class MainWindow(QtWidgets.QMainWindow):
         if hasattr(self, "scheduleAlarmTimeEdit"):
             self.scheduleAlarmTimeEdit.setTime(time_value)
         self._refresh_single_alarm_ui()
-        command = (
-            f"*SET:ALARM HOUR {time_value.hour():02d} "
-            f"MINUTE {time_value.minute():02d} SECOND {time_value.second():02d}"
+        command = build_set_alarm_command(
+            time_value.hour(),
+            time_value.minute(),
+            time_value.second(),
         )
         self.send_command(command)
         self._schedule_single_alarm_query("上位机启用单次闹钟", delay_ms=360)

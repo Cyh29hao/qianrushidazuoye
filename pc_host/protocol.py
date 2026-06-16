@@ -14,15 +14,22 @@ class ParsedLine:
 
 def build_set_date_command(moment: datetime) -> str:
     return (
-        f"*SET:DATE YEAR {moment.year:04d} "
-        f"MONTH {moment.month} DATE {moment.day}"
+        "*SET:DATE YEAR MONTH DATE "
+        f"{moment.year:04d} {moment.month:02d} {moment.day:02d}"
     )
 
 
 def build_set_time_command(moment: datetime) -> str:
     return (
-        f"*SET:TIME HOUR {moment.hour:02d} "
-        f"MINUTE {moment.minute:02d} SECOND {moment.second:02d}"
+        "*SET:TIME HOUR MIN SEC "
+        f"{moment.hour:02d} {moment.minute:02d} {moment.second:02d}"
+    )
+
+
+def build_set_alarm_command(hour: int, minute: int, second: int) -> str:
+    return (
+        "*SET:ALARM HOUR MIN SEC "
+        f"{hour:02d} {minute:02d} {second:02d}"
     )
 
 
