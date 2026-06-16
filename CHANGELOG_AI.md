@@ -4,6 +4,18 @@
 
 ## 2026-06-16
 
+### v2.2 PC GitHub link correction
+
+#### Done
+- Changed the PC host status-bar GitHub button target from the account homepage to the actual project repository: `https://github.com/Cyh29hao/qianrushidazuoye`.
+- Rebuilt the local v2.2 release exe/zip after the link fix, preserving the AppData user profile and keeping runtime config/log files out of the release directory.
+
+#### Verified
+- `python -m py_compile pc_host/app.py pc_host/protocol.py pc_host/twin_widgets.py pc_host/extension_services.py pc_host/extension_store.py pc_host/run_extension_checks.py` passed.
+- Source text contains the repository URL and no longer contains the old homepage constant.
+- `scripts/build_v22_release.ps1` completed; `SmartClockHost.exe` and `SmartClockHost-v2.2.zip` were regenerated.
+- Release directory contains the MCU project copy and does not contain `config.json`, `runtime_state.json`, or `schedules.json`.
+
 ### v2.2 Matplotlib dashboard UI and startup serial robustness
 
 #### Done

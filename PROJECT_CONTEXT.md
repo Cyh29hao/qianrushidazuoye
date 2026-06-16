@@ -1,5 +1,11 @@
 # PROJECT_CONTEXT - 智能时钟联网系统
 
+## 2026-06-16 v2.2 PC GitHub link correction
+- PC 上位机状态栏 `GitHub` 按钮已从个人主页 `https://github.com/Cyh29hao` 改为项目仓库 `https://github.com/Cyh29hao/qianrushidazuoye`，避免老师点击后进入错误页面。
+- 本轮仅修改 `pc_host/app.py` 中的 `GITHUB_URL` 常量，不改串口协议、UI 布局、MCU 工程或配置默认值。
+- 已按 release 硬规则重新打包 v2.2：`build_release/SmartClockHost-v2.2/SmartClockHost.exe` 和 `build_release/SmartClockHost-v2.2.zip` 更新；打包脚本使用临时 `SMARTCLOCK_PROFILE_DIR` 烟测，不覆盖 `%APPDATA%\SmartClockHost-v2.2` 用户配置。
+- 验证：`py_compile` 覆盖 PC 端主要模块通过；源码中已确认新仓库链接存在、旧个人主页常量不存在；release 目录不含 `config.json/runtime_state.json/schedules.json`，且包含最新 MCU 工程副本。
+
 ## 2026-06-16 v2.2 Matplotlib UI and serial-start robustness closeout
 - 本轮只按用户指定修程序问题，不制作 PDF：Matplotlib 看板右侧四个筛选按钮由单列改为 2x2 紧凑网格，并降低按钮高度/间距，避免在小右侧面板中互相挤压或重叠。
 - Matplotlib “系统状态”说明文字缩短为固定两行：显示/自动昼夜/闹钟一行，PC 提醒/天气一行，避免三行小字溢出。
