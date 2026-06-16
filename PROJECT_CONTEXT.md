@@ -1,5 +1,12 @@
 # PROJECT_CONTEXT - 智能时钟联网系统
 
+## 2026-06-16 v2.2 teacher-facing delivery PDF rewrite
+- 已按用户反馈彻底重做 `submission/design_intro.tex`，生成新的教师交付说明 PDF：`submission/大作业524031910102-陈云海.pdf`、`docs/大作业524031910102-陈云海.pdf`、`for_submit/大作业524031910102-陈云海.pdf`、`for_submit/submission/大作业524031910102-陈云海.pdf`。
+- 新 PDF 定位为“老师不先读 README、不先运行程序也能看懂项目”的项目交付说明书，不再是答辩提纲；采用单栏正式排版，共 14 页，包含摘要、文档结构、使用方式、课程要求、总体架构、S800/TM4C1294 板端、PC 上位机、串口协议、扩展/自主亮点、测试验证和最终提交说明。
+- 已重新使用项目真实截图素材：主页、系统设置、日程管理、调试测试、Matplotlib 日志统计、GitHub 仓库截图和课程提交要求截图；截图插入前后均渲染检查，服务于对应正文主题。
+- 验证：`latexmk -xelatex` 编译通过；`pdftoppm` 渲染 14 页 PNG 并检查 contact sheet 与关键页；`pdfplumber` 文本抽取确认中文正常、无问号乱码、无 “答辩怎么说/老师可能问/TODO/FIXME” 等不适合交付 PDF 的措辞。
+- 同步更新 `submission/README.md`、`for_submit/submission/README.md`、`for_submit/README_提交包说明.md`、`for_submit/提交前检查清单.md` 和 `submission/大作业524031910102-陈云海_设计简介.md`，移除旧“8 页 PDF”口径。
+
 ## 2026-06-16 v2.2 PC GitHub link correction
 - PC 上位机状态栏 `GitHub` 按钮已从个人主页 `https://github.com/Cyh29hao` 改为项目仓库 `https://github.com/Cyh29hao/qianrushidazuoye`，避免老师点击后进入错误页面。
 - 本轮仅修改 `pc_host/app.py` 中的 `GITHUB_URL` 常量，不改串口协议、UI 布局、MCU 工程或配置默认值。

@@ -4,6 +4,20 @@
 
 ## 2026-06-16
 
+### v2.2 teacher-facing delivery PDF rewrite
+
+#### Done
+- Rewrote the project PDF from scratch as a teacher-facing delivery document instead of a defense outline or README supplement.
+- Changed the layout to a single-column formal report and expanded the content to 14 pages covering: project use flow, course requirement coverage, overall architecture, MCU design, PC host design, serial protocol, extensions/autonomous highlights, testing evidence, and final submission structure.
+- Reused and checked real project screenshots for home/dashboard, system settings, schedule management, debug/test, Matplotlib log statistics, GitHub repository page, and course submission requirements.
+- Synchronized the final PDF to `submission/`, `docs/`, `for_submit/`, and `for_submit/submission/`, and copied the updated LaTeX source into `for_submit/submission/design_intro.tex`.
+- Updated submission README/checklist files to remove the old "8-page PDF" wording and describe the current 14-page teacher-facing PDF.
+
+#### Verified
+- `latexmk -xelatex -interaction=nonstopmode -halt-on-error -outdir=tmp/pdf_build submission/design_intro.tex` completed successfully.
+- Rendered all 14 pages with `pdftoppm` and visually inspected the contact sheet plus key pages.
+- `pdfplumber` extraction confirmed readable Chinese text, zero question-mark mojibake, and no defense-outline phrases such as "答辩怎么说" or "老师可能问".
+
 ### v2.2 PC GitHub link correction
 
 #### Done
