@@ -15,19 +15,31 @@ $specPath = Join-Path $specDir "SmartClockHost.spec"
 $zipPath = Join-Path $releaseRoot "SmartClockHost-v2.2.zip"
 $appDataRoot = if ($env:APPDATA) { $env:APPDATA } else { Join-Path $env:USERPROFILE "AppData\Roaming" }
 $profileDir = Join-Path $appDataRoot "SmartClockHost-v2.2"
-$sourceRoot = if (Test-Path "C:\smartclock_latest\pc_host\app.py") {
-    "C:\smartclock_latest"
+$sourceRoot = if ($env:SMARTCLOCK_BUILD_SOURCE_ROOT) {
+    (Resolve-Path $env:SMARTCLOCK_BUILD_SOURCE_ROOT).Path
 } else {
     $repo
+}
+if ($env:SMARTCLOCK_BUILD_SOURCE_ROOT) {
+    $repoReal = [System.IO.DirectoryInfo]::new($repo).FullName.TrimEnd('\')
+    $sourceReal = [System.IO.DirectoryInfo]::new($sourceRoot).FullName.TrimEnd('\')
+    $sourceItem = Get-Item -LiteralPath $sourceRoot -Force
+    if (($sourceItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -and
+        [System.String]::Equals($repoReal, $sourceReal, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "SMARTCLOCK_BUILD_SOURCE_ROOT resolves to the repo via a junction/reparse point. Use a real ASCII copy such as C:\smartclock_build_ascii."
+    }
 }
 $python = Join-Path $sourceRoot ".venv\Scripts\python.exe"
 if (!(Test-Path $python)) {
     $python = Join-Path $sourceRoot "pc_host\.venv\Scripts\python.exe"
 }
-if (!(Test-Path $python)) {
+if ($env:SMARTCLOCK_BUILD_SOURCE_ROOT -and !(Test-Path $python)) {
+    throw "SMARTCLOCK_BUILD_SOURCE_ROOT is set, but no Python venv was found under the build source. Create $sourceRoot\.venv first to keep PyInstaller/Qt paths ASCII-safe."
+}
+if (!$env:SMARTCLOCK_BUILD_SOURCE_ROOT -and !(Test-Path $python)) {
     $python = Join-Path $repo ".venv\Scripts\python.exe"
 }
-if (!(Test-Path $python)) {
+if (!$env:SMARTCLOCK_BUILD_SOURCE_ROOT -and !(Test-Path $python)) {
     $python = Join-Path $repo "pc_host\.venv\Scripts\python.exe"
 }
 if (!(Test-Path $python)) {
@@ -133,6 +145,14 @@ foreach ($file in @("clock.uvprojx", "clock.uvoptx")) {
     $source = Join-Path $repo "mcu\$file"
     if (Test-Path $source) {
         Copy-Item -LiteralPath $source -Destination (Join-Path $releaseMcu $file) -Force
+    }
+}
+$releaseMcuObj = Join-Path $releaseMcu "obj"
+New-Item -ItemType Directory -Force -Path $releaseMcuObj | Out-Null
+foreach ($file in @("s800_clock.axf", "s800_clock.hex", "s800_clock.build_log.htm")) {
+    $source = Join-Path $repo "mcu\obj\$file"
+    if (Test-Path $source) {
+        Copy-Item -LiteralPath $source -Destination (Join-Path $releaseMcuObj $file) -Force
     }
 }
 

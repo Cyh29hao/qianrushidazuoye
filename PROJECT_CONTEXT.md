@@ -1,5 +1,15 @@
 # PROJECT_CONTEXT - 智能时钟联网系统
 
+## 2026-06-17 FAQ v1.3 final submit closeout
+- 老师说明“FAQ 以最新版本为准”，已将 `FAQ_常见问题解析_V1.3(3).pdf` 和 Keil `Create HEX File` 提醒截图归档到 `docs/大作业要求/`、`for_submit/docs/` 和正式提交目录 `for_submit/大作业524031910102-陈云海/docs/`。
+- MCU `mcu/src/main.c` 已按 FAQ v1.3 对齐 `*EVT:DISP <8字符> <dpHex>`：8 字符不含小数点，空位 `_`，`dpHex` bit0 对应最左 digit；`12.30.45` LEFT 为 `123045__ 0A`，RIGHT 为 `__540321 28`。
+- LED 位义按最终口径更新：D1 心跳、D2 闹钟、D3 编辑、D4 RX、D5 TX、D6 夜间、D7 RIGHT、D8 NTP 同步；`*SET:LED XX` 接管约 10 秒，`00` 立即恢复系统 LED。
+- 已在英文构建副本 `C:\smartclock_build_ascii` 使用 Keil `UV4.exe` 命令行重编，日志为 `0 Error(s), 0 Warning(s)`，并刷新 `mcu/obj/s800_clock.axf`、`mcu/obj/s800_clock.hex` 和提交包内副本。
+- 已用 Keil 命令行下载最新固件到 COM5 实板，日志为 `Programming Done`、`Verify OK`；随后 `python pc_host/run_teacher_protocol_regression.py --port COM5` 结果为 `PASS=27 FAIL=0`，FAQ v1.3 LEFT/RIGHT 实板显示帧均通过。
+- v2.2 release 已重新打包并烟测，zip 不含 `config.json/runtime_state.json/schedules.json/logs`，但包含最新 `mcu/obj/s800_clock.hex`、`s800_clock.axf` 和 build log，方便老师直接烧录。
+- 8 页正式 PDF 已由 Markdown 重新生成并用 `pdftoppm` 渲染检查；尾页测试表已更新为 `PASS=27 FAIL=0`。当前正式提交目录只差实际演示 MP4 后即可压缩提交。
+
+
 ## 2026-06-16 v2.2 teacher-facing delivery PDF rewrite
 - 已按用户反馈彻底重做 `submission/design_intro.tex`，生成新的教师交付说明 PDF：`submission/大作业524031910102-陈云海.pdf`、`docs/大作业524031910102-陈云海.pdf`、`for_submit/大作业524031910102-陈云海.pdf`、`for_submit/submission/大作业524031910102-陈云海.pdf`。
 - 新 PDF 定位为“老师不先读 README、不先运行程序也能看懂项目”的项目交付说明书，不再是答辩提纲；采用单栏正式排版，共 14 页，包含摘要、文档结构、使用方式、课程要求、总体架构、S800/TM4C1294 板端、PC 上位机、串口协议、扩展/自主亮点、测试验证和最终提交说明。
@@ -325,7 +335,7 @@
 - UART 行协议解析、大小写/空格容错、错误响应。
 - 指令：`*RST`、`*SET:DATE/TIME/ALARM/DISPLAY/FORMAT/MSG/BEEP/LED/KEY/MODE/WEATHER/RING`、`*GET:DATE/TIME/ALARM/DISPLAY/FORMAT/MODE`、`*PING`。
 - 主动事件：`*EVT:DISP`、`*EVT:LED`、`*EVT:MODE`、`*EVT:KEY`、`*EVT:ALARM`、`*EVT:ALARM_OFF`、`*EVT:EDIT`。
-- 7SEG 物理位格式已按老师 FAQ/图片修正：`12.30.45` 上报为 `12_30_45 24`，RIGHT 为 `54_03_21 24`。
+- 7SEG 物理位格式已按老师 FAQ v1.3 修正：`*EVT:DISP` 的 8 字符不包含小数点，空位用 `_`，`dpHex` bit0 对应最左 digit；`12.30.45` LEFT 上报 `123045__ 0A`，RIGHT 上报 `__540321 28`。
 - 开机全亮帧为 `88888888 FF`，LED 在开机画面全亮/全灭阶段同步；`*EVT:DISP` 与 `*EVT:LED` 每秒全量心跳。
 
 ### PC 端

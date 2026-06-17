@@ -194,7 +194,7 @@ S800 外设 & 七段数码管、LED、按键、蜂鸣 & MCU 直接扫描、读�
 硬件资源 & 实现内容\\
 \midrule
 8 位七段数码管 & 时间、日期、星期、年份、开机动画、编辑内容、滚动消息、天气短显、板端标签。\\
-8 位 LED & D1 心跳、D2 闹钟、D3 编辑、D4 串口 RX、D5 串口 TX、D6 夜间、D7 RIGHT、D8 手动覆盖。\\
+8 位 LED & D1 心跳、D2 闹钟、D3 编辑、D4 串口 RX、D5 串口 TX、D6 夜间、D7 RIGHT、D8 NTP 同步。\\
 SW1--SW8 & FUNC、SHIFT、ADD、SAVE、DISP、SPEED、FORMAT、EXT。\\
 USER1/USER2 & USER1 短按触发 PC 对时、长按切换 DAY/NIGHT；USER2 用于天气短显。\\
 蜂鸣器 & 闹钟响铃、日程提醒、远程蜂鸣、不同铃声节奏。\\
@@ -211,7 +211,7 @@ EEPROM/备份逻辑 & 保存最近时间，RESET 后尽量从最近时间恢复�
 
 \noindent\textbf{显示事件和点阵同步的串口形式示例}
 \begin{verbatim}
-*EVT:DISP 12_30_45 24
+*EVT:DISP 123045__ 0A
 *EVT:LED 21
 *SET:MSG A_B_TEST
 \end{verbatim}
@@ -225,7 +225,7 @@ USER1、USER2、FUNC、DISP 等容易造成状态叠加的按键做了冷却和�
 板载单次闹钟保存在 MCU 状态中，到点后启动蜂鸣器和 LED 提示，FUNC 可以立即停止响铃，程序也会限制最长响铃时间。PC 日程提醒不是简单在 PC 弹一行日志，而是会把板端标签、滚动短显和铃声命令发送到 MCU，日志记录实际触发的铃声名称。这样课程提醒、会议提醒、提交检查等 PC 管理事项也能在实物板上产生可观察反馈。
 
 \subsection{LED 位义}
-8 位 LED 在本项目中不是装饰，而是系统状态的一部分。D1 表示运行心跳，D2 表示板载单次闹钟启用或响铃闪烁，D3 表示编辑状态，D4/D5 表示串口 RX/TX 活动，D6 表示夜间模式，D7 表示 RIGHT 显示方向，D8 表示手动 LED 覆盖。天气短显期间，LED 会按天气掩码短时覆盖，短显结束后恢复系统状态位。PC 调试页中的 \code{*SET:LED XX} 可手动设置掩码，用于验收逐位点亮和调试。
+8 位 LED 在本项目中不是装饰，而是系统状态的一部分。D1 表示运行心跳，D2 表示板载单次闹钟启用或响铃闪烁，D3 表示编辑状态，D4/D5 表示串口 RX/TX 活动，D6 表示夜间模式，D7 表示 RIGHT 显示方向，D8 表示 NTP 同步状态。天气短显或 LED 掩码接管期间，LED 会临时覆盖整组状态位，结束后恢复系统位义。PC 调试页中的 \code{*SET:LED XX} 可接管 LED 约 10 秒，用于验收逐位点亮和调试；\code{*SET:LED 00} 可立即恢复。
 
 \section{PC 上位机设计}
 \subsection{界面整体组织}
@@ -355,7 +355,7 @@ Matplotlib 看板不是装饰图，而是从系统实际数据生成：今日时
 当前 v2.2 主线已按老师新发 testcmdV2.1 串口命令测试子集做过 COM5 真机复测。原始 100 条命令结果为 \keypoint{OK 92、ERROR 8、TIMEOUT 0，评分脚本 10.0/10.0}。其中 8 个 ERROR 是测试集中故意构造的非法命令，用于验证协议拒绝能力；正确行为是返回 ERROR，而不是放行非法输入。因此关键结论是合法命令无 TIMEOUT、非法命令有明确错误格式、整体评分满分。
 
 \subsection{构建和运行验证}
-MCU 端最近一次 Keil5 编译结果为 \code{0 Error(s), 0 Warning(s)}，烧录校验为 \code{Verify OK}。PC 端主要 Python 模块通过 \code{py_compile}，host-only 自动检查、COM5 quick/full 联合测试和老师协议回归均已记录在 \code{docs/} 和 \code{PROJECT_CONTEXT.md} 中。打包版 v2.2 exe/zip 已重新生成，release 目录确认不包含会覆盖用户配置的 \code{config.json}、\code{runtime_state.json}、\code{schedules.json} 或日志目录。
+2026-06-17 已按 FAQ v1.3 重新编译并烧录 MCU 工程，Keil 日志为 0 Error、0 Warning、Flash Verify OK，随后 COM5 严格回归全部通过。PC 端主要 Python 模块通过 \code{py_compile}，host-only 自动检查、历史 COM5 quick/full 联合测试和老师协议回归均已记录在 \code{docs/} 和 \code{PROJECT_CONTEXT.md} 中。打包版 v2.2 exe/zip 已重新生成，release 目录确认不包含会覆盖用户配置的 \code{config.json}、\code{runtime_state.json}、\code{schedules.json} 或日志目录。
 
 \begin{table}[!htbp]
 \centering
@@ -364,7 +364,7 @@ MCU 端最近一次 Keil5 编译结果为 \code{0 Error(s), 0 Warning(s)}，烧�
 \toprule
 验证项 & 结果\\
 \midrule
-MCU Keil5 构建 & 0 Error(s), 0 Warning(s)，最新固件已烧录并 Verify OK。\\
+MCU Keil5 构建 & FAQ v1.3 固件已烧录；Flash Verify OK，COM5 严格回归 PASS=27 FAIL=0。\\
 老师 testcmdV2.1 & OK 92、ERROR 8、TIMEOUT 0、评分 10.0/10.0。\\
 PC 静态检查 & \code{app.py}、\code{protocol.py}、\code{twin_widgets.py}、\code{extension_services.py} 等通过 \code{py_compile}。\\
 自动测试 & host-only、COM5 quick、COM5 full 覆盖 USER2、滚动消息、DISP、ERROR、高并发等项。\\

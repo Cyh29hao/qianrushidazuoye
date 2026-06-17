@@ -1,5 +1,33 @@
 # CHANGELOG_AI - AI 阶段变更记录
 
+## 2026-06-17
+
+### v2.2 FAQ v1.3 final submit closeout
+
+#### Done
+- Archived the latest teacher FAQ `FAQ_常见问题解析_V1.3(3).pdf` and the Keil `Create HEX File` reminder screenshot into the project docs and formal submit folder.
+- Aligned the MCU display event protocol with FAQ v1.3: `*EVT:DISP <8 chars> <dpHex>`, with dots excluded from the 8 display characters and `dpHex` bit0 mapped to the leftmost digit.
+- Updated the final LED meaning to make D8 the NTP synchronization indicator and documented `*SET:LED XX` as a short manual override where `00` immediately restores system LEDs.
+- Rebuilt the MCU project through Keil `UV4.exe` in an ASCII build path, refreshed `s800_clock.axf` and `s800_clock.hex`, and copied the refreshed artifacts into the formal submit package.
+- Rebuilt the v2.2 PC release zip after the FAQ/documentation closeout; the zip now includes the latest MCU `obj/s800_clock.hex`, `obj/s800_clock.axf`, and build log while still excluding runtime user config and logs.
+- Regenerated the 8-page teacher-facing PDF from Markdown and updated the formal submit package, README, acceptance matrix, status overview, and checklist to state the real final evidence.
+
+#### Verified
+- Keil build: `0 Error(s), 0 Warning(s)`.
+- Keil flash: `Programming Done`, `Verify OK`.
+- `python -m py_compile pc_host/app.py pc_host/protocol.py pc_host/twin_widgets.py pc_host/extension_services.py pc_host/extension_store.py pc_host/run_extension_checks.py pc_host/run_teacher_protocol_regression.py` passed.
+- `python pc_host/run_teacher_protocol_regression.py` passed `PASS=8 FAIL=0`.
+- `python pc_host/run_extension_checks.py --host-only --full` passed.
+- `gcc -fsyntax-only -std=c99 -DPART_TM4C1294NCPDT -DTARGET_IS_TM4C129_RA0 -I mcu/Inc -I mcu/Driverlib mcu/src/main.c` passed.
+- `python pc_host/run_teacher_protocol_regression.py --port COM5` passed `PASS=27 FAIL=0`, including FAQ v1.3 physical-board LEFT/RIGHT display frames.
+- `scripts/build_v22_release.ps1` completed with a temporary profile smoke test and preserved `%APPDATA%\SmartClockHost-v2.2`.
+- Release zip inspection confirmed latest MCU hex/axf/build log are included and runtime files are absent.
+- `pdftoppm` rendered the final 8-page PDF; the contact sheet and page 8 were visually checked.
+
+#### Remaining
+- Record and place the final demonstration MP4 under `for_submit/大作业524031910102-陈云海/demo/` before creating the final submission zip.
+
+
 只记录阶段性最终修改、关键文件、验证结果和未解决问题；不记录无关对话。
 
 ## 2026-06-16
@@ -727,7 +755,7 @@
 
 - `python -m py_compile pc_host/app.py pc_host/run_extension_checks.py pc_host/twin_widgets.py pc_host/protocol.py pc_host/extension_services.py pc_host/extension_store.py` 通过。
 - `python pc_host/run_extension_checks.py --host-only` 通过。
-- 7SEG 映射断言通过：`12.30.45 LEFT -> 12_30_45 / 24`，`RIGHT -> 54_03_21 / 24`。
+- 7SEG 映射断言按老师 FAQ v1.3 更新并通过：`12.30.45 LEFT -> 123045__ / 0A`，`RIGHT -> __540321 / 28`。
 - MCU `gcc -fsyntax-only -DPART_TM4C1294NCPDT -DTARGET_IS_TM4C129_RA0 -I mcu/Inc -I mcu/Driverlib mcu/src/main.c` 通过。
 
 ### 当前未解决问题
