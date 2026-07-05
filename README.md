@@ -50,7 +50,7 @@
 ## MCU 说明
 
 - 基于官方 `EXP3` 模板改造。
-- 自编核心逻辑集中在 [main.c](</D:/桌面/大二下/大二下 嵌入式系统与接口技术/ARM/真正的最新版/mcu/src/main.c>)。
+- 自编核心逻辑集中在 [main.c](mcu/src/main.c)。
 - 当前已实现的主线包括：
   - `1 ms SysTick` 时基
   - 数码管动态扫描
@@ -73,7 +73,7 @@
 
 ### PC 上位机
 
-详细步骤见 [deployment.md](</D:/桌面/大二下/大二下 嵌入式系统与接口技术/ARM/真正的最新版/docs/deployment.md>)。
+详细步骤见 [deployment.md](docs/deployment.md)。
 
 最短路径：
 
@@ -121,16 +121,16 @@ python -m PyQt5.uic.pyuic -o ui_main.py main.ui
 
 ## 文档
 
-- 部署与排错： [deployment.md](</D:/桌面/大二下/大二下 嵌入式系统与接口技术/ARM/真正的最新版/docs/deployment.md>)
-- 联调与验收： [test-guide.md](</D:/桌面/大二下/大二下 嵌入式系统与接口技术/ARM/真正的最新版/docs/test-guide.md>)
-- 要求逐条对照： [大作业要求逐条验收对照.md](</D:/桌面/大二下/大二下 嵌入式系统与接口技术/ARM/真正的最新版/docs/大作业要求逐条验收对照.md>)
-- 当前状态总览： [当前项目状态总览.md](</D:/桌面/大二下/大二下 嵌入式系统与接口技术/ARM/真正的最新版/docs/当前项目状态总览.md>)
-- 自主答辩准备： [自主答辩准备初稿.md](</D:/桌面/大二下/大二下 嵌入式系统与接口技术/ARM/真正的最新版/docs/自主答辩准备初稿.md>)
-- 串口协议与答辩速查： [答辩速查_串口协议与系统实现.md](</D:/桌面/大二下/大二下 嵌入式系统与接口技术/ARM/真正的最新版/docs/答辩速查_串口协议与系统实现.md>)
-- 老师 testcmdV2.1 评估： [testcmdV2.1新要求与当前项目评估.md](</D:/桌面/大二下/大二下 嵌入式系统与接口技术/ARM/真正的最新版/docs/testcmdV2.1新要求评估_2026-06-14/testcmdV2.1新要求与当前项目评估.md>)
-- 提交材料准备： [submission/README.md](</D:/桌面/大二下/大二下 嵌入式系统与接口技术/ARM/真正的最新版/submission/README.md>)
-- 简介 PDF 大纲： [简介PDF_4-8页初稿大纲.md](</D:/桌面/大二下/大二下 嵌入式系统与接口技术/ARM/真正的最新版/submission/简介PDF_4-8页初稿大纲.md>)
-- 演示视频脚本： [演示视频_5分钟脚本初稿.md](</D:/桌面/大二下/大二下 嵌入式系统与接口技术/ARM/真正的最新版/submission/演示视频_5分钟脚本初稿.md>)
+- 部署与排错： [deployment.md](docs/deployment.md)
+- 联调与验收： [test-guide.md](docs/test-guide.md)
+- 要求逐条对照： [大作业要求逐条验收对照.md](docs/大作业要求逐条验收对照.md)
+- 当前状态总览： [当前项目状态总览.md](docs/当前项目状态总览.md)
+- 自主答辩准备： [自主答辩准备初稿.md](docs/自主答辩准备初稿.md)
+- 串口协议与答辩速查： [答辩速查_串口协议与系统实现.md](docs/答辩速查_串口协议与系统实现.md)
+- 老师 testcmdV2.1 评估： [testcmdV2.1新要求与当前项目评估.md](docs/testcmdV2.1新要求评估_2026-06-14/testcmdV2.1新要求与当前项目评估.md)
+- 提交材料准备： [submission/README.md](submission/README.md)
+- 简介 PDF 大纲： [简介PDF_4-8页初稿大纲.md](submission/简介PDF_4-8页初稿大纲.md)
+- 演示视频脚本： [演示视频_5分钟脚本初稿.md](submission/演示视频_5分钟脚本初稿.md)
 
 ## 说明书 README 部分
 

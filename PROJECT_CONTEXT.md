@@ -18,7 +18,7 @@
 - 同步更新 `submission/README.md`、`for_submit/submission/README.md`、`for_submit/README_提交包说明.md`、`for_submit/提交前检查清单.md` 和 `submission/大作业524031910102-陈云海_设计简介.md`，移除旧“8 页 PDF”口径。
 
 ## 2026-06-16 v2.2 PC GitHub link correction
-- PC 上位机状态栏 `GitHub` 按钮已从个人主页 `https://github.com/Cyh29hao` 改为项目仓库 `https://github.com/Cyh29hao/qianrushidazuoye`，避免老师点击后进入错误页面。
+- PC 上位机状态栏 `GitHub` 按钮已从个人主页 `https://github.com/Cyh29hao` 改为项目仓库 `https://github.com/Cyh29hao/Smart-Networked-Clock-System`，避免老师点击后进入错误页面。
 - 本轮仅修改 `pc_host/app.py` 中的 `GITHUB_URL` 常量，不改串口协议、UI 布局、MCU 工程或配置默认值。
 - 已按 release 硬规则重新打包 v2.2：`build_release/SmartClockHost-v2.2/SmartClockHost.exe` 和 `build_release/SmartClockHost-v2.2.zip` 更新；打包脚本使用临时 `SMARTCLOCK_PROFILE_DIR` 烟测，不覆盖 `%APPDATA%\SmartClockHost-v2.2` 用户配置。
 - 验证：`py_compile` 覆盖 PC 端主要模块通过；源码中已确认新仓库链接存在、旧个人主页常量不存在；release 目录不含 `config.json/runtime_state.json/schedules.json`，且包含最新 MCU 工程副本。
@@ -210,7 +210,7 @@
 
 ## 2026-06-09 v2.1 体验修复与协议测试收口
 
-- 当前主版本仍为 `D:\桌面\大二下\大二下 嵌入式系统与接口技术\ARM\真正的最新版`，当前分支为 `gemini-ui-improvements`，远程仓库为 `https://github.com/Cyh29hao/qianrushidazuoye`。
+- 当前主版本仍为 `D:\桌面\大二下\大二下 嵌入式系统与接口技术\ARM\真正的最新版`，当前分支为 `gemini-ui-improvements`，远程仓库为 `https://github.com/Cyh29hao/Smart-Networked-Clock-System`。
 - `AGENT.md` 和 `docs/UI自检清单.md` 已补强最新硬规则：右侧数字孪生展示区禁止垂直/水平滚动，必须通过缩小 7SEG、按键、间距和日志摘要保证一屏看全；左侧页面允许纵向滚动但禁止横向滚动。
 - PC 主窗口当前布局：左侧主功能区 + 右侧数字孪生/日志区 + 底部状态栏均在正常布局流中；右侧为固定宽度面板（约 500-560 逻辑像素）而非 scroll area，8 位 7SEG、LED、两行按键和日志摘要均完整显示，不覆盖左侧内容。
 - 系统设置已瘦身：蜂鸣和 LED 掩码移到“调试与测试”；全局语音入口移到闹钟/日程各自模块；错误“用户名”小标题已移除；系统设置页无横向滚动。
@@ -226,7 +226,7 @@
 
 - 项目根目录：`D:\桌面\大二下\大二下 嵌入式系统与接口技术\ARM\真正的最新版`
 - 当前 Git 分支：`gemini-ui-improvements`
-- 远端仓库：`https://github.com/Cyh29hao/qianrushidazuoye`
+- 远端仓库：`https://github.com/Cyh29hao/Smart-Networked-Clock-System`
 - 当前主版本判断：`真正的最新版` 是 Gemini CLI 修改后的真正最新版。此前误认为 `大作业524031910102-陈云海-最新版` 是主版本；该目录现在只作参考来源/旧分支，不要继续在那里开发。
 - 父目录中的 `大作业524031910102-陈云海-0604`、`backups`、`524031910102陈云海` 等视为旧版/备份，除非用户明确要求，不要删除或回退。
 - 当前工作树重要状态：
@@ -389,7 +389,7 @@
 
 本轮目标是修复 PC 上位机 UI 可读性、下拉框/勾选框样式、数字孪生镜像布局，以及对时/自动测试偶发卡死问题。当前已完成如下状态：
 
-- 当前项目目录仍为 `D:\桌面\大二下\大二下 嵌入式系统与接口技术\ARM\真正的最新版`，Git 分支为 `gemini-ui-improvements`，远程仓库为 `https://github.com/Cyh29hao/qianrushidazuoye`。
+- 当前项目目录仍为 `D:\桌面\大二下\大二下 嵌入式系统与接口技术\ARM\真正的最新版`，Git 分支为 `gemini-ui-improvements`，远程仓库为 `https://github.com/Cyh29hao/Smart-Networked-Clock-System`。
 - PC 主窗口采用左右 `QSplitter` 明确分栏；右侧数字孪生镜像位于右侧顶部，日志区在其下方扩展，几何烟测显示不会覆盖左侧主页、系统设置或自动测试页面。
 - 日志区启用可扩展高度、按宽度换行和滚动条；自动测试输出框同样启用换行和滚动，避免长行被裁掉。
 - 下拉框/日期时间编辑器/spinbox 箭头改用 `pc_host/assets/*.xpm` 文本图标；checkbox 勾选改用 XPM 白色勾，避免 Qt QSS 三角形在 Windows 缩放下显示成黑色小方块。

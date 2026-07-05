@@ -37,7 +37,7 @@ def _resolve_profile_dir() -> Path:
 APP_DIR = _resolve_profile_dir()
 BUNDLE_DIR = Path(getattr(sys, "_MEIPASS", APP_BASE_DIR))
 QT_RUNTIME = configure_qt_runtime(APP_BASE_DIR)
-GITHUB_URL = "https://github.com/Cyh29hao/qianrushidazuoye"
+GITHUB_URL = "https://github.com/Cyh29hao/Smart-Networked-Clock-System"
 LOGO_PATH = BUNDLE_DIR / "assets" / "clock_logo.svg"
 ICON_PATH = BUNDLE_DIR / "assets" / "clock_logo.ico"
 LOCAL_MODE_LABEL = "不使用串口"

@@ -49,7 +49,7 @@
 ### v2.2 PC GitHub link correction
 
 #### Done
-- Changed the PC host status-bar GitHub button target from the account homepage to the actual project repository: `https://github.com/Cyh29hao/qianrushidazuoye`.
+- Changed the PC host status-bar GitHub button target from the account homepage to the actual project repository: `https://github.com/Cyh29hao/Smart-Networked-Clock-System`.
 - Rebuilt the local v2.2 release exe/zip after the link fix, preserving the AppData user profile and keeping runtime config/log files out of the release directory.
 
 #### Verified
