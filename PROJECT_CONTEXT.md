@@ -1,5 +1,11 @@
 # PROJECT_CONTEXT - 智能时钟联网系统
 
+## 2026-07-05 GitHub public repository rename
+- 为了让公开作品名更适合陌生人理解，GitHub 仓库名从 `qianrushidazuoye` 调整为 `Smart-Networked-Clock-System`。
+- 根 README 标题同步为 `Smart Networked Clock System / 智能联网时钟系统`，并将旧本机绝对链接改为仓库内相对链接。
+- PC 上位机 GitHub 按钮链接同步到 `https://github.com/Cyh29hao/Smart-Networked-Clock-System`，提交包中的上位机副本一并更新。
+- 本轮不改 MCU/PC 功能逻辑，只做公开展示命名、链接和文档入口整理。
+
 ## 2026-06-17 FAQ v1.3 final submit closeout
 - 老师说明“FAQ 以最新版本为准”，已将 `FAQ_常见问题解析_V1.3(3).pdf` 和 Keil `Create HEX File` 提醒截图归档到 `docs/大作业要求/`、`for_submit/docs/` 和正式提交目录 `for_submit/大作业524031910102-陈云海/docs/`。
 - MCU `mcu/src/main.c` 已按 FAQ v1.3 对齐 `*EVT:DISP <8字符> <dpHex>`：8 字符不含小数点，空位 `_`，`dpHex` bit0 对应最左 digit；`12.30.45` LEFT 为 `123045__ 0A`，RIGHT 为 `__540321 28`。

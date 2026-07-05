@@ -1,5 +1,19 @@
 # CHANGELOG_AI - AI 阶段变更记录
 
+## 2026-07-05
+
+### GitHub public repository rename
+
+#### Done
+- Renamed the public-facing repository from `qianrushidazuoye` to `Smart-Networked-Clock-System` for clearer portfolio presentation.
+- Updated the root README title and introduction to describe the project as a S800/TM4C1294 smart networked clock system with a PyQt5 PC host.
+- Replaced old GitHub repository URLs in the PC host source and submit-package PC host copies.
+- Removed local absolute-link style from the root README entry points where possible.
+
+#### Verified
+- Remote text files were updated through the GitHub API.
+- Repository rename was performed after the documentation/link commit.
+
 ## 2026-06-17
 
 ### v2.2 FAQ v1.3 final submit closeout
